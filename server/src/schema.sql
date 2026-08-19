@@ -13,6 +13,16 @@ CREATE TABLE IF NOT EXISTS users (
   created_at    INTEGER NOT NULL
 );
 
+-- 一次登录 = 一条会话（一台设备/一个浏览器）。主动退出时用它判断
+-- 该账号是否还有别的设备在线，避免一处退出把别处也标成离线。
+CREATE TABLE IF NOT EXISTS sessions (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at   INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, last_seen_at);
+
 CREATE TABLE IF NOT EXISTS conversations (
   id         TEXT PRIMARY KEY,
   type       TEXT NOT NULL,                       -- group | dm | ai

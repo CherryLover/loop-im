@@ -39,6 +39,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  logout: () => request<{ ok: true; online: boolean }>('/auth/logout', { method: 'POST' }),
   me: () => request<{ user: User; ai: AiPublicInfo }>('/auth/me'),
   ping: () => request<{ online: boolean; users: User[] }>('/auth/ping', { method: 'POST' }),
   updateName: (name: string) =>

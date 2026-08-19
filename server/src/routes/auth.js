@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { all, get, run, now } from '../db.js';
 import {
-  authenticate, hashPassword, isOnline, publicUser, signToken, TOKEN_DAYS, touch, verifyPassword,
+  authenticate, createSession, endSession, hashPassword, isOnline, publicUser, signToken, TOKEN_DAYS,
+  touch, verifyPassword,
 } from '../auth.js';
 import { putObject } from '../storage.js';
 import { AI_NAME, providerOf, settings } from '../ai.js';
@@ -28,14 +29,26 @@ router.post('/login', (req, res) => {
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: '邮箱或密码不正确' });
   }
-  touch(user.id);
+  const sessionId = createSession(user.id);
+  touch(user.id, sessionId);
   emitAll('presence', { userId: user.id, online: true });
   res.json({
-    token: signToken(user),
+    token: signToken(user, sessionId),
     tokenDays: TOKEN_DAYS,
     user: publicUser({ ...user, last_seen_at: now() }),
     ai: aiPublicInfo(),
   });
+});
+
+// 主动退出：结束本次会话。该账号没有别的设备在线时立刻置为离线并广播，
+// 不用再等 90 秒的心跳窗口过期（关掉页面、断网、休眠仍然走那个兜底）。
+router.post('/logout', authenticate, (req, res) => {
+  const stillOnline = endSession(req.user.id, req.sessionId);
+  if (!stillOnline) {
+    run('UPDATE users SET last_seen_at = 0 WHERE id = ?', req.user.id);
+    emitAll('presence', { userId: req.user.id, online: false });
+  }
+  res.json({ ok: true, online: stillOnline });
 });
 
 router.get('/me', authenticate, (req, res) => {
