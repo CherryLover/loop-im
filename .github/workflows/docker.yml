@@ -1,0 +1,83 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  image:
+    name: 构建并发布镜像
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # PR 只构建不发布；main 与 tag 才推送
+      - name: 登录 GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 计算镜像标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: 构建（并在非 PR 时推送）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 冒烟测试（起容器 → 建管理员 → 登录 → 前端可访问）
+        run: |
+          docker build -t loop-im:smoke .
+          docker run -d --name loop-im-smoke -p 4000:4000 \
+            -e JWT_SECRET=ci-smoke-secret \
+            -e ADMIN_EMAIL=smoke@example.test \
+            -e ADMIN_PASSWORD=ci-smoke-password \
+            -v "$PWD/smoke-data:/app/data" \
+            loop-im:smoke
+
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:4000/api/health >/dev/null && break
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:4000/api/health
+
+          token=$(curl -fsS -X POST http://127.0.0.1:4000/api/auth/login \
+            -H 'content-type: application/json' \
+            -d '{"email":"smoke@example.test","password":"ci-smoke-password"}' \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+          test -n "$token"
+
+          curl -fsS http://127.0.0.1:4000/api/users -H "Authorization: Bearer $token" | grep -q Aria
+          curl -fsS http://127.0.0.1:4000/ | grep -q '<div id="root">'
+          test -f smoke-data/loop.db || (echo "数据没有落到挂载目录" && exit 1)
+
+          docker logs loop-im-smoke
+          docker rm -f loop-im-smoke

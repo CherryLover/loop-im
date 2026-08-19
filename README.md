@@ -71,6 +71,30 @@ DEMO_PASSWORD=只在本地用的密码
 - 桌面 64px 图标侧栏（含选中态）；≤720px 切换为底部标签栏，会话列表与聊天页互相切换。
 - 浅色 / 深色两套主题，跟随系统并可手动切换后记忆。
 
+## 部署（Docker）
+
+镜像由 GitHub Actions 构建推送到 `ghcr.io/cherrylover/loop-im`，服务器上只需要
+`deploy/` 里的 `docker-compose.yml` + `deploy.sh` + 自己填的 `.env`：
+
+```bash
+ssh user@your-server '/opt/loop-im/deploy.sh'       # 更新到最新版
+ssh user@your-server '/opt/loop-im/deploy.sh v1.2.0'
+```
+
+`deploy.sh` 会拉镜像、停旧起新、轮询健康检查，失败时打印日志并提示回滚。
+SQLite 库与图片附件都挂在与 compose 文件同级的 `data/` 目录，备份即打包该目录。
+详见 [`deploy/README.md`](deploy/README.md)。
+
+本地也可以直接构建运行：
+
+```bash
+docker build -t loop-im .
+docker run -d -p 4000:4000 \
+  -e JWT_SECRET=$(openssl rand -hex 32) \
+  -e ADMIN_EMAIL=you@example.com -e ADMIN_PASSWORD=your-password \
+  -v "$PWD/data:/app/data" loop-im
+```
+
 ## 测试与 CI
 
 ```bash
@@ -108,6 +132,8 @@ web/                   Vite + React + TypeScript 前端
   src/lib/              api 客户端、Markdown 渲染、时间格式、主题、SSE hook
   src/pages/            登录、聊天、联系人、AI 管理
   src/modals/           建群、添加联系人、个人资料
+deploy/                部署：docker-compose.yml、deploy.sh、.env.example
+Dockerfile             多阶段构建：构建前端 → 装后端生产依赖 → 单镜像同时托管 API 与静态文件
 project/               原始设计原型（Claude Design 导出）
 chats/                 设计过程的对话记录
 ```

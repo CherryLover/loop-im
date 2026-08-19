@@ -1,0 +1,35 @@
+# Loop IM 部署编排。所有数据都落在与本文件同级的 ./data 目录里，
+# 备份 = 打包这个目录；迁移 = 复制这个目录 + .env。
+services:
+  loop-im:
+    image: ${LOOP_IM_IMAGE:-ghcr.io/cherrylover/loop-im}:${LOOP_IM_TAG:-latest}
+    container_name: loop-im
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DATA_DIR: /app/data
+    ports:
+      # 默认只监听本机，前面套 Nginx/Caddy 做 HTTPS；
+      # 想直接对外访问就把 .env 里的 BIND_ADDRESS 改成 0.0.0.0
+      - "${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-4000}:4000"
+    volumes:
+      # SQLite 库与图片附件都在这里
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
