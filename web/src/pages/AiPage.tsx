@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { ChevronLeft, Settings } from 'lucide-react';
 import { Avatar } from '../components/Avatar';
 import { api } from '../lib/api';
@@ -178,6 +178,7 @@ function AiConfig({
   onBack: () => void;
   onSaved: () => void;
 }) {
+  const ruleId = useId();
   const [provider, setProvider] = useState(overview.provider);
   const [apiKey, setApiKey] = useState('');
   const [rules, setRules] = useState(overview.rules);
@@ -280,13 +281,16 @@ function AiConfig({
           {ruleRows.map((r) => (
             <div key={r.key} className="rule">
               <div style={{ minWidth: 0 }}>
-                <div className="rule__name">{r.name}</div>
-                <div className="rule__note">{r.note}</div>
+                <div className="rule__name" id={`${ruleId}-${r.key}-name`}>{r.name}</div>
+                <div className="rule__note" id={`${ruleId}-${r.key}-note`}>{r.note}</div>
               </div>
               <button
                 type="button"
                 className={`switch${rules[r.key] ? ' switch--on' : ''}`}
-                aria-pressed={rules[r.key]}
+                role="switch"
+                aria-checked={rules[r.key]}
+                aria-labelledby={`${ruleId}-${r.key}-name`}
+                aria-describedby={`${ruleId}-${r.key}-note`}
                 onClick={() => {
                   setRules((v) => ({ ...v, [r.key]: !v[r.key] }));
                   setFeedback(null);
