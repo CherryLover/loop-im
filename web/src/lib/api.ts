@@ -4,9 +4,17 @@ import type {
 
 const TOKEN_KEY = 'loop-im-token';
 
-export const getToken = () => localStorage.getItem(TOKEN_KEY);
-export const setToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
-export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+// 勾选"保持登录"才写 localStorage（关掉浏览器也在）；不勾选时写 sessionStorage，
+// 当前标签页内刷新仍然有效，标签页一关凭据就没了。
+export const getToken = () => localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
+export const clearToken = () => {
+  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
+};
+export const setToken = (token: string, remember = true) => {
+  clearToken();                               // 先清掉另一种存储里的旧凭据，避免切换模式时残留
+  (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
+};
 
 export class ApiError extends Error {
   status: number;
@@ -34,10 +42,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  login: (email: string, password: string) =>
+  login: (email: string, password: string, remember = true) =>
     request<{ token: string; tokenDays: number; user: User; ai: AiPublicInfo }>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, remember }),
     }),
   me: () => request<{ user: User; ai: AiPublicInfo }>('/auth/me'),
   ping: () => request<{ online: boolean; users: User[] }>('/auth/ping', { method: 'POST' }),
