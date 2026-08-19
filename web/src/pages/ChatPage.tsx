@@ -16,15 +16,16 @@ interface ChatPageProps {
   aiProviderLabel: string;
   silentRead: boolean;
   canCreateGroup: boolean;
+  showChatOnMobile: boolean;
   onSelect: (id: string) => void;
+  onBack: () => void;
   onSend: (body: string) => void;
   onCreateGroup: () => void;
 }
 
 export function ChatPage(props: ChatPageProps) {
-  const { me, conversations, activeId, messages, typing, aiProviderLabel, silentRead, canCreateGroup } = props;
+  const { me, conversations, activeId, messages, typing, aiProviderLabel, silentRead, canCreateGroup, showChatOnMobile } = props;
   const [query, setQuery] = useState('');
-  const [showChatOnMobile, setShowChatOnMobile] = useState(false);
   const [aiContext, setAiContext] = useState('');
 
   const active = conversations.find((c) => c.id === activeId) || null;
@@ -88,10 +89,7 @@ export function ChatPage(props: ChatPageProps) {
                 key={c.id}
                 type="button"
                 className={`convo${c.id === activeId ? ' convo--on' : ''}`}
-                onClick={() => {
-                  props.onSelect(c.id);
-                  setShowChatOnMobile(true);
-                }}
+                onClick={() => props.onSelect(c.id)}
               >
                 <Avatar
                   name={groupPeer?.name || c.title}
@@ -122,7 +120,7 @@ export function ChatPage(props: ChatPageProps) {
               <button
                 type="button"
                 className="btn btn--icon chat__back"
-                onClick={() => setShowChatOnMobile(false)}
+                onClick={props.onBack}
                 title="返回会话列表"
               >
                 <ChevronLeft size={15} />
