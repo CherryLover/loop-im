@@ -35,6 +35,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [typing, setTyping] = useState<Record<string, boolean>>({});
+  // 手机端「会话列表 / 会话详情」的开合状态放在这里，切换底部 tab 时不会被重置。
+  const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [modal, setModal] = useState<'group' | 'contact' | 'profile' | null>(null);
   const [toast, setToast] = useState(justSignedIn ? '已上线 · 与服务器保持连接' : '');
   const loaded = useRef<Set<string>>(new Set());
@@ -136,16 +138,22 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     }
   }, [activeId, me, refreshConversations]);
 
+  // 主动选中某个会话：手机端同时展开会话详情。自动选中（如登录后的首个会话）不走这里。
+  const selectConversation = useCallback((id: string) => {
+    setActiveId(id);
+    setMobileChatOpen(true);
+  }, []);
+
   const openDirect = useCallback(async (userId: string) => {
     try {
       const { conversation } = await api.openDirect(userId);
       await refreshConversations();
-      setActiveId(conversation.id);
+      selectConversation(conversation.id);
       setTab('chat');
     } catch (err) {
       setToast(err instanceof Error ? err.message : '无法发起会话');
     }
-  }, [refreshConversations]);
+  }, [refreshConversations, selectConversation]);
 
   const navItems = useMemo(() => {
     const items: { key: Tab; label: string; short: string; icon: typeof MessageCircle }[] = [
@@ -197,7 +205,9 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             aiProviderLabel={ai.providerLabel}
             silentRead={ai.silentRead}
             canCreateGroup={isAdmin}
-            onSelect={setActiveId}
+            showChatOnMobile={mobileChatOpen}
+            onSelect={selectConversation}
+            onBack={() => setMobileChatOpen(false)}
             onSend={send}
             onCreateGroup={() => setModal('group')}
           />
