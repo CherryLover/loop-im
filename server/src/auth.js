@@ -15,8 +15,13 @@ export const ONLINE_WINDOW_MS = 90 * 1000;    // a client that pinged within thi
 
 export const tokenDaysFor = (remember) => (remember ? TOKEN_DAYS : SESSION_TOKEN_DAYS);
 
+// ver 是账号当前的登录版本：改密码会让它 +1，于是之前发出去的 token 全部作废。
 export const signToken = (user, remember = true) =>
-  jwt.sign({ sub: user.id, role: user.role }, SECRET, { expiresIn: `${tokenDaysFor(remember)}d` });
+  jwt.sign(
+    { sub: user.id, role: user.role, ver: user.auth_version },
+    SECRET,
+    { expiresIn: `${tokenDaysFor(remember)}d` },
+  );
 
 export const hashPassword = (plain) => bcrypt.hashSync(plain, 10);
 export const verifyPassword = (plain, hash) => !!hash && bcrypt.compareSync(plain, hash);
@@ -45,7 +50,13 @@ export function authenticate(req, res, next) {
   }
   const user = get('SELECT * FROM users WHERE id = ?', payload.sub);
   if (!user) return res.status(401).json({ error: '账号不存在' });
+  // 没有版本号、版本号对不上（改过密码、或被伪造）的凭据一律当作已失效。
+  if (payload.ver !== user.auth_version) {
+    return res.status(401).json({ error: '密码已修改，请重新登录' });
+  }
   req.user = user;
+  // 记下这张凭据是「保持登录」还是「仅本次会话」，换发时沿用同一档有效期。
+  req.tokenRemember = payload.exp - payload.iat > SESSION_TOKEN_DAYS * 24 * 3600;
   touch(user.id);
   next();
 }

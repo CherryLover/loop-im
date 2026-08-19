@@ -56,8 +56,15 @@ export const api = {
     form.append('file', file);
     return request<{ user: User }>('/auth/me/avatar', { method: 'POST', body: form });
   },
-  changePassword: (current: string, next: string) =>
-    request<{ ok: true }>('/auth/me/password', { method: 'POST', body: JSON.stringify({ current, next }) }),
+  // 改密码会让旧凭据全部失效，服务端顺手换发一张新的，当前这台设备继续保持登录。
+  changePassword: async (current: string, next: string) => {
+    const res = await request<{ ok: true; token: string; tokenDays: number }>('/auth/me/password', {
+      method: 'POST',
+      body: JSON.stringify({ current, next }),
+    });
+    setToken(res.token);
+    return res;
+  },
 
   users: () => request<{ users: User[] }>('/users'),
   addUser: (payload: { name: string; email: string; dept: string }) =>

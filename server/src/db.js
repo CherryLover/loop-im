@@ -16,6 +16,8 @@ db.exec(readFileSync(join(here, 'schema.sql'), 'utf8'));
 const MIGRATIONS = [
   // messages.ai_visible：历史消息按当时的行为默认可见，不改动已有数据。
   ['messages', 'ai_visible', 'ALTER TABLE messages ADD COLUMN ai_visible INTEGER NOT NULL DEFAULT 1'],
+  // users.auth_version：改密码时 +1，让之前签发的 token 全部作废。
+  ['users', 'auth_version', 'ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1'],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();
