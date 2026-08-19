@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { all, get, run, now } from '../db.js';
 import {
-  authenticate, hashPassword, isOnline, publicUser, signToken, TOKEN_DAYS, touch, verifyPassword,
+  authenticate, hashPassword, isOnline, publicUser, signToken, tokenDaysFor, touch, verifyPassword,
 } from '../auth.js';
 import { putObject } from '../storage.js';
 import { AI_NAME, providerOf, settings } from '../ai.js';
@@ -24,6 +24,8 @@ const aiPublicInfo = () => {
 router.post('/login', (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
+  // 只有显式传 false 才算"不保持登录"，老客户端不带这个字段时仍按 15 天签发。
+  const remember = req.body?.remember !== false;
   const user = get('SELECT * FROM users WHERE lower(email) = ? AND role != ?', email, 'ai');
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: '邮箱或密码不正确' });
@@ -31,8 +33,8 @@ router.post('/login', (req, res) => {
   touch(user.id);
   emitAll('presence', { userId: user.id, online: true });
   res.json({
-    token: signToken(user),
-    tokenDays: TOKEN_DAYS,
+    token: signToken(user, remember),
+    tokenDays: tokenDaysFor(remember),
     user: publicUser({ ...user, last_seen_at: now() }),
     ai: aiPublicInfo(),
   });

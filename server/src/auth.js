@@ -10,10 +10,13 @@ if (isProduction && !process.env.JWT_SECRET) {
 }
 const SECRET = process.env.JWT_SECRET || 'loop-im-dev-secret-change-me';
 export const TOKEN_DAYS = 15;                 // "保持登录 15 天"
+export const SESSION_TOKEN_DAYS = 1;          // 不保持登录时只发一天的会话凭据
 export const ONLINE_WINDOW_MS = 90 * 1000;    // a client that pinged within this window counts as online
 
-export const signToken = (user) =>
-  jwt.sign({ sub: user.id, role: user.role }, SECRET, { expiresIn: `${TOKEN_DAYS}d` });
+export const tokenDaysFor = (remember) => (remember ? TOKEN_DAYS : SESSION_TOKEN_DAYS);
+
+export const signToken = (user, remember = true) =>
+  jwt.sign({ sub: user.id, role: user.role }, SECRET, { expiresIn: `${tokenDaysFor(remember)}d` });
 
 export const hashPassword = (plain) => bcrypt.hashSync(plain, 10);
 export const verifyPassword = (plain, hash) => !!hash && bcrypt.compareSync(plain, hash);

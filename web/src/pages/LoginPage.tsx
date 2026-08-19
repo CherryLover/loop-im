@@ -16,8 +16,8 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (user: User, ai: AiPubli
     setBusy(true);
     setError('');
     try {
-      const { token, user, ai } = await api.login(email.trim(), password);
-      setToken(token);
+      const { token, user, ai } = await api.login(email.trim(), password, remember);
+      setToken(token, remember);
       onSignedIn(user, ai);
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败');
