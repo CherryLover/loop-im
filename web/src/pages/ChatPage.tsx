@@ -19,6 +19,10 @@ interface ChatPageProps {
   onSelect: (id: string) => void;
   onSend: (body: string) => void;
   onCreateGroup: () => void;
+  /** 外部（建群成功）要求直接进入的会话 id，手机端据此展开聊天详情。 */
+  pendingOpenId: string | null;
+  /** 上面的请求已处理，通知外部清空，避免下次回到会话页又被强制展开。 */
+  onPendingOpenDone: () => void;
 }
 
 export function ChatPage(props: ChatPageProps) {
@@ -28,6 +32,14 @@ export function ChatPage(props: ChatPageProps) {
   const [aiContext, setAiContext] = useState('');
 
   const active = conversations.find((c) => c.id === activeId) || null;
+
+  // 建群成功后会话是外部选中的，手机端要跟着切到聊天详情，否则只停留在会话列表。
+  const { pendingOpenId, onPendingOpenDone } = props;
+  useEffect(() => {
+    if (!pendingOpenId) return;
+    setShowChatOnMobile(true);
+    onPendingOpenDone();
+  }, [pendingOpenId, onPendingOpenDone]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
