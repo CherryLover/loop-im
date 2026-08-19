@@ -112,7 +112,13 @@ test('深色主题与移动端布局', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 812 });
   await expect(page.locator('.tabbar')).toBeVisible();
   await expect(page.locator('.sidebar')).toBeHidden();
-  await page.locator('.convo').first().click();
+
+  // 刚从联系人进来的私聊在手机端是展开状态（#4）：先验证详情与返回键，
+  // 再退回列表、重新点进去，确认两个方向都对。
   await expect(page.locator('.chat__back')).toBeVisible();
   await expect(page.locator('.members')).toBeHidden();
+  await page.locator('.chat__back').click();
+  await expect(page.locator('.convo').first()).toBeVisible();
+  await page.locator('.convo').first().click();
+  await expect(page.locator('.chat__back')).toBeVisible();
 });

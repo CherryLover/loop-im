@@ -94,7 +94,7 @@ test('移动端：长提示不越界，也不压住输入框与底部导航', as
   await page.getByPlaceholder('群名称').fill('Issue 11 回归群');
   for (const m of [MEMBERS[0], MEMBERS[1]]) await page.locator('.pick', { hasText: m.name }).click();
   await page.getByRole('button', { name: /创建并进入/ }).click();
-  await page.locator('.convo', { hasText: 'Issue 11 回归群' }).click();   // 移动端要点进会话才有输入框
+  // #5 修好后，手机端建群成功会直接进入新群，输入框随之出现。
   await expect(page.locator('.composer__input')).toBeVisible();
 
   // 发送失败 → 长错误提示
