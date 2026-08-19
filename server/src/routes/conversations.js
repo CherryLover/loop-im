@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { all, get, run, now, uid } from '../db.js';
 import { authenticate, publicUser, requireAdmin } from '../auth.js';
 import { emitTo } from '../events.js';
-import { AI_ID, generateReply, insertAiMessage, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
+import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -168,19 +168,21 @@ router.post('/:id/messages', async (req, res) => {
 
   const roster = memberRows(convo.id);
   const mentions = parseMentions(body, roster);
-  const id = uid('m');
-  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    id, convo.id, req.user.id, body, JSON.stringify(mentions), now());
-  const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), req.user);
   const audience = roster.map((m) => m.id);
+  // 可见性在写库时定档：之后管理员再改开关，也不会让 Aria 追溯读到这条消息。
+  const s = settings();
+  const aiInRoom = audience.includes(AI_ID);
+  const aiVisible = isVisibleToAi(convo, mentions, aiInRoom, s);
+  const id = uid('m');
+  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    id, convo.id, req.user.id, body, JSON.stringify(mentions), aiVisible ? 1 : 0, now());
+  const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), req.user);
   emitTo(audience, 'message', { message });
   res.status(201).json({ message });
 
-  // Aria: 被 @ 时必回；未被 @ 时静默读取上下文并持续学习这个人的沟通习惯。
-  const s = settings();
-  const aiInRoom = audience.includes(AI_ID);
+  // Aria: 被 @ 时必回；未被 @ 时按「群聊静默读取」决定是否读取上下文并学习沟通习惯。
+  if (!aiVisible) return;
   learnAbout(req.user.id, convo).catch(() => {});
-  if (!aiInRoom) return;
   if (!shouldReply(convo, mentions, s)) return;
 
   emitTo(audience, 'ai-typing', { conversationId: convo.id, typing: true });
