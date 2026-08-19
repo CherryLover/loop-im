@@ -79,7 +79,8 @@ export function authenticate(req, res, next) {
     return res.status(401).json({ error: '密码已修改，请重新登录' });
   }
   // sid 指向本次登录的会话，主动退出后会话已删除，旧 token 不能再用。
-  // 升级前签发的 token 没有 sid，仍然放行，避免升级后把所有人踢下线。
+  // 注意：升级前签发的 token 既没有 sid 也没有 ver，上面那道 ver 校验已经把它们挡掉了，
+  // 也就是这次升级后所有人需要重新登录一次。
   if (payload.sid && !get('SELECT id FROM sessions WHERE id = ? AND user_id = ?', payload.sid, user.id)) {
     return res.status(401).json({ error: '登录已过期，请重新登录' });
   }

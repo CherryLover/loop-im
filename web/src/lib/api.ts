@@ -7,6 +7,8 @@ const TOKEN_KEY = 'loop-im-token';
 // 勾选"保持登录"才写 localStorage（关掉浏览器也在）；不勾选时写 sessionStorage，
 // 当前标签页内刷新仍然有效，标签页一关凭据就没了。
 export const getToken = () => localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
+/** 当前这张凭据是不是「保持登录」那一档（换发 token 时要沿用同一种存储）。 */
+export const isRemembered = () => localStorage.getItem(TOKEN_KEY) !== null;
 export const clearToken = () => {
   localStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(TOKEN_KEY);
@@ -73,7 +75,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ current, next }),
     });
-    setToken(res.token);
+    // 改密码会换发 token，沿用原来的存储模式，别把「不保持登录」升级成长期保存。
+    setToken(res.token, isRemembered());
     return res;
   },
 

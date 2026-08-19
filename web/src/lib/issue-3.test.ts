@@ -83,3 +83,27 @@ function assertOnly(where: 'local' | 'session', token: string) {
   expect(kept.getItem(TOKEN_KEY)).toBe(token);
   expect(other.getItem(TOKEN_KEY)).toBe(null);
 }
+
+// 合并 #2（改密码换发 token）后补的回归：换发不能把「不保持登录」升级成长期保存。
+describe('改密码换发 token 时保留存储模式', () => {
+  it('会话模式下换发的 token 仍只写 sessionStorage', async () => {
+    const { setToken, getToken, isRemembered } = await import('./api');
+    setToken('session-token', false);
+    expect(isRemembered()).toBe(false);
+
+    setToken('reissued-token', isRemembered());
+    expect(sessionStorage.getItem('loop-im-token')).toBe('reissued-token');
+    expect(localStorage.getItem('loop-im-token')).toBeNull();
+    expect(getToken()).toBe('reissued-token');
+  });
+
+  it('保持登录模式下换发的 token 仍写 localStorage', async () => {
+    const { setToken, isRemembered } = await import('./api');
+    setToken('kept-token', true);
+    expect(isRemembered()).toBe(true);
+
+    setToken('reissued-token', isRemembered());
+    expect(localStorage.getItem('loop-im-token')).toBe('reissued-token');
+    expect(sessionStorage.getItem('loop-im-token')).toBeNull();
+  });
+});
