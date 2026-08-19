@@ -7,6 +7,8 @@ import { CreateGroupModal } from './modals/CreateGroupModal';
 import type { Conversation, User } from './lib/types';
 
 vi.mock('./lib/api', () => ({
+  // #9 之后 Composer 会读这个常量来做本地大小校验，mock 里要一并提供。
+  MAX_UPLOAD_MB: 8,
   api: {
     aiContext: vi.fn(async () => ({ line: '' })),
     createGroup: vi.fn(async () => {
@@ -35,7 +37,9 @@ const group: Conversation = {
   lastMessage: null,
 };
 
-const renderChat = (pendingOpenId: string | null, onPendingOpenDone = vi.fn()) => {
+// 建群成功后 AppShell 会走 selectConversation（选中会话 + 手机端展开详情），
+// 这里直接以受控的 showChatOnMobile 验证 ChatPage 在两种状态下的呈现。
+const renderChat = (showChatOnMobile: boolean, onBack = vi.fn()) => {
   const view = render(
     <ChatPage
       me={me}
@@ -46,19 +50,19 @@ const renderChat = (pendingOpenId: string | null, onPendingOpenDone = vi.fn()) =
       aiProviderLabel="模拟供应商"
       silentRead={false}
       canCreateGroup
+      showChatOnMobile={showChatOnMobile}
       onSelect={vi.fn()}
+      onBack={onBack}
       onSend={vi.fn()}
       onCreateGroup={vi.fn()}
-      pendingOpenId={pendingOpenId}
-      onPendingOpenDone={onPendingOpenDone}
     />,
   );
-  return { ...view, onPendingOpenDone };
+  return { ...view, onBack };
 };
 
 describe('建群成功后的会话跳转', () => {
-  it('带着待打开的会话挂载时，手机端直接展开聊天详情', async () => {
-    const { container } = renderChat(group.id);
+  it('新群被选中并展开时，手机端直接显示聊天详情', async () => {
+    const { container } = renderChat(true);
     expect(await screen.findByTitle('返回会话列表')).toBeInTheDocument();
     // 手机端靠 convos--hidden / chat--hidden 二选一，详情展开时列表让位。
     expect(container.querySelector('.convos')?.className).toContain('convos--hidden');
@@ -66,22 +70,22 @@ describe('建群成功后的会话跳转', () => {
     expect(container.querySelector('.chat--hidden')).toBeNull();
   });
 
-  it('处理完会回调清空，避免以后回到会话页又被强制展开', async () => {
-    const { onPendingOpenDone } = renderChat(group.id);
-    await waitFor(() => expect(onPendingOpenDone).toHaveBeenCalledTimes(1));
+  it('返回按钮通知外部收起详情，回到会话列表', async () => {
+    const user = userEvent.setup();
+    const { onBack } = renderChat(true);
+    await user.click(screen.getByTitle('返回会话列表'));
+    await waitFor(() => expect(onBack).toHaveBeenCalledTimes(1));
   });
 
-  it('没有待打开的会话时，手机端仍然停在会话列表', async () => {
-    const { container } = renderChat(null);
+  it('没有展开时，手机端仍然停在会话列表', async () => {
+    const { container } = renderChat(false);
     expect((await screen.findAllByText('新建的群')).length).toBeGreaterThan(0);
     expect(container.querySelector('.convos--hidden')).toBeNull();
     expect(container.querySelector('.chat--hidden')).toBeInTheDocument();
   });
 
-  it('返回按钮把手机端切回会话列表，新群仍是选中态', async () => {
-    const user = userEvent.setup();
-    const { container } = renderChat(group.id);
-    await user.click(screen.getByTitle('返回会话列表'));
+  it('收起详情后新群仍是会话列表里的选中态', async () => {
+    const { container } = renderChat(false);
     expect(container.querySelector('.convos--hidden')).toBeNull();
     expect(container.querySelector('.convo--on')).toHaveTextContent('新建的群');
   });

@@ -44,7 +44,8 @@ async function setup() {
 const saveBtn = () => screen.getByRole('button', { name: '保存配置' });
 const testBtn = () => screen.getByRole('button', { name: '测试连通性' });
 /** 规则开关是页面里唯一带 aria-pressed 的按钮 */
-const firstSwitch = () => screen.getAllByRole('button', { pressed: true })[0];
+// #10 之后规则开关是 role="switch"（带可访问名称），不再是 aria-pressed 的 button。
+const firstSwitch = () => screen.getAllByRole('switch', { checked: true })[0];
 
 beforeEach(() => {
   aiOverview.mockResolvedValue(overview);
