@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { UPLOAD_DIR } from './db.js';
 import { authenticate } from './auth.js';
 import { subscribe } from './events.js';
+import { OVERSIZED_MESSAGE } from './upload-middleware.js';
 import { router as authRoutes } from './routes/auth.js';
 import { router as userRoutes } from './routes/users.js';
 import { router as conversationRoutes } from './routes/conversations.js';
@@ -38,6 +39,8 @@ export function createApp({ serveClient = true } = {}) {
 
   app.use((err, _req, res, _next) => {
     if (process.env.NODE_ENV !== 'test') console.error(err);
+    // multer 超限只给英文的 File too large，这里统一翻成中文并按 413 返回。
+    if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: OVERSIZED_MESSAGE });
     res.status(err.status || 500).json({ error: err.message || '服务器内部错误' });
   });
 

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Moon, Sun } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { Avatar } from '../components/Avatar';
-import { api } from '../lib/api';
+import { api, MAX_UPLOAD_MB } from '../lib/api';
 import type { Theme } from '../lib/theme';
 import type { User } from '../lib/types';
 
@@ -70,6 +70,7 @@ export function ProfileModal({
           <button type="button" className="btn btn--sm" style={{ borderColor: 'var(--border2)' }} onClick={() => fileRef.current?.click()}>
             上传新头像
           </button>
+          <span className="section-label">图片不超过 {MAX_UPLOAD_MB}MB</span>
           <input
             ref={fileRef}
             type="file"

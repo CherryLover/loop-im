@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 import { Avatar } from './Avatar';
-import { api } from '../lib/api';
+import { api, MAX_UPLOAD_MB } from '../lib/api';
 import type { Conversation } from '../lib/types';
 
 interface MentionOption {
@@ -175,7 +175,7 @@ export function Composer({
         <button
           type="button"
           className="composer__plus"
-          title="从本地选择图片"
+          title={`从本地选择图片（不超过 ${MAX_UPLOAD_MB}MB）`}
           onClick={() => fileRef.current?.click()}
         >
           <ImagePlus size={18} />
