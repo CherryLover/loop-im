@@ -62,6 +62,17 @@ export function shouldReply(conversation, mentions, s = settings()) {
   return false;
 }
 
+/**
+ * 这条消息发出时，AI 是否被允许读到它。写库时定档，之后改开关也不会追溯生效。
+ * aiInRoom 为假（成员之间的私聊、没有 Aria 的会话）时一律不可见。
+ */
+export function isVisibleToAi(conversation, mentions, aiInRoom, s = settings()) {
+  if (!aiInRoom) return false;
+  if (conversation.type === 'ai') return !!s.allow_dm;   // AI 私聊本就是说给 Aria 听的
+  if (shouldReply(conversation, mentions, s)) return true; // 要回复就必然要读
+  return !!s.silent_read;                                 // 其余群消息看「群聊静默读取」
+}
+
 const stripMd = (t) => t.replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]').replace(/[*`>#]/g, '').replace(/\s+/g, ' ').trim();
 
 function profileHint(userIds) {
@@ -78,7 +89,7 @@ function profileHint(userIds) {
 function transcript(conversationId, limit = 30) {
   return all(
     `SELECT m.body, m.created_at, u.name, u.id AS sender_id FROM messages m JOIN users u ON u.id = m.sender_id
-     WHERE m.conversation_id = ? ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
+     WHERE m.conversation_id = ? AND m.ai_visible = 1 ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
     conversationId, limit,
   ).reverse();
 }
@@ -157,7 +168,7 @@ const KEY_HINT = /(接口|发版|排期|上线|评审|测试|阻塞|风险|需�
 export async function learnAbout(userId, conversation) {
   if (userId === AI_ID) return;
   const mine = all(
-    `SELECT body, created_at FROM messages WHERE conversation_id = ? AND sender_id = ?
+    `SELECT body, created_at FROM messages WHERE conversation_id = ? AND sender_id = ? AND ai_visible = 1
      ORDER BY created_at DESC LIMIT 12`,
     conversation.id, userId,
   );

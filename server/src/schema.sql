@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS messages (
   sender_id       TEXT NOT NULL REFERENCES users(id),
   body            TEXT NOT NULL,                  -- Markdown
   mentions        TEXT NOT NULL DEFAULT '[]',     -- JSON array of user ids, 'all' for @全员
+  ai_visible      INTEGER NOT NULL DEFAULT 1,     -- 发出时 AI 是否被允许读到这条消息
   created_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_convo ON messages(conversation_id, created_at);
