@@ -450,12 +450,14 @@ input, textarea { font-family: inherit; }
 .appearance__label { font-size: 12px; color: var(--muted); }
 
 .toast {
-  position: fixed; top: 14px; right: 14px; background: var(--surface);
+  position: fixed; top: 14px; right: 14px; max-width: calc(100vw - 28px); background: var(--surface);
   border: 1px solid var(--border2); box-shadow: var(--shadow); border-radius: 11px;
-  padding: 9px 13px; display: flex; align-items: center; gap: 8px; font-size: 12.5px;
+  padding: 9px 13px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; line-height: 1.5;
   z-index: 30; animation: toastIn .18s ease-out;
+  pointer-events: none;   /* 只做提示，不接收点击：别挡住下面的按钮 */
 }
-.toast__dot { width: 7px; height: 7px; border-radius: 99px; background: var(--calm); }
+.toast__dot { width: 7px; height: 7px; border-radius: 99px; background: var(--calm); flex: none; }
+.toast__text { min-width: 0; overflow-wrap: anywhere; }
 
 /* ---------- Mobile (390 viewport from the prototype) ---------- */
 @media (max-width: 720px) {
@@ -480,4 +482,11 @@ input, textarea { font-family: inherit; }
   .col-scene, .col-last { display: none; }
   .col-person { width: 130px; }
   .col-keys { min-width: 120px; }
+  /* 提示改到底部：顶部右上角是「建群 / 添加联系人」，压在上面会挡住点击。
+     再抬高一个输入栏的高度，长文案换行后也不会盖住输入框与底部导航。 */
+  .toast {
+    top: auto; bottom: calc(62px + 63px + 10px);   /* 底部导航 + 输入栏 + 间距 */
+    left: 12px; right: 12px; max-width: none;
+    animation: pop .18s ease-out;
+  }
 }
