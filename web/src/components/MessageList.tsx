@@ -42,7 +42,8 @@ export function MessageList({ messages, meId, showSenderName, aiProviderLabel, t
                     className={`md bubble bubble--me${m.pending ? ' bubble--sending' : ''}`}
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(m.body) }}
                   />
-                  <div className="msg__meta">{m.pending ? '发送中…' : `${clock(m.createdAt)} · 已读`}</div>
+                  {/* 服务端收下消息只说明发送成功，对方是否看过没人统计过，别写「已读」。 */}
+                  <div className="msg__meta">{m.pending ? '发送中…' : `${clock(m.createdAt)} · 已发送`}</div>
                 </div>
               </div>
             ) : (
