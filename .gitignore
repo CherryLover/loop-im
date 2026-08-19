@@ -8,3 +8,6 @@ server/data/uploads/*
 .env
 .DS_Store
 tsconfig.tsbuildinfo
+
+# agent 工作用的临时 worktree
+.claude/worktrees/
