@@ -1,0 +1,46 @@
+const pad = (n: number) => String(n).padStart(2, '0');
+
+export const clock = (ts: number) => {
+  const d = new Date(ts);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+const sameDay = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+
+/** 刚刚 / N 分钟前 / N 小时前 / 昨天 HH:MM / M月D日 */
+export function relativeTime(ts: number) {
+  if (!ts) return '—';
+  const now = new Date();
+  const then = new Date(ts);
+  const mins = Math.floor((now.getTime() - ts) / 60000);
+  if (mins < 1) return '刚刚';
+  if (mins < 60) return `${mins} 分钟前`;
+  if (sameDay(now, then)) return `${Math.floor(mins / 60)} 小时前`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameDay(yesterday, then)) return `昨天 ${clock(ts)}`;
+  return `${then.getMonth() + 1}月${then.getDate()}日`;
+}
+
+/** Conversation list timestamps: HH:MM today, 昨天, otherwise a date. */
+export function listTime(ts: number) {
+  if (!ts) return '';
+  const now = new Date();
+  const then = new Date(ts);
+  if (sameDay(now, then)) return clock(ts);
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameDay(yesterday, then)) return '昨天';
+  return `${then.getMonth() + 1}/${then.getDate()}`;
+}
+
+export const dayLabel = (ts: number) => {
+  const now = new Date();
+  const then = new Date(ts);
+  if (sameDay(now, then)) return '今天';
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameDay(yesterday, then)) return '昨天';
+  return `${then.getMonth() + 1}月${then.getDate()}日`;
+};

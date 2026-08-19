@@ -1,0 +1,69 @@
+import { startServer } from './helpers.js';
+import { direct, member } from './fixtures.js';
+import { after, before, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+let api, token, dm;
+
+// Smallest valid PNG (1×1, transparent).
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+const upload = async (buffer, { filename = 'shot.png', type = 'image/png' } = {}) => {
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type }), filename);
+  return api.call('POST', '/api/uploads', { token, form });
+};
+
+before(async () => {
+  api = await startServer();
+  token = await api.loginAdmin();
+  const chen = await member('陈子航', { dept: '后端' });
+  dm = await direct(api, token, chen.id);
+});
+after(async () => { await api.close(); });
+
+describe('图片附件', () => {
+  it('上传后返回可访问的链接', async () => {
+    const res = await upload(PNG);
+    assert.equal(res.status, 201);
+    assert.match(res.body.url, /^\/uploads\//);
+    assert.equal(res.body.filename, 'shot.png');
+    assert.equal(res.body.storage, 'local');
+
+    const served = await fetch(`${api.baseUrl}${res.body.url}`);
+    assert.equal(served.status, 200);
+    assert.equal(served.headers.get('content-type'), 'image/png');
+    assert.equal(Buffer.from(await served.arrayBuffer()).length, PNG.length);
+  });
+
+  it('每次上传拿到独立的 key，不会互相覆盖', async () => {
+    const a = await upload(PNG);
+    const b = await upload(PNG);
+    assert.notEqual(a.body.url, b.body.url);
+  });
+
+  it('非图片会被拒绝', async () => {
+    const res = await upload(Buffer.from('not an image'), { filename: 'note.txt', type: 'text/plain' });
+    assert.equal(res.status, 400);
+  });
+
+  it('未登录不能上传', async () => {
+    const form = new FormData();
+    form.append('file', new Blob([PNG], { type: 'image/png' }), 'shot.png');
+    const res = await fetch(`${api.baseUrl}/api/uploads`, { method: 'POST', body: form });
+    assert.equal(res.status, 401);
+  });
+
+  it('链接可以拼进消息，按 Markdown 图片发送', async () => {
+    const { body: file } = await upload(PNG);
+    const sent = await api.post(`/api/conversations/${dm.id}/messages`, { body: `![发版流程](${file.url})` }, token);
+    assert.equal(sent.status, 201);
+    assert.match(sent.body.message.body, /^!\[发版流程\]\(\/uploads\/.+\)$/);
+
+    const list = (await api.get(`/api/conversations/${dm.id}`, token)).body.conversation;
+    assert.match(list.lastMessage.preview, /\[图片\]/);
+  });
+});

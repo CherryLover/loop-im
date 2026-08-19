@@ -1,0 +1,10 @@
+node_modules/
+dist/
+server/data/*.db
+server/data/*.db-wal
+server/data/*.db-shm
+server/data/uploads/*
+!server/data/uploads/.gitkeep
+.env
+.DS_Store
+tsconfig.tsbuildinfo

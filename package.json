@@ -1,0 +1,17 @@
+{
+  "name": "loop-im",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Loop IM — 基础聊天 + 原生 AI 接入的 IM 系统（React + Express/SQLite）",
+  "scripts": {
+    "install:all": "npm install --prefix server && npm install --prefix web && npm install --prefix e2e",
+    "dev:server": "npm start --prefix server",
+    "dev:web": "npm run dev --prefix web",
+    "build": "npm run build --prefix web",
+    "test": "npm test --prefix server && npm test --prefix web",
+    "test:server": "npm test --prefix server",
+    "test:web": "npm test --prefix web",
+    "test:e2e": "npm run build --prefix web && npm test --prefix e2e",
+    "typecheck": "npm run typecheck --prefix web"
+  }
+}
