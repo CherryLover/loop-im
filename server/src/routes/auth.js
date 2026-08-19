@@ -70,8 +70,14 @@ router.post('/me/password', authenticate, (req, res) => {
   const next = String(req.body?.next || '');
   if (!verifyPassword(current, req.user.password_hash)) return res.status(400).json({ error: '当前密码不正确' });
   if (next.length < 8) return res.status(400).json({ error: '新密码至少 8 位' });
-  run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(next), req.user.id);
-  res.json({ ok: true });
+  // auth_version +1：其他设备上改密码之前签发的 token 立刻失效，
+  // 当前设备换发一张新 token，不至于把自己也踢下线。
+  run(
+    'UPDATE users SET password_hash = ?, auth_version = auth_version + 1 WHERE id = ?',
+    hashPassword(next), req.user.id,
+  );
+  const user = get('SELECT * FROM users WHERE id = ?', req.user.id);
+  res.json({ ok: true, token: signToken(user), tokenDays: TOKEN_DAYS });
 });
 
 export { isOnline };

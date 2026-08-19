@@ -12,8 +12,9 @@ const SECRET = process.env.JWT_SECRET || 'loop-im-dev-secret-change-me';
 export const TOKEN_DAYS = 15;                 // "保持登录 15 天"
 export const ONLINE_WINDOW_MS = 90 * 1000;    // a client that pinged within this window counts as online
 
+// ver 是账号当前的登录版本：改密码会让它 +1，于是之前发出去的 token 全部作废。
 export const signToken = (user) =>
-  jwt.sign({ sub: user.id, role: user.role }, SECRET, { expiresIn: `${TOKEN_DAYS}d` });
+  jwt.sign({ sub: user.id, role: user.role, ver: user.auth_version }, SECRET, { expiresIn: `${TOKEN_DAYS}d` });
 
 export const hashPassword = (plain) => bcrypt.hashSync(plain, 10);
 export const verifyPassword = (plain, hash) => !!hash && bcrypt.compareSync(plain, hash);
@@ -42,6 +43,10 @@ export function authenticate(req, res, next) {
   }
   const user = get('SELECT * FROM users WHERE id = ?', payload.sub);
   if (!user) return res.status(401).json({ error: '账号不存在' });
+  // 没有版本号、版本号对不上（改过密码、或被伪造）的凭据一律当作已失效。
+  if (payload.ver !== user.auth_version) {
+    return res.status(401).json({ error: '密码已修改，请重新登录' });
+  }
   req.user = user;
   touch(user.id);
   next();
