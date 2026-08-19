@@ -16,12 +16,21 @@ export const setToken = (token: string, remember = true) => {
   (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
 };
 
+// 图片体积上限，和服务端 upload-middleware.js 保持一致。
+export const MAX_UPLOAD_MB = 8;
+export const OVERSIZED_MESSAGE = `图片大小不能超过 ${MAX_UPLOAD_MB}MB`;
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
     super(message);
     this.status = status;
   }
+}
+
+/** 上传前先在本地卡一道体积，超限就不必白跑一趟服务端。 */
+function checkSize(file: File) {
+  if (file.size > MAX_UPLOAD_MB * 1024 * 1024) throw new ApiError(413, OVERSIZED_MESSAGE);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -52,6 +61,7 @@ export const api = {
   updateName: (name: string) =>
     request<{ user: User }>('/auth/me', { method: 'PATCH', body: JSON.stringify({ name }) }),
   uploadAvatar: (file: File) => {
+    checkSize(file);
     const form = new FormData();
     form.append('file', file);
     return request<{ user: User }>('/auth/me/avatar', { method: 'POST', body: form });
@@ -90,6 +100,7 @@ export const api = {
       body: JSON.stringify({ body }),
     }),
   upload: (file: File) => {
+    checkSize(file);
     const form = new FormData();
     form.append('file', file);
     return request<{ url: string; filename: string; storage: string }>('/uploads', { method: 'POST', body: form });
