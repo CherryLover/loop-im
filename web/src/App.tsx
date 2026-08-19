@@ -19,16 +19,28 @@ export function App() {
       .finally(() => setChecking(false));
   }, []);
 
-  const signOut = useCallback(() => {
+  const clearSession = useCallback(() => {
     clearToken();
     setSession(null);
     setJustSignedIn(false);
   }, []);
 
+  // 主动退出：先告诉服务端，别人才会立刻看到离线；接口失败也不能卡住本地退出，
+  // 那种情况仍由 90 秒的心跳窗口兜底。
+  const signOut = useCallback(async () => {
+    try {
+      await api.logout();
+    } catch {
+      /* 断网或服务端不可达：本地照样退出 */
+    } finally {
+      clearSession();
+    }
+  }, [clearSession]);
+
   useEffect(() => {
-    window.addEventListener('loop-im:signed-out', signOut);
-    return () => window.removeEventListener('loop-im:signed-out', signOut);
-  }, [signOut]);
+    window.addEventListener('loop-im:signed-out', clearSession);
+    return () => window.removeEventListener('loop-im:signed-out', clearSession);
+  }, [clearSession]);
 
   if (checking) return <div className="app" />;
 
