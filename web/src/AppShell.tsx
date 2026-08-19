@@ -39,6 +39,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [modal, setModal] = useState<'group' | 'contact' | 'profile' | null>(null);
   const [toast, setToast] = useState(justSignedIn ? '已上线 · 与服务器保持连接' : '');
+  // 建群成功后记下新群 id，通知 ChatPage 在手机端直接展开它的聊天详情。
+  const [pendingOpenId, setPendingOpenId] = useState<string | null>(null);
   const loaded = useRef<Set<string>>(new Set());
 
   const isAdmin = me.role === 'admin';
@@ -48,6 +50,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     setConversations(list);
     setActiveId((current) => current ?? list[0]?.id ?? null);
   }, []);
+
+  const clearPendingOpen = useCallback(() => setPendingOpenId(null), []);
 
   const refreshUsers = useCallback(async () => {
     const { users: list } = await api.users();
@@ -210,6 +214,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             onBack={() => setMobileChatOpen(false)}
             onSend={send}
             onCreateGroup={() => setModal('group')}
+            pendingOpenId={pendingOpenId}
+            onPendingOpenDone={clearPendingOpen}
           />
         ) : null}
 
@@ -261,6 +267,7 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             setActiveId(id);
             loaded.current.delete(id);
             setTab('chat');
+            setPendingOpenId(id);
           }}
         />
       ) : null}
