@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { ChevronLeft, Settings } from 'lucide-react';
 import { Avatar } from '../components/Avatar';
 import { api } from '../lib/api';
@@ -178,11 +178,12 @@ function AiConfig({
   onBack: () => void;
   onSaved: () => void;
 }) {
+  const ruleId = useId();
   const [provider, setProvider] = useState(overview.provider);
   const [apiKey, setApiKey] = useState('');
   const [rules, setRules] = useState(overview.rules);
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [saved, setSaved] = useState(false);
+  // 保存与测试共用同一份反馈，任何新操作或表单改动都会先清掉上一次的旧反馈
+  const [feedback, setFeedback] = useState<{ ok: boolean; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
   const patch = () => ({
@@ -195,10 +196,13 @@ function AiConfig({
 
   async function save() {
     setBusy(true);
+    setFeedback(null);
     try {
       await api.saveAiSettings(patch());
-      setSaved(true);
+      setFeedback({ ok: true, message: '配置已保存' });
       onSaved();
+    } catch (e) {
+      setFeedback({ ok: false, message: e instanceof Error ? e.message : '保存失败' });
     } finally {
       setBusy(false);
     }
@@ -206,11 +210,13 @@ function AiConfig({
 
   async function test() {
     setBusy(true);
-    setResult(null);
+    setFeedback(null);
     try {
       await api.saveAiSettings(patch());
       onSaved();
-      setResult(await api.testAi());
+      setFeedback(await api.testAi());
+    } catch (e) {
+      setFeedback({ ok: false, message: e instanceof Error ? e.message : '测试失败' });
     } finally {
       setBusy(false);
     }
@@ -242,7 +248,10 @@ function AiConfig({
               key={p.key}
               type="button"
               className={`provider${provider === p.key ? ' provider--on' : ''}`}
-              onClick={() => setProvider(p.key)}
+              onClick={() => {
+                setProvider(p.key);
+                setFeedback(null);
+              }}
             >
               <span className="provider__radio" />
               <span style={{ minWidth: 0 }}>
@@ -263,7 +272,7 @@ function AiConfig({
             value={apiKey}
             onChange={(e) => {
               setApiKey(e.target.value);
-              setSaved(false);
+              setFeedback(null);
             }}
           />
         </div>
@@ -272,16 +281,19 @@ function AiConfig({
           {ruleRows.map((r) => (
             <div key={r.key} className="rule">
               <div style={{ minWidth: 0 }}>
-                <div className="rule__name">{r.name}</div>
-                <div className="rule__note">{r.note}</div>
+                <div className="rule__name" id={`${ruleId}-${r.key}-name`}>{r.name}</div>
+                <div className="rule__note" id={`${ruleId}-${r.key}-note`}>{r.note}</div>
               </div>
               <button
                 type="button"
                 className={`switch${rules[r.key] ? ' switch--on' : ''}`}
-                aria-pressed={rules[r.key]}
+                role="switch"
+                aria-checked={rules[r.key]}
+                aria-labelledby={`${ruleId}-${r.key}-name`}
+                aria-describedby={`${ruleId}-${r.key}-note`}
                 onClick={() => {
                   setRules((v) => ({ ...v, [r.key]: !v[r.key] }));
-                  setSaved(false);
+                  setFeedback(null);
                 }}
               >
                 <span />
@@ -290,13 +302,12 @@ function AiConfig({
           ))}
         </div>
 
-        {result ? (
-          <div className={`test-result ${result.ok ? 'test-result--ok' : 'test-result--bad'}`}>
+        {feedback ? (
+          <div className={`test-result ${feedback.ok ? 'test-result--ok' : 'test-result--bad'}`}>
             <span className="dot" style={{ background: 'currentColor' }} />
-            {result.message}
+            {feedback.message}
           </div>
         ) : null}
-        {saved && !result ? <div className="test-result test-result--ok"><span className="dot" style={{ background: 'currentColor' }} />配置已保存</div> : null}
 
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" className="btn btn--primary" style={{ borderRadius: 10, padding: '10px 16px', fontSize: 13.5 }} onClick={save} disabled={busy}>

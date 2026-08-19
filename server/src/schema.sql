@@ -9,9 +9,20 @@ CREATE TABLE IF NOT EXISTS users (
   role          TEXT NOT NULL DEFAULT 'member',   -- admin | member | ai
   password_hash TEXT,                             -- NULL for the AI account
   avatar_url    TEXT,
+  auth_version  INTEGER NOT NULL DEFAULT 1,       -- 改密码时递增，之前签发的 token 立即失效
   last_seen_at  INTEGER NOT NULL DEFAULT 0,
   created_at    INTEGER NOT NULL
 );
+
+-- 一次登录 = 一条会话（一台设备/一个浏览器）。主动退出时用它判断
+-- 该账号是否还有别的设备在线，避免一处退出把别处也标成离线。
+CREATE TABLE IF NOT EXISTS sessions (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at   INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, last_seen_at);
 
 CREATE TABLE IF NOT EXISTS conversations (
   id         TEXT PRIMARY KEY,
@@ -34,6 +45,7 @@ CREATE TABLE IF NOT EXISTS messages (
   sender_id       TEXT NOT NULL REFERENCES users(id),
   body            TEXT NOT NULL,                  -- Markdown
   mentions        TEXT NOT NULL DEFAULT '[]',     -- JSON array of user ids, 'all' for @全员
+  ai_visible      INTEGER NOT NULL DEFAULT 1,     -- 发出时 AI 是否被允许读到这条消息
   created_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_convo ON messages(conversation_id, created_at);

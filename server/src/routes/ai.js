@@ -93,7 +93,7 @@ router.get('/profiles/:userId', (req, res) => {
        SELECT a.conversation_id FROM conversation_members a
        JOIN conversation_members b ON b.conversation_id = a.conversation_id AND b.user_id = ?
        WHERE a.user_id = ?
-     ) AND m.sender_id IN (?, ?)
+     ) AND m.sender_id IN (?, ?) AND m.ai_visible = 1
      ORDER BY m.created_at DESC LIMIT 20`,
     AI_ID, req.params.userId, req.params.userId, AI_ID,
   ).reverse();

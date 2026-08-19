@@ -1,6 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 import { ADMIN, MEMBERS, MEMBER_PASSWORD } from './accounts';
 
+// 会写库的用例每次执行都换一份数据：同一次运行里失败重试时不会撞上上一次留下的
+// 邮箱或群名，断言也就还能按“新建成功”来写。
+const stamp = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+
 async function signIn(page: Page, who: { email: string; password: string }) {
   await page.goto('/');
   await page.getByLabel('邮箱').fill(who.email);
@@ -22,7 +26,7 @@ test('管理员：建群 → @Aria 拿到回复 → AI 管理看到这个人', a
   await signIn(page, ADMIN);
   await expect(page.getByText('已上线 · 与服务器保持连接')).toBeVisible();
 
-  await createGroup(page, '产品 · 发版协作', [MEMBERS[0].name, MEMBERS[1].name]);
+  await createGroup(page, `产品 · 发版协作 ${stamp()}`, [MEMBERS[0].name, MEMBERS[1].name]);
   await expect(page.locator('.members__row')).toHaveCount(4);          // 建群人 + 2 名成员 + Aria
   await expect(page.locator('.bubble--ai').last()).toContainText('群聊已创建');
 
@@ -59,17 +63,20 @@ test('管理员：添加联系人后对方出现在列表里', async ({ page }) 
   await signIn(page, ADMIN);
   await page.locator('.nav-btn[title="联系人"]').click();
   const before = await page.locator('.contact').count();
+  const mark = stamp();
+  const name = `吴思${mark}`;
+  const email = `e2e-wu-${mark}@example.test`;
 
   await page.locator('.contacts__bar').getByRole('button', { name: '添加联系人' }).click();
-  await page.getByPlaceholder('如：吴思').fill('吴思');
-  await page.getByPlaceholder('name@loop.dev').fill('e2e-wu@example.test');
+  await page.getByPlaceholder('如：吴思').fill(name);
+  await page.getByPlaceholder('name@loop.dev').fill(email);
   await page.getByPlaceholder('如：运营').fill('运营');
   await page.locator('.modal').getByRole('button', { name: '添加', exact: true }).click();
 
-  await expect(page.getByText(/已开通 吴思，初始密码/)).toBeVisible();
+  await expect(page.getByText(`已开通 ${name}，初始密码`)).toBeVisible();
   await page.getByRole('button', { name: '完成' }).click();
   await expect(page.locator('.contact')).toHaveCount(before + 1);
-  await expect(page.locator('.contact', { hasText: '吴思' })).toContainText('e2e-wu@example.test');
+  await expect(page.locator('.contact', { hasText: name })).toContainText(email);
 });
 
 test('普通成员：没有管理入口，可以直接和 Aria 私聊', async ({ page }) => {
@@ -91,6 +98,12 @@ test('普通成员：没有管理入口，可以直接和 Aria 私聊', async ({
 
 test('深色主题与移动端布局', async ({ page }) => {
   await signIn(page, ADMIN);
+
+  // 先自己开一条和 Aria 的私聊：这条用例只看布局，不该依赖前面的建群用例留下的会话。
+  await page.locator('.nav-btn[title="联系人"]').click();
+  await page.locator('.contact', { hasText: 'Aria' }).getByRole('button', { name: '去聊天' }).click();
+  await expect(page.locator('.convo').first()).toBeVisible();
+
   await page.locator('.sidebar__me').click();
   await page.locator('.appearance button').click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
@@ -99,7 +112,13 @@ test('深色主题与移动端布局', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 812 });
   await expect(page.locator('.tabbar')).toBeVisible();
   await expect(page.locator('.sidebar')).toBeHidden();
-  await page.locator('.convo').first().click();
+
+  // 刚从联系人进来的私聊在手机端是展开状态（#4）：先验证详情与返回键，
+  // 再退回列表、重新点进去，确认两个方向都对。
   await expect(page.locator('.chat__back')).toBeVisible();
   await expect(page.locator('.members')).toBeHidden();
+  await page.locator('.chat__back').click();
+  await expect(page.locator('.convo').first()).toBeVisible();
+  await page.locator('.convo').first().click();
+  await expect(page.locator('.chat__back')).toBeVisible();
 });

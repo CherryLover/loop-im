@@ -4,9 +4,23 @@ import type {
 
 const TOKEN_KEY = 'loop-im-token';
 
-export const getToken = () => localStorage.getItem(TOKEN_KEY);
-export const setToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
-export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+// 勾选"保持登录"才写 localStorage（关掉浏览器也在）；不勾选时写 sessionStorage，
+// 当前标签页内刷新仍然有效，标签页一关凭据就没了。
+export const getToken = () => localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
+/** 当前这张凭据是不是「保持登录」那一档（换发 token 时要沿用同一种存储）。 */
+export const isRemembered = () => localStorage.getItem(TOKEN_KEY) !== null;
+export const clearToken = () => {
+  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
+};
+export const setToken = (token: string, remember = true) => {
+  clearToken();                               // 先清掉另一种存储里的旧凭据，避免切换模式时残留
+  (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
+};
+
+// 图片体积上限，和服务端 upload-middleware.js 保持一致。
+export const MAX_UPLOAD_MB = 8;
+export const OVERSIZED_MESSAGE = `图片大小不能超过 ${MAX_UPLOAD_MB}MB`;
 
 export class ApiError extends Error {
   status: number;
@@ -14,6 +28,11 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+/** 上传前先在本地卡一道体积，超限就不必白跑一趟服务端。 */
+function checkSize(file: File) {
+  if (file.size > MAX_UPLOAD_MB * 1024 * 1024) throw new ApiError(413, OVERSIZED_MESSAGE);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -34,22 +53,32 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  login: (email: string, password: string) =>
+  login: (email: string, password: string, remember = true) =>
     request<{ token: string; tokenDays: number; user: User; ai: AiPublicInfo }>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, remember }),
     }),
+  logout: () => request<{ ok: true; online: boolean }>('/auth/logout', { method: 'POST' }),
   me: () => request<{ user: User; ai: AiPublicInfo }>('/auth/me'),
   ping: () => request<{ online: boolean; users: User[] }>('/auth/ping', { method: 'POST' }),
   updateName: (name: string) =>
     request<{ user: User }>('/auth/me', { method: 'PATCH', body: JSON.stringify({ name }) }),
   uploadAvatar: (file: File) => {
+    checkSize(file);
     const form = new FormData();
     form.append('file', file);
     return request<{ user: User }>('/auth/me/avatar', { method: 'POST', body: form });
   },
-  changePassword: (current: string, next: string) =>
-    request<{ ok: true }>('/auth/me/password', { method: 'POST', body: JSON.stringify({ current, next }) }),
+  // 改密码会让旧凭据全部失效，服务端顺手换发一张新的，当前这台设备继续保持登录。
+  changePassword: async (current: string, next: string) => {
+    const res = await request<{ ok: true; token: string; tokenDays: number }>('/auth/me/password', {
+      method: 'POST',
+      body: JSON.stringify({ current, next }),
+    });
+    // 改密码会换发 token，沿用原来的存储模式，别把「不保持登录」升级成长期保存。
+    setToken(res.token, isRemembered());
+    return res;
+  },
 
   users: () => request<{ users: User[] }>('/users'),
   addUser: (payload: { name: string; email: string; dept: string }) =>
@@ -75,6 +104,7 @@ export const api = {
       body: JSON.stringify({ body }),
     }),
   upload: (file: File) => {
+    checkSize(file);
     const form = new FormData();
     form.append('file', file);
     return request<{ url: string; filename: string; storage: string }>('/uploads', { method: 'POST', body: form });
