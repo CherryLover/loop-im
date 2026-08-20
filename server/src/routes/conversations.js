@@ -5,6 +5,7 @@ import { emitTo } from '../events.js';
 import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
+import { addReaction, groupReactions, normalizeEmoji, reactionRows, reactionsOf, removeReaction } from '../reactions.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -153,7 +154,11 @@ export function quoteOf(replyToId, conversationId) {
   };
 }
 
-export function serializeMessage(row, sender) {
+/**
+ * reactions 由调用方批量查好再传进来（见 reactions.js 的 reactionsOf）：一页最多 200 条，
+ * 在这里现查就是 200 次往返。刚写入的消息还不可能有回应，默认空数组即可。
+ */
+export function serializeMessage(row, sender, reactions = []) {
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -167,6 +172,7 @@ export function serializeMessage(row, sender) {
     kind: row.kind || 'user',
     replyTo: row.reply_to || null,               // 被引用消息的 id，前端据此跳转
     quote: quoteOf(row.reply_to, row.conversation_id),
+    reactions,                                   // 每种表情：谁点了、多少个、我点没点
   };
 }
 
@@ -443,8 +449,10 @@ router.get('/:id/messages', (req, res) => {
 
   const hasMore = rows.length > limit;
   const page = (hasMore ? rows.slice(0, limit) : rows).reverse();   // 返回给前端仍是由早到晚
+  // 整页的回应一次查完再分发给每条消息：逐条去查就是一页 200 次往返。
+  const reactions = reactionsOf(page.map((r) => r.id), req.user.id);
   res.json({
-    messages: page.map((r) => serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url })),
+    messages: page.map((r) => serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url }, reactions.get(r.id) || [])),
     hasMore,
     nextBefore: hasMore && page.length ? page[0].id : null,          // 下一页从本页最早那条往前翻
     reads: readsOf(convo.id, req.user.id),                          // 谁读到了哪一刻，前端据此标已读
@@ -573,4 +581,68 @@ router.post('/:id/messages', (req, res) => {
   // 末尾的 catch 只是多一道保险，避免任何 rejection 变成 Express 的 headers-sent 噪音。
   if (!aiVisible) return;
   runAiTurn({ convo, userId: req.user.id, audience, mentions, settings: s }).catch(reportAiTurnFailure);
+});
+
+// ---- 消息表情回应 -------------------------------------------------------
+// 给消息点 👍 ❤️ 之类，省掉一屏「收到」「好的」。加和取消是两个接口，各自幂等：
+// 重复点不会多出一行（唯一索引在库里），没点过时取消也不算错误。
+
+/**
+ * 加和取消共用的失败提示。「这条消息不存在」和「消息存在但不在我能看到的会话里」
+ * 必须是同一句话——分开说等于告诉调用方「这个 id 在别处是存在的」，接口就成了
+ * 消息存在性探针。引用回复那边（见上面的 POST /:id/messages）是同样的处理。
+ */
+export const REACTION_TARGET_MISSING = '消息不存在或无权访问';
+
+/**
+ * 定位要回应的那条消息。一条 SQL 同时管住两件事：消息属于 URL 上的这个会话，
+ * 而且我确实是这个会话的成员。任何一条不满足都走同一个 404，外面看不出差别。
+ */
+function reactionTarget(req, res) {
+  const row = get(
+    `SELECT m.id, m.conversation_id FROM messages m
+     JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = ?
+     WHERE m.id = ? AND m.conversation_id = ?`,
+    req.user.id, req.params.messageId, req.params.id,
+  );
+  if (!row) {
+    res.status(404).json({ error: REACTION_TARGET_MISSING });
+    return null;
+  }
+  return row;
+}
+
+/**
+ * 回应变了：广播给会话里每个人，并把「相对调用者」的那一份返回给他。
+ * mine 是相对观察者的，所以每人一份；但库只查一次，折叠在内存里做。
+ */
+function publishReactions(conversationId, messageId, viewerId) {
+  const rows = reactionRows([messageId]);
+  const viewOf = (userId) => groupReactions(rows, userId).get(messageId) || [];
+  for (const userId of memberIds(conversationId)) {
+    emitTo([userId], 'reaction', { conversationId, messageId, reactions: viewOf(userId) });
+  }
+  return viewOf(viewerId);
+}
+
+router.post('/:id/messages/:messageId/reactions', (req, res) => {
+  const target = reactionTarget(req, res);
+  if (!target) return;
+  // 白名单：客户端传什么就存什么的话，「表情」里能塞进一整段文本甚至 HTML。
+  const emoji = normalizeEmoji(req.body?.emoji);
+  if (!emoji) return res.status(400).json({ error: '不支持的表情' });
+
+  addReaction(target.id, req.user.id, emoji);    // 已经点过就什么也不发生，不是错误
+  res.json({ messageId: target.id, reactions: publishReactions(target.conversation_id, target.id, req.user.id) });
+});
+
+router.delete('/:id/messages/:messageId/reactions', (req, res) => {
+  const target = reactionTarget(req, res);
+  if (!target) return;
+  // 表情走查询串而不是请求体：DELETE 带 body 在中间层里不一定活得下来。
+  const emoji = normalizeEmoji(req.query.emoji);
+  if (!emoji) return res.status(400).json({ error: '不支持的表情' });
+
+  removeReaction(target.id, req.user.id, emoji); // 没点过就删 0 行，同样不是错误
+  res.json({ messageId: target.id, reactions: publishReactions(target.conversation_id, target.id, req.user.id) });
 });

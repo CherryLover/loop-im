@@ -76,6 +76,22 @@ CREATE TABLE IF NOT EXISTS attachments (
   created_at INTEGER NOT NULL
 );
 
+-- 消息表情回应：谁给哪条消息点了哪个表情。
+--
+-- 唯一性（同一个人 × 同一条消息 × 同一个表情只有一行）故意不写成 PRIMARY KEY，
+-- 而是 db.js 的 MIGRATIONS 里那条具名唯一索引：CREATE TABLE IF NOT EXISTS 对已经
+-- 存在的表什么也不做，约束写在建表语句里的话，老库永远补不上它。
+--
+-- emoji 存原样的 UTF-8 文本（👍 是 4 字节，❤️ 还带变体选择符），SQLite 的 TEXT 默认
+-- BINARY 比较，整串逐字节比，不会按字节截断；写入前由 reactions.js 的白名单归一。
+-- message_id 上的 ON DELETE CASCADE 保证消息删掉时回应跟着走，不留孤儿。
+CREATE TABLE IF NOT EXISTS message_reactions (
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji      TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 -- Single-row table holding the system AI configuration.
 CREATE TABLE IF NOT EXISTS ai_settings (
   id            INTEGER PRIMARY KEY CHECK (id = 1),

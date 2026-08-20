@@ -1,6 +1,6 @@
 import type {
   AiOverview, AiProfileDetail, AiPublicInfo, AiSettings, Conversation, Message, MessagePage,
-  MessageSearchPage, UploadResult, User,
+  MessageReaction, MessageSearchPage, UploadResult, User,
 } from './types';
 
 const TOKEN_KEY = 'loop-im-token';
@@ -157,6 +157,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(replyTo ? { body, replyTo } : { body }),
     }),
+  // 表情回应：加和取消是两个接口，各自幂等（重复点不会多出一条，没点过时取消也不报错）。
+  // 两者都返回这条消息回应的最新聚合，直接拿去替换本地那一份即可。
+  addReaction: (conversationId: string, messageId: string, emoji: string) =>
+    request<{ messageId: string; reactions: MessageReaction[] }>(
+      `/conversations/${conversationId}/messages/${messageId}/reactions`,
+      { method: 'POST', body: JSON.stringify({ emoji }) },
+    ),
+  // 表情走查询串而不是请求体：DELETE 带 body 在中间层里不一定活得下来。
+  removeReaction: (conversationId: string, messageId: string, emoji: string) =>
+    request<{ messageId: string; reactions: MessageReaction[] }>(
+      `/conversations/${conversationId}/messages/${messageId}/reactions?emoji=${encodeURIComponent(emoji)}`,
+      { method: 'DELETE' },
+    ),
   // 图片和普通文件走同一个入口，由服务端按真实字节判定 kind（image 可内联、file 只能下载）。
   upload: (file: File) => {
     checkSize(file);

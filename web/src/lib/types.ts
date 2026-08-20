@@ -27,6 +27,17 @@ export interface MessageQuote {
   available: boolean;
 }
 
+/**
+ * 一条消息上某一种表情的聚合结果，随消息一起下发（前端不必再发一轮请求）：
+ * 谁点了、一共几个、我点没点。mine 是相对当前登录者的。
+ */
+export interface MessageReaction {
+  emoji: string;
+  count: number;
+  users: { id: string; name: string }[];
+  mine: boolean;
+}
+
 export interface Message {
   id: string;
   conversationId: string;
@@ -44,6 +55,8 @@ export interface Message {
   replyTo?: string | null;
   /** 被引用消息的摘要；没有引用时为 null。 */
   quote?: MessageQuote | null;
+  /** 已有的表情回应，按第一个人点的先后排。老接口没有这个字段时按「没有回应」处理。 */
+  reactions?: MessageReaction[];
 }
 
 /** 输入框上方那块「正在回复某条消息」的引用态。 */

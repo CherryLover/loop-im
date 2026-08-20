@@ -17,7 +17,7 @@ import { sortConversations } from './lib/conversations';
 import { notifyMessage, useDesktopNotify } from './lib/notify';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
-import type { AiPublicInfo, Conversation, Message, ReadState, User } from './lib/types';
+import type { AiPublicInfo, Conversation, Message, MessageReaction, ReadState, User } from './lib/types';
 
 type Tab = 'chat' | 'contacts' | 'ai';
 
@@ -302,6 +302,34 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     }));
   }, []);
 
+  /**
+   * 把某条消息的回应换成服务端给的最新一份。整份替换而不是就地加减：计数、都有谁、
+   * 我点没点都由服务端算好，前端自己拼容易和别人同时点时算岔。
+   * 那个会话还没加载过（或消息已经翻页出去了）就什么也不做，等下次读消息时一起带回来。
+   */
+  const applyReactions = useCallback((conversationId: string, messageId: string, reactions: MessageReaction[]) => {
+    setMessages((all) => {
+      const list = all[conversationId];
+      if (!list?.some((m) => m.id === messageId)) return all;
+      return { ...all, [conversationId]: list.map((m) => (m.id === messageId ? { ...m, reactions } : m)) };
+    });
+  }, []);
+
+  /** 点一个表情：自己点过就是取消，没点过就是加上。两个接口都返回最新聚合。 */
+  const toggleReaction = useCallback(async (message: Message, emoji: string) => {
+    const { conversationId, id } = message;
+    const mine = (message.reactions || []).some((r) => r.emoji === emoji && r.mine);
+    try {
+      const res = mine
+        ? await api.removeReaction(conversationId, id, emoji)
+        : await api.addReaction(conversationId, id, emoji);
+      applyReactions(conversationId, id, res.reactions);
+    } catch (err) {
+      if (isAbortError(err) || (err instanceof ApiError && err.status === 401)) return;
+      setToast(err instanceof Error ? err.message : '操作失败');
+    }
+  }, [applyReactions]);
+
   // 退出一开始就断开实时连接：等待退出接口返回的这段时间里，再进来的事件只会引出
   // 一串注定 401 的请求（issue #21）。
   useStream(!signingOut, {
@@ -329,6 +357,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     onConversationCreated: () => background(refreshConversations(), '刷新会话列表'),
     onUserChanged: () => background(refreshUsers(), '刷新联系人'),
     onPresence: () => background(refreshUsers(), '刷新联系人'),
+    // 别人点了回应，我这边立刻跟着变。服务端按人各发一份，mine 已经是我这一份。
+    onReaction: (conversationId, messageId, reactions) => applyReactions(conversationId, messageId, reactions),
     onRead: (conversationId, userId, lastReadAt) => {
       setReads((all) => {
         const list = all[conversationId] || [];
@@ -529,6 +559,7 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             onSelect={selectConversation}
             onBack={() => setMobileChatOpen(false)}
             onSend={send}
+            onReact={(message, emoji) => void toggleReaction(message, emoji)}
             onCreateGroup={() => setModal('group')}
             onAddMembers={(id) => setManage({ mode: 'add', conversationId: id })}
             onRemoveMember={(id, userId, name) => void removeMember(id, userId, name)}
