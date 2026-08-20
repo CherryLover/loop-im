@@ -8,6 +8,7 @@ import { putObject } from '../storage.js';
 import { AI_NAME, providerOf, settings } from '../ai.js';
 import { upload } from '../upload-middleware.js';
 import { emitAll } from '../events.js';
+import { clearFailures, recordFailure, retryAfterMs } from '../rate-limit.js';
 
 export const router = Router();
 
@@ -27,10 +28,22 @@ router.post('/login', (req, res) => {
   const password = String(req.body?.password || '');
   // 只有显式传 false 才算"不保持登录"，老客户端不带这个字段时仍按 15 天签发。
   const remember = req.body?.remember !== false;
+
+  // 按邮箱和来源 IP 两个维度限流：换 IP 撞同一账号会被前者挡住，
+  // 单 IP 遍历不同账号会被后者挡住。只有失败才计数。
+  const keys = [`email:${email}`, `ip:${req.ip}`];
+  const wait = retryAfterMs(keys);
+  if (wait > 0) {
+    res.set('Retry-After', String(Math.ceil(wait / 1000)));
+    return res.status(429).json({ error: `登录尝试过于频繁，请 ${Math.ceil(wait / 60000)} 分钟后再试` });
+  }
+
   const user = get('SELECT * FROM users WHERE lower(email) = ? AND role != ?', email, 'ai');
   if (!user || !verifyPassword(password, user.password_hash)) {
+    recordFailure(keys);
     return res.status(401).json({ error: '邮箱或密码不正确' });
   }
+  clearFailures(keys);
   const sessionId = createSession(user.id);
   touch(user.id, sessionId);
   emitAll('presence', { userId: user.id, online: true });
