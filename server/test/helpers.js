@@ -8,6 +8,8 @@ import { join } from 'node:path';
 process.env.NODE_ENV = 'test';
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'loop-im-test-'));
 process.env.JWT_SECRET = 'test-only-secret';
+// 打开落库加密，让用例跑的是生产形态那条路径（未配密钥的降级路径另有子进程用例覆盖）。
+process.env.ENCRYPTION_KEY = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
 process.env.ADMIN_NAME = '测试管理员';
 process.env.ADMIN_EMAIL = 'admin@test.local';
 process.env.ADMIN_PASSWORD = 'test-admin-password';

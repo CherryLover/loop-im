@@ -16,9 +16,24 @@ import { router as aiRoutes } from './routes/ai.js';
 const here = dirname(fileURLToPath(import.meta.url));
 
 /** Builds the Express app. Seeding and listening are the caller's job (see index.js). */
+/**
+ * 跨域策略。默认部署形态是后端直接托管 web/dist，前后端同源，压根不需要 CORS，
+ * 所以生产环境默认不发跨域头；要把前端单独部署到别的域名时用 CORS_ORIGIN 显式放行。
+ * 非生产环境保持放开，免得打断现有的本地开发流程。
+ */
+function corsPolicy() {
+  const allowed = (process.env.CORS_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (allowed.length) return cors({ origin: allowed, credentials: true });
+  if (process.env.NODE_ENV === 'production') return cors({ origin: false });
+  return cors();
+}
+
 export function createApp({ serveClient = true } = {}) {
   const app = express();
-  app.use(cors());
+  // 生产环境通常在 Nginx/Caddy 后面，要拿到真实来源 IP 才能按 IP 限流。
+  // 默认关闭：开着而前面没有反代时，X-Forwarded-For 可以被随意伪造。
+  if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY);
+  app.use(corsPolicy());
   app.use(express.json({ limit: '1mb' }));
   app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1h' }));
 

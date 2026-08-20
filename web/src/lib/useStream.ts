@@ -8,6 +8,7 @@ export interface StreamHandlers {
   onConversationCreated?: (conversationId: string) => void;
   onUserChanged?: (user: User) => void;
   onPresence?: (userId: string, online: boolean) => void;
+  onRead?: (conversationId: string, userId: string, lastReadAt: number) => void;
 }
 
 /** Server-sent events: new messages, AI typing, presence and roster changes. */
@@ -35,6 +36,10 @@ export function useStream(enabled: boolean, handlers: StreamHandlers) {
     es.addEventListener('presence', (e) => {
       const d = json<{ userId: string; online: boolean }>(e);
       ref.current.onPresence?.(d.userId, d.online);
+    });
+    es.addEventListener('read', (e) => {
+      const d = json<{ conversationId: string; userId: string; lastReadAt: number }>(e);
+      ref.current.onRead?.(d.conversationId, d.userId, d.lastReadAt);
     });
 
     return () => es.close();

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, Search } from 'lucide-react';
+import { ChevronLeft, LogOut, Pencil, Search, UserPlus, X } from 'lucide-react';
 import { Avatar, AiBadge } from '../components/Avatar';
 import { MessageList } from '../components/MessageList';
 import { Composer } from '../components/Composer';
 import { api } from '../lib/api';
-import { listTime } from '../lib/format';
-import type { Conversation, Message, User } from '../lib/types';
+import { listTime, unreadLabel } from '../lib/format';
+import type { Conversation, Message, ReadState, User } from '../lib/types';
 
 interface ChatPageProps {
   me: User;
@@ -17,10 +17,18 @@ interface ChatPageProps {
   silentRead: boolean;
   canCreateGroup: boolean;
   showChatOnMobile: boolean;
+  reads: ReadState[];
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  onLoadOlder: () => void;
   onSelect: (id: string) => void;
   onBack: () => void;
-  onSend: (body: string) => void;
+  onSend: (body: string) => void | Promise<void>;
   onCreateGroup: () => void;
+  onAddMembers: (conversationId: string) => void;
+  onRemoveMember: (conversationId: string, userId: string, name: string) => void;
+  onRenameGroup: (conversationId: string, currentTitle: string) => void;
+  onLeaveGroup: (conversationId: string, title: string) => void;
 }
 
 export function ChatPage(props: ChatPageProps) {
@@ -29,6 +37,8 @@ export function ChatPage(props: ChatPageProps) {
   const [aiContext, setAiContext] = useState('');
 
   const active = conversations.find((c) => c.id === activeId) || null;
+  // 建群者本人和系统管理员可以增减成员、改群名（与服务端 canManageGroup 一致）。
+  const canManage = !!active && active.type === 'group' && (active.createdBy === me.id || me.role === 'admin');
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -104,6 +114,9 @@ export function ChatPage(props: ChatPageProps) {
                     <div className="convo__title">{c.title}</div>
                     {isAI ? <AiBadge /> : null}
                     <span className="convo__time">{c.lastMessage ? listTime(c.lastMessage.createdAt) : ''}</span>
+                    {c.unread > 0 ? (
+                      <span className="badge" aria-label={`${c.unread} 条未读`}>{unreadLabel(c.unread)}</span>
+                    ) : null}
                   </div>
                   <div className="convo__preview">{c.lastMessage?.preview || '还没有消息'}</div>
                 </div>
@@ -145,6 +158,11 @@ export function ChatPage(props: ChatPageProps) {
               showSenderName={active.type === 'group'}
               aiProviderLabel={aiProviderLabel}
               typing={typing}
+              reads={props.reads}
+              showReaderCount={active.type === 'group'}
+              hasOlder={props.hasOlder}
+              loadingOlder={props.loadingOlder}
+              onLoadOlder={props.onLoadOlder}
             />
 
             {active.type === 'group' && silentRead ? (
@@ -160,7 +178,14 @@ export function ChatPage(props: ChatPageProps) {
           {active.type === 'group' ? (
             <div className="members">
               <div>
-                <div className="section-label" style={{ marginBottom: 8 }}>成员 · {active.members.length}</div>
+                <div className="members__head">
+                  <div className="section-label">成员 · {active.members.length}</div>
+                  {canManage ? (
+                    <button type="button" className="btn btn--sm" onClick={() => props.onAddMembers(active.id)}>
+                      <UserPlus size={13} /> 添加
+                    </button>
+                  ) : null}
+                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {active.members.map((m) => (
                     <div key={m.id} className="members__row">
@@ -175,6 +200,18 @@ export function ChatPage(props: ChatPageProps) {
                       <span className="members__name">{m.name}</span>
                       {m.isAI ? <AiBadge /> : null}
                       <span className="members__role">{m.roleInGroup}</span>
+                      {/* 群主不能被移除（他要走得自己退群），自己也不从这里移除 */}
+                      {canManage && m.id !== active.createdBy && m.id !== me.id ? (
+                        <button
+                          type="button"
+                          className="members__remove"
+                          title={`将 ${m.name} 移出群聊`}
+                          aria-label={`将 ${m.name} 移出群聊`}
+                          onClick={() => props.onRemoveMember(active.id, m.id, m.name)}
+                        >
+                          <X size={12} />
+                        </button>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -186,6 +223,17 @@ export function ChatPage(props: ChatPageProps) {
                   <div className="ai-context__body">{aiContext}</div>
                 </div>
               ) : null}
+
+              <div className="members__actions">
+                {canManage ? (
+                  <button type="button" className="btn btn--sm" onClick={() => props.onRenameGroup(active.id, active.title)}>
+                    <Pencil size={13} /> 修改群名
+                  </button>
+                ) : null}
+                <button type="button" className="btn btn--sm" onClick={() => props.onLeaveGroup(active.id, active.title)}>
+                  <LogOut size={13} /> 退出群聊
+                </button>
+              </div>
 
               <div className="members__foot">Aria 会记录每个人的沟通习惯，下次对话时沿用。</div>
             </div>

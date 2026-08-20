@@ -1,6 +1,7 @@
 // Native AI member ("Aria"): silently reads group context, replies when @-ed, and keeps
 // a per-person profile of communication habits it reuses on the next conversation.
 import { all, get, run, now, uid } from './db.js';
+import { decrypt, encrypt, isEncrypted, isEncryptionConfigured } from './secret-box.js';
 
 export const AI_ID = 'ai';
 export const AI_NAME = 'Aria';
@@ -16,11 +17,28 @@ export const PROVIDERS = [
 
 export const providerOf = (key) => PROVIDERS.find((p) => p.key === key) || PROVIDERS[0];
 
+// api_key 在库里是密文（配了 ENCRYPTION_KEY 时），进出这一层都用明文，
+// 所以下游 callProvider / isConfigured 等都不用改。
+let migratedKey = false;
+
+/** 老库里存的是明文：配了密钥之后第一次读到就顺手改写成密文，只做一次。 */
+function migrateLegacyKey(row) {
+  if (migratedKey || !isEncryptionConfigured()) return row;
+  migratedKey = true;
+  if (row.api_key && !isEncrypted(row.api_key)) {
+    run('UPDATE ai_settings SET api_key = ? WHERE id = 1', encrypt(row.api_key));
+  }
+  return row;
+}
+
 export function settings() {
-  const row = get('SELECT * FROM ai_settings WHERE id = 1');
-  if (row) return row;
-  run(`INSERT INTO ai_settings (id, updated_at) VALUES (1, ?)`, now());
-  return get('SELECT * FROM ai_settings WHERE id = 1');
+  let row = get('SELECT * FROM ai_settings WHERE id = 1');
+  if (!row) {
+    run(`INSERT INTO ai_settings (id, updated_at) VALUES (1, ?)`, now());
+    row = get('SELECT * FROM ai_settings WHERE id = 1');
+  }
+  migrateLegacyKey(row);
+  return { ...row, api_key: decrypt(row.api_key) };
 }
 
 export function saveSettings(patch) {
@@ -34,7 +52,8 @@ export function saveSettings(patch) {
   };
   run(`UPDATE ai_settings SET provider = ?, api_key = ?, silent_read = ?, reply_at_all = ?, allow_dm = ?, updated_at = ?
        WHERE id = 1`,
-    next.provider, next.api_key, next.silent_read ? 1 : 0, next.reply_at_all ? 1 : 0, next.allow_dm ? 1 : 0, now());
+    next.provider, encrypt(next.api_key), next.silent_read ? 1 : 0, next.reply_at_all ? 1 : 0, next.allow_dm ? 1 : 0,
+    now());
   return settings();
 }
 

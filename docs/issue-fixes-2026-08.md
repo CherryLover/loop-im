@@ -2,9 +2,13 @@
 
 合并提交：[`7aeeafa`](https://github.com/CherryLover/loop-im/commit/7aeeafa7464a1fa7f432ba705399518a4ffc4180) · 12 个 issue 并行修复后统一合入 `main`
 
-回归结果：后端 **80** 个用例、前端 **63** 个、端到端 **12** 条，本地连续三次全绿；
-CI（Node 22/24 + 前端 + e2e）与 Docker（构建 + 推送 + 容器冒烟）均通过。
-镜像已发布到 `ghcr.io/cherrylover/loop-im:latest`。
+回归结果：后端 **80** 个用例、前端 **63** 个、端到端 **12** 条，本地连续三次全绿。
+
+> **更正（2026-08-20）**：本文原先写的是「CI 与 Docker 均通过，镜像已发布到
+> `ghcr.io/cherrylover/loop-im:latest`」，与实际运行记录不符。当时 CI 的 e2e job
+> 和 Docker 的容器冒烟都是失败的 —— Docker 工作流在那之前连续 4 次全红、
+> **从未通过过**，因此镜像也没有发布成功。两条工作流分别在 `af5be70` 与 `4c73b9b`
+> 修好，现在 `main` 上确实全绿、镜像已发布。详见这两个提交。
 
 ## 逐条结果
 

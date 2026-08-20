@@ -20,7 +20,7 @@ export function CreateGroupModal({
   const pickable = users.filter((u) => u.id !== meId && !u.isAI);
 
   function toggle(id: string) {
-    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : p.length < 3 ? [...p, id] : p));
+    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   }
 
   async function create() {
@@ -40,7 +40,7 @@ export function CreateGroupModal({
     <Modal onClose={onClose}>
       <div>
         <div className="modal__title">创建群聊</div>
-        <div className="modal__sub">选择 2–3 名成员，AI 助手默认加入</div>
+        <div className="modal__sub">至少选 1 名成员，建完还能随时增减；AI 助手默认加入</div>
       </div>
 
       <input className="input" placeholder="群名称" value={name} onChange={(e) => setName(e.target.value)} />
@@ -67,7 +67,7 @@ export function CreateGroupModal({
           type="button"
           className="btn btn--primary modal__btn"
           onClick={create}
-          disabled={busy || picked.length < 2}
+          disabled={busy || picked.length < 1}
         >
           创建并进入（{picked.length}）
         </button>

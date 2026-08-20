@@ -44,3 +44,6 @@ export const dayLabel = (ts: number) => {
   if (sameDay(yesterday, then)) return '昨天';
   return `${then.getMonth() + 1}月${then.getDate()}日`;
 };
+
+/** 未读徽标上的数字：超过 99 就用 99+，免得把图标撑变形。 */
+export const unreadLabel = (n: number) => (n > 99 ? '99+' : String(n));

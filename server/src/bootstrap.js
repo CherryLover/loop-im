@@ -3,6 +3,7 @@
 import bcrypt from 'bcryptjs';
 import { get, run, now, uid } from './db.js';
 import { AI_ID, AI_NAME } from './ai.js';
+import { isEncryptionConfigured } from './secret-box.js';
 
 const AI_EMAIL = 'aria@system';
 
@@ -68,6 +69,10 @@ export function bootstrapDemoUsers(spec = process.env.DEMO_USERS, password = pro
 
 /** 启动时跑一次：系统 AI + 管理员 + 可选的本地联系人。 */
 export function bootstrap({ log = () => {} } = {}) {
+  // 只告警不拦启动：现有部署没配这个变量，不能因为加了加密就起不来。
+  if (!isEncryptionConfigured() && process.env.NODE_ENV === 'production') {
+    log('⚠ 未设置 ENCRYPTION_KEY，AI 供应商的 API Key 仍以明文存库（见 server/.env.example）');
+  }
   ensureAiAccount();
   const admin = bootstrapAdmin();
   if (admin.created) log(`已创建管理员 ${admin.user.email}`);

@@ -46,9 +46,20 @@ CREATE TABLE IF NOT EXISTS messages (
   body            TEXT NOT NULL,                  -- Markdown
   mentions        TEXT NOT NULL DEFAULT '[]',     -- JSON array of user ids, 'all' for @全员
   ai_visible      INTEGER NOT NULL DEFAULT 1,     -- 发出时 AI 是否被允许读到这条消息
+  kind            TEXT NOT NULL DEFAULT 'user',   -- user | system（成员变动等系统提示）
   created_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_convo ON messages(conversation_id, created_at);
+
+-- 每个人在每个会话读到哪里。未读计数与已读回执共用这一张表：
+-- 未读 = 该会话里比 last_read_at 更新、且不是自己发的消息条数。
+CREATE TABLE IF NOT EXISTS conversation_reads (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_read_at    INTEGER NOT NULL DEFAULT 0,
+  updated_at      INTEGER NOT NULL,
+  PRIMARY KEY (conversation_id, user_id)
+);
 
 CREATE TABLE IF NOT EXISTS attachments (
   id         TEXT PRIMARY KEY,

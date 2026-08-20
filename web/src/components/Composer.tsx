@@ -27,7 +27,7 @@ export function Composer({
 }: {
   conversation: Conversation;
   meId: string;
-  onSend: (body: string) => void;
+  onSend: (body: string) => void | Promise<void>;
 }) {
   const [draft, setDraft] = useState('');
   const [attachment, setAttachment] = useState<Attachment | null>(null);
@@ -86,15 +86,26 @@ export function Composer({
     }
   }
 
-  function submit() {
+  async function submit() {
     const text = draft.trim();
     if (attachment?.uploading) return;
     const image = attachment?.url ? `![${attachment.filename}](${attachment.url})` : '';
     if (!text && !image) return;
-    onSend([text, image].filter(Boolean).join(text && image ? '\n\n' : ''));
+
+    // 乐观清空：正常情况下输入框立刻空出来。但发送失败时必须把用户打的字还回去，
+    // 否则内容直接丢失，而且草稿为空会让「发送」按钮一直处于禁用态。
+    const sentDraft = draft;
+    const sentAttachment = attachment;
     setDraft('');
     setAttachment(null);
     setMentionQuery(null);
+    try {
+      await onSend([text, image].filter(Boolean).join(text && image ? '\n\n' : ''));
+    } catch {
+      // 只在用户没有重新打字时还原，别覆盖掉他在等待期间输入的新内容。
+      setDraft((current) => (current ? current : sentDraft));
+      setAttachment((current) => current ?? sentAttachment);
+    }
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -122,7 +133,7 @@ export function Composer({
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      submit();
+      void submit();
     }
   }
 
@@ -212,7 +223,7 @@ export function Composer({
         <button
           type="button"
           className="composer__send"
-          onClick={submit}
+          onClick={() => void submit()}
           disabled={attachment?.uploading || (!draft.trim() && !attachment?.url)}
         >
           发送

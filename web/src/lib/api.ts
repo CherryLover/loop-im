@@ -1,5 +1,5 @@
 import type {
-  AiOverview, AiProfileDetail, AiPublicInfo, AiSettings, Conversation, Message, User,
+  AiOverview, AiProfileDetail, AiPublicInfo, AiSettings, Conversation, Message, MessagePage, User,
 } from './types';
 
 const TOKEN_KEY = 'loop-im-token';
@@ -102,8 +102,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ userId }),
     }),
+  addMembers: (id: string, userIds: string[]) =>
+    request<{ conversation: Conversation }>(`/conversations/${id}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ userIds }),
+    }),
+  removeMember: (id: string, userId: string) =>
+    request<{ conversation: Conversation }>(`/conversations/${id}/members/${userId}`, { method: 'DELETE' }),
+  renameConversation: (id: string, title: string) =>
+    request<{ conversation: Conversation }>(`/conversations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  leaveConversation: (id: string) =>
+    request<{ ok: true }>(`/conversations/${id}/leave`, { method: 'POST' }),
   aiContext: (id: string) => request<{ line: string }>(`/conversations/${id}/ai-context`),
-  messages: (id: string) => request<{ messages: Message[] }>(`/conversations/${id}/messages`),
+  // 默认只取最新一页；翻历史时把上一页最早那条的 id 作为 before 传回来。
+  messages: (id: string, opts: { before?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.before) q.set('before', opts.before);
+    if (opts.limit) q.set('limit', String(opts.limit));
+    const qs = q.toString();
+    return request<MessagePage>(`/conversations/${id}/messages${qs ? `?${qs}` : ''}`);
+  },
+  // 上报已读位置。省略 upTo 就按服务端的此刻算。
+  markRead: (id: string, upTo?: number) =>
+    request<{ conversationId: string; lastReadAt: number; unread: number }>(`/conversations/${id}/read`, {
+      method: 'POST',
+      body: JSON.stringify(upTo ? { upTo } : {}),
+    }),
   sendMessage: (id: string, body: string) =>
     request<{ message: Message }>(`/conversations/${id}/messages`, {
       method: 'POST',
