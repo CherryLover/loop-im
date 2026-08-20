@@ -74,7 +74,16 @@ export function authenticate(req, res, next) {
   }
   const user = get('SELECT * FROM users WHERE id = ?', payload.sub);
   if (!user) return res.status(401).json({ error: '账号不存在' });
-  // 没有版本号、版本号对不上（改过密码、或被伪造）的凭据一律当作已失效。
+  // 版本号对不上的凭据一律失效（issue #2），但拒绝的理由要分开说（issue #16）：
+  // - ver 不是整数（升级前签发的老 token 根本没有这个字段，也可能是 null / 字符串这类
+  //   被篡改的值）：signToken 永远写入 users.auth_version 这个整数，所以拿不到整数就说明
+  //   这张凭据不是本服务当前这版签发的，无法证明用户改过密码——只能说它过期了。
+  // - ver 是整数但和当前版本对不上：这是本服务签发过的版本号，被一次改密码顶掉了，
+  //   说「密码已修改」才是准确归因（比当前版本更高的整数只可能来自篡改，同样归到这一档，
+  //   反正两条分支都是 401，不会因此放行）。
+  if (!Number.isInteger(payload.ver)) {
+    return res.status(401).json({ error: '登录已过期，请重新登录' });
+  }
   if (payload.ver !== user.auth_version) {
     return res.status(401).json({ error: '密码已修改，请重新登录' });
   }
