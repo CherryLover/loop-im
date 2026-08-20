@@ -76,6 +76,7 @@ describe('超过 8MB 的图片', () => {
     const { container } = render(
       <ProfileModal
         me={me} theme="light" onToggleTheme={vi.fn()} onClose={vi.fn()}
+        notifyEnabled={false} notifyPermission="unsupported" onToggleNotify={vi.fn()}
         onUpdated={vi.fn()} onSignOut={vi.fn()}
       />,
     );
@@ -107,6 +108,7 @@ describe('上限提示', () => {
     render(
       <ProfileModal
         me={me} theme="light" onToggleTheme={vi.fn()} onClose={vi.fn()}
+        notifyEnabled={false} notifyPermission="unsupported" onToggleNotify={vi.fn()}
         onUpdated={vi.fn()} onSignOut={vi.fn()}
       />,
     );

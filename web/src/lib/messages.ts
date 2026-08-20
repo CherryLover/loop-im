@@ -4,18 +4,25 @@ import type { Message, ReplyTarget } from './types';
 export const QUOTE_PREVIEW_LIMIT = 48;
 
 /**
- * 从一条消息造出「正在回复它」需要的那点信息：发送者 + 正文摘要。
- * 口径照抄服务端（图片折成 [图片]、去掉 Markdown 记号、压空白、截断），
- * 这样输入框上方看到的和消息发出去之后气泡里看到的是同一行字。
+ * 正文摘要的唯一口径：图片折成 [图片]、去掉 Markdown 记号、压空白、截断。
+ * 照抄服务端 conversations.js 的 previewOf。引用块和桌面通知都用这一份，
+ * 别再各抄一遍正则——抄一遍就多一处会走样的地方。
  */
-export function replyTargetOf(message: Message): ReplyTarget {
-  const preview = message.body
+export function previewOf(body: string): string {
+  return String(body || '')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
     .replace(/[#*`\-\n]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, QUOTE_PREVIEW_LIMIT);
-  return { id: message.id, senderName: message.senderName, preview };
+}
+
+/**
+ * 从一条消息造出「正在回复它」需要的那点信息：发送者 + 正文摘要。
+ * 这样输入框上方看到的和消息发出去之后气泡里看到的是同一行字。
+ */
+export function replyTargetOf(message: Message): ReplyTarget {
+  return { id: message.id, senderName: message.senderName, preview: previewOf(message.body) };
 }
 
 /**

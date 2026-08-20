@@ -13,6 +13,7 @@ import { ApiError, api } from './lib/api';
 import { initialOf } from './lib/md';
 import { unreadAriaLabel, unreadBadgeClass, unreadLabel } from './lib/format';
 import { mergeMessage, replyTargetOf } from './lib/messages';
+import { notifyMessage, useDesktopNotify } from './lib/notify';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
 import type { AiPublicInfo, Conversation, Message, ReadState, User } from './lib/types';
@@ -91,6 +92,9 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   // 退出或卸载时要把在途的列表 / 消息请求一起取消：它们的凭据马上就作废了。
   const abortRef = useRef<AbortController | null>(null);
 
+  // 桌面通知的开关与权限。权限只在用户于个人资料里主动打开时才申请，页面加载时不碰。
+  const notify = useDesktopNotify();
+
   const isAdmin = me.role === 'admin';
 
   /**
@@ -103,6 +107,16 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   const chatDetailVisible = tab === 'chat' && pageVisible && (desktopDetailShown || mobileDetailShown);
   const chatDetailVisibleRef = useRef(false);
   chatDetailVisibleRef.current = chatDetailVisible;
+
+  /**
+   * 「某个会话里的消息此刻正摆在用户眼前」——已读上报和桌面通知共用的唯一判据。
+   * 在 chatDetailVisible（issue #20 的定义）之上再加一条：露着的得正好是这个会话。
+   * 两件事共用它，同一条消息就不可能既被标成已读、又弹出一个通知来。
+   */
+  const messageVisibleNow = useCallback(
+    (conversationId: string) => chatDetailVisibleRef.current && conversationId === activeIdRef.current,
+    [],
+  );
 
   /**
    * 当前会话里「别人发的、此刻确实渲染出来了的」最后一条消息的时间——已读只能报到这里。
@@ -208,12 +222,11 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
 
   /**
    * 上报已读。打开会话、回到详情、窗口重新可见、详情里渲染出别人的新消息，都调这一个。
-   * 判据只有 chatDetailVisibleRef 一个（见上），此外再挡两道：
+   * 判据只有 messageVisibleNow 一个（见上），此外再挡两道：
    * 同一位置 1 秒内不重复上报；消息还没渲染出来时不报，等这一轮渲染完 effect 会补上。
    */
   const markRead = useCallback(async (conversationId: string) => {
-    if (!chatDetailVisibleRef.current || signingOutRef.current) return;
-    if (conversationId !== activeIdRef.current) return;
+    if (!messageVisibleNow(conversationId) || signingOutRef.current) return;
     const upTo = readTargetRef.current;
     if (upTo === null) return;
     const last = markedRef.current[conversationId];
@@ -230,7 +243,7 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
         console.warn('[loop-im] 上报已读失败', err);
       }
     }
-  }, []);
+  }, [messageVisibleNow]);
 
   /** 往前翻一页历史，接在当前列表前面。重复点击靠 loading 挡住。 */
   const loadOlder = useCallback(async (conversationId: string) => {
@@ -290,6 +303,20 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   useStream(!signingOut, {
     onMessage: (message) => {
       appendMessage(message);
+      // 桌面通知和已读上报共用 messageVisibleNow：看得见就只标已读、不通知，
+      // 看不见（切走了标签页、在联系人页、手机端退回了会话列表）才弹通知。
+      // 自己发的、系统消息、免打扰会话、没开开关或没权限，都在 notifyMessage 里挡掉。
+      notifyMessage({
+        message,
+        conversation: conversations.find((c) => c.id === message.conversationId),
+        meId: me.id,
+        visible: messageVisibleNow(message.conversationId),
+        enabled: notify.enabled,
+        onClick: () => {
+          setTab('chat');
+          selectConversation(message.conversationId);
+        },
+      });
       background(refreshConversations(), '刷新会话列表');
       // 已读不在这里报：消息进了列表、而且详情确实在眼前时，上面那个 effect 会报。
       // 只按会话 id 判断的话，人在联系人页 / AI 页 / 手机会话列表也会被标成已读（issue #20）。
@@ -560,6 +587,9 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
           me={me}
           theme={theme}
           onToggleTheme={onToggleTheme}
+          notifyEnabled={notify.enabled}
+          notifyPermission={notify.permission}
+          onToggleNotify={() => void notify.toggle()}
           onClose={() => setModal(null)}
           onUpdated={(user) => {
             setMe(user);
