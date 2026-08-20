@@ -57,6 +57,11 @@ export interface Conversation {
   lastMessage: { preview: string; createdAt: number } | null;
   /** 我在这个会话里的未读条数（不含自己发的）。 */
   unread: number;
+  /**
+   * 未读里有多少条 @ 到我（含 @全员，不含自己发的）。群一多，@我 很容易淹在
+   * 普通未读里，这一档单独拎出来给徽标做区分。老接口没有这个字段时按 0 处理。
+   */
+  mentionsUnread?: number;
 }
 
 /** AI facts every signed-in member may see (the full settings are admin-only). */

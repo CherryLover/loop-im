@@ -11,7 +11,7 @@ import { ProfileModal } from './modals/ProfileModal';
 import { ManageGroupModal, type ManageMode } from './modals/ManageGroupModal';
 import { api } from './lib/api';
 import { initialOf } from './lib/md';
-import { unreadLabel } from './lib/format';
+import { unreadAriaLabel, unreadBadgeClass, unreadLabel } from './lib/format';
 import { mergeMessage } from './lib/messages';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
@@ -117,7 +117,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     markedRef.current[conversationId] = Date.now();
     try {
       await api.markRead(conversationId);
-      setConversations((list) => list.map((c) => (c.id === conversationId ? { ...c, unread: 0 } : c)));
+      // 未读清零的同时也清掉「@ 我」那一档，否则高亮徽标会一直挂在读过的会话上。
+      setConversations((list) => list.map((c) => (c.id === conversationId ? { ...c, unread: 0, mentionsUnread: 0 } : c)));
     } catch {
       markedRef.current[conversationId] = 0;   // 失败就允许下次重试
     }
@@ -277,6 +278,14 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   const activeMessages = activeId ? messages[activeId] || [] : [];
   const activeReads = activeId ? reads[activeId] || [] : [];
   const totalUnread = conversations.reduce((n, c) => n + (c.unread || 0), 0);
+  // 总徽标也要体现「有 @ 我」这一档：不然点进会话列表前根本看不出有人在叫我。
+  const totalMentions = conversations.reduce((n, c) => n + (c.mentionsUnread || 0), 0);
+  const unreadBadge = (
+    <span className={unreadBadgeClass(totalMentions)} aria-label={unreadAriaLabel(totalUnread, totalMentions)}>
+      {totalMentions > 0 ? <span className="badge__at" aria-hidden="true">@</span> : null}
+      {unreadLabel(totalUnread)}
+    </span>
+  );
 
   return (
     <div className="app">
@@ -298,9 +307,7 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
               >
                 <span className="nav-btn__icon">
                   <Icon size={16} />
-                  {item.key === 'chat' && totalUnread > 0 ? (
-                    <span className="badge" aria-label={`${totalUnread} 条未读`}>{unreadLabel(totalUnread)}</span>
-                  ) : null}
+                  {item.key === 'chat' && totalUnread > 0 ? unreadBadge : null}
                 </span>
                 {item.short}
               </button>
@@ -364,9 +371,7 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             >
               <span className="nav-btn__icon">
                 <Icon size={16} />
-                {item.key === 'chat' && totalUnread > 0 ? (
-                  <span className="badge" aria-label={`${totalUnread} 条未读`}>{unreadLabel(totalUnread)}</span>
-                ) : null}
+                {item.key === 'chat' && totalUnread > 0 ? unreadBadge : null}
               </span>
               {item.label}
             </button>

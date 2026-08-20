@@ -112,11 +112,21 @@ input, textarea { font-family: inherit; }
   background: var(--accent); color: #fff; font-size: 10.5px; font-weight: 700;
   display: inline-flex; align-items: center; justify-content: center; line-height: 1;
 }
+/* 有人 @ 我：换成告警色并加一道描边，从一列普通未读里跳出来。
+   颜色之外还带一个 @ 记号（.badge__at），不靠颜色也能分辨。 */
+.badge--mention {
+  background: var(--anx); box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--anx);
+  gap: 1px; padding: 0 6px;
+}
+.badge__at { font-size: 9.5px; font-weight: 800; opacity: .9; }
+
 .nav-btn__icon { position: relative; display: inline-flex; }
 .nav-btn__icon .badge {
   position: absolute; top: -6px; left: 9px;
   border: 2px solid var(--surface2); height: 18px; min-width: 18px;
 }
+/* 侧栏/标签栏上的徽标本来就有一圈描边，再叠一道会糊成一团。 */
+.nav-btn__icon .badge--mention { box-shadow: none; }
 
 .dot { width: 6px; height: 6px; border-radius: 99px; flex: none; }
 .dot--online { background: var(--calm); }

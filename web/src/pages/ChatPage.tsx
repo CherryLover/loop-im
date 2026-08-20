@@ -4,7 +4,7 @@ import { Avatar, AiBadge } from '../components/Avatar';
 import { MessageList } from '../components/MessageList';
 import { Composer } from '../components/Composer';
 import { api } from '../lib/api';
-import { listTime, unreadLabel } from '../lib/format';
+import { listTime, unreadAriaLabel, unreadBadgeClass, unreadLabel } from '../lib/format';
 import type { Conversation, Message, ReadState, User } from '../lib/types';
 
 interface ChatPageProps {
@@ -93,6 +93,7 @@ export function ChatPage(props: ChatPageProps) {
           {filtered.length === 0 ? <div className="convos__empty">没有匹配的会话。</div> : null}
           {filtered.map((c) => {
             const isAI = c.type === 'ai';
+            const mentioned = c.mentionsUnread || 0;       // 未读里有多少条 @ 到我
             const groupPeer = c.type !== 'group' ? c.members.find((m) => m.id !== me.id) : null;
             return (
               <button
@@ -115,7 +116,11 @@ export function ChatPage(props: ChatPageProps) {
                     {isAI ? <AiBadge /> : null}
                     <span className="convo__time">{c.lastMessage ? listTime(c.lastMessage.createdAt) : ''}</span>
                     {c.unread > 0 ? (
-                      <span className="badge" aria-label={`${c.unread} 条未读`}>{unreadLabel(c.unread)}</span>
+                      <span className={unreadBadgeClass(mentioned)} aria-label={unreadAriaLabel(c.unread, mentioned)}>
+                        {/* 颜色之外再给一个记号：只靠高亮色区分，色觉障碍的人是看不出来的 */}
+                        {mentioned > 0 ? <span className="badge__at" aria-hidden="true">@</span> : null}
+                        {unreadLabel(c.unread)}
+                      </span>
                     ) : null}
                   </div>
                   <div className="convo__preview">{c.lastMessage?.preview || '还没有消息'}</div>
