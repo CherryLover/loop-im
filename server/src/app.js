@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { UPLOAD_DIR } from './db.js';
 import { authenticate } from './auth.js';
 import { subscribe } from './events.js';
+import { setUploadHeaders } from './attachments.js';
 import { OVERSIZED_MESSAGE } from './upload-middleware.js';
 import { router as authRoutes } from './routes/auth.js';
 import { router as userRoutes } from './routes/users.js';
@@ -35,7 +36,9 @@ export function createApp({ serveClient = true } = {}) {
   if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY);
   app.use(corsPolicy());
   app.use(express.json({ limit: '1mb' }));
-  app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1h' }));
+  // 上传目录和聊天系统同源，回源头必须自己钉死：图片按 image/* 内联，其余强制下载。
+  // 少了这一步，一份 .html 附件就是一个同源、能读 localStorage 里 token 的页面（issue #22）。
+  app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1h', setHeaders: setUploadHeaders }));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/stream', authenticate, (req, res) => subscribe(req.user.id, res));

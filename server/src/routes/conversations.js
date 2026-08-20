@@ -82,7 +82,11 @@ const readsOf = (conversationId, viewerId) => all(
 ).map((r) => ({ userId: r.user_id, lastReadAt: r.last_read_at }));
 
 const previewOf = (body) =>
-  body.replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]').replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 26);
+  body
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
+    // 非图片附件是普通链接，会话列表里只显示「[文件] 名字」，不把 /uploads/ 路径抖出来。
+    .replace(/\[([^\]]*)\]\(\/uploads\/[^)]*\)/g, '[文件] $1')
+    .replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 26);
 
 export function serializeMessage(row, sender) {
   return {

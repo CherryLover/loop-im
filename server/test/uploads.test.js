@@ -1,15 +1,10 @@
 import { startServer } from './helpers.js';
 import { direct, member } from './fixtures.js';
+import { PNG, TEXT } from './samples.js';
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 let api, token, dm;
-
-// Smallest valid PNG (1×1, transparent).
-const PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-  'base64',
-);
 
 const upload = async (buffer, { filename = 'shot.png', type = 'image/png' } = {}) => {
   const form = new FormData();
@@ -31,6 +26,7 @@ describe('图片附件', () => {
     assert.equal(res.status, 201);
     assert.match(res.body.url, /^\/uploads\//);
     assert.equal(res.body.filename, 'shot.png');
+    assert.equal(res.body.kind, 'image');
     assert.equal(res.body.storage, 'local');
 
     const served = await fetch(`${api.baseUrl}${res.body.url}`);
@@ -45,9 +41,13 @@ describe('图片附件', () => {
     assert.notEqual(a.body.url, b.body.url);
   });
 
-  it('非图片会被拒绝', async () => {
-    const res = await upload(Buffer.from('not an image'), { filename: 'note.txt', type: 'text/plain' });
-    assert.equal(res.status, 400);
+  it('不是图片就走文件通道，不再一律拒绝', async () => {
+    // 以前这里是 400「只支持图片附件」。现在普通文件也能发，只是落盘成 .bin、
+    // 回源强制下载，永远不会被当网页执行 —— 分流方案见 server/src/attachments.js。
+    const res = await upload(TEXT, { filename: 'note.txt', type: 'text/plain' });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.kind, 'file');
+    assert.match(res.body.url, /\.bin$/);
   });
 
   it('未登录不能上传', async () => {
@@ -65,5 +65,15 @@ describe('图片附件', () => {
 
     const list = (await api.get(`/api/conversations/${dm.id}`, token)).body.conversation;
     assert.match(list.lastMessage.preview, /\[图片\]/);
+  });
+
+  it('文件附件拼成普通链接，会话预览显示「[文件] 名字」', async () => {
+    const { body: file } = await upload(TEXT, { filename: '发版清单.pdf', type: 'application/pdf' });
+    assert.equal(file.filename, '发版清单.pdf');
+    const sent = await api.post(`/api/conversations/${dm.id}/messages`, { body: `[${file.filename}](${file.url})` }, token);
+    assert.equal(sent.status, 201);
+
+    const list = (await api.get(`/api/conversations/${dm.id}`, token)).body.conversation;
+    assert.match(list.lastMessage.preview, /\[文件\] 发版清单\.pdf/);
   });
 });

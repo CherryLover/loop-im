@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ImagePlus, X } from 'lucide-react';
+import { FileText, Paperclip, X } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { api, MAX_UPLOAD_MB } from '../lib/api';
-import type { Conversation } from '../lib/types';
+import type { AttachmentKind, Conversation } from '../lib/types';
 
 interface MentionOption {
   key: string;
@@ -17,8 +17,14 @@ interface Attachment {
   url: string | null;
   previewUrl: string;
   uploading: boolean;
+  /** image 才会内联渲染成图片；file 一律拼成普通链接，只能下载（见 issue #22）。 */
+  kind: AttachmentKind;
   error?: string;
 }
+
+// 上传前只能按浏览器给的 type 猜一下，用来决定预览要不要显示缩略图。
+// 真正算数的是服务端按真实字节给出的 kind，落地时会覆盖这里的猜测。
+const guessKind = (file: File): AttachmentKind => (file.type.startsWith('image/') ? 'image' : 'file');
 
 /** 一个会话暂存下来的输入状态。 */
 interface DraftEntry {
@@ -142,10 +148,11 @@ export function Composer({
 
   async function attach(file: File) {
     const convId = conversation.id;
+    const guessed = guessKind(file);
     const previewUrl = URL.createObjectURL(file);
     writeAttachment(convId, (prev) => {
-      revokePreview(prev);                       // 换图，旧预览没人看了
-      return { filename: file.name, url: null, previewUrl, uploading: true };
+      revokePreview(prev);                       // 换附件，旧预览没人看了
+      return { filename: file.name, url: null, previewUrl, uploading: true, kind: guessed };
     });
 
     // 上传期间用户可能已经换了图或把附件删了，落地时先确认还是同一张。
@@ -158,11 +165,12 @@ export function Composer({
     });
 
     try {
-      const { url, filename } = await api.upload(file);
-      land({ filename, url, previewUrl, uploading: false });
+      const { url, filename, kind } = await api.upload(file);
+      // kind 以服务端为准（老服务端不返回这个字段时退回本地的猜测）。
+      land({ filename, url, previewUrl, uploading: false, kind: kind ?? guessed });
     } catch (err) {
       land({
-        filename: file.name, url: null, previewUrl, uploading: false,
+        filename: file.name, url: null, previewUrl, uploading: false, kind: guessed,
         error: err instanceof Error ? err.message : '上传失败',
       });
     }
@@ -171,8 +179,13 @@ export function Composer({
   async function submit() {
     const text = draft.trim();
     if (attachment?.uploading) return;
-    const image = attachment?.url ? `![${attachment.filename}](${attachment.url})` : '';
-    if (!text && !image) return;
+    // 图片拼成 Markdown 图片（会内联渲染），普通文件拼成普通链接（渲染成文件卡片，只能下载）。
+    // 方括号会撑破 Markdown 的链接语法，从显示名里去掉，不影响服务端存的那份原名。
+    const label = attachment ? attachment.filename.replace(/[[\]]/g, '') : '';
+    const embed = attachment?.url
+      ? (attachment.kind === 'image' ? `![${label}](${attachment.url})` : `[${label}](${attachment.url})`)
+      : '';
+    if (!text && !embed) return;
 
     // 乐观清空：正常情况下输入框立刻空出来。但发送失败时必须把用户打的字还回去，
     // 否则内容直接丢失，而且草稿为空会让「发送」按钮一直处于禁用态。
@@ -184,7 +197,7 @@ export function Composer({
     setAttachment(null);
     setMentionQuery(null);
     try {
-      await onSend([text, image].filter(Boolean).join(text && image ? '\n\n' : ''));
+      await onSend([text, embed].filter(Boolean).join(text && embed ? '\n\n' : ''));
       revokePreview(sentAttachment);             // 发出去的是服务端 url，预览图可以释放了
     } catch {
       // 只在用户没有重新打字时还原，别覆盖掉他在等待期间输入的新内容。
@@ -227,8 +240,10 @@ export function Composer({
   }
 
   function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const file = Array.from(e.clipboardData?.items || [])
-      .find((i) => i.kind === 'file' && i.type.startsWith('image/'))?.getAsFile();
+    // 截图（image/*）优先；从文件管理器复制过来的普通文件也接住，走文件附件那一档。
+    // kind === 'string' 的项是纯文本/富文本，交给输入框自己处理，别拦。
+    const items = Array.from(e.clipboardData?.items || []).filter((i) => i.kind === 'file');
+    const file = (items.find((i) => i.type.startsWith('image/')) ?? items[0])?.getAsFile();
     if (file) {
       e.preventDefault();
       void attach(file);
@@ -258,12 +273,17 @@ export function Composer({
 
       {attachment ? (
         <div className="attach">
-          <span className="attach__thumb">
-            <img src={attachment.previewUrl} alt={attachment.filename} />
+          <span className={`attach__thumb${attachment.kind === 'file' ? ' attach__thumb--file' : ''}`}>
+            {/* 只有确认过是图片的那一档才内联显示，其余一律给个文件图标。 */}
+            {attachment.kind === 'image'
+              ? <img src={attachment.previewUrl} alt={attachment.filename} />
+              : <FileText size={16} />}
           </span>
           <span className="attach__name">{attachment.filename}</span>
           <span className="attach__state">
-            {attachment.error ? attachment.error : attachment.uploading ? '上传中…' : '已上传，将作为图片附件发送'}
+            {attachment.error ? attachment.error
+              : attachment.uploading ? '上传中…'
+                : attachment.kind === 'image' ? '已上传，将作为图片附件发送' : '已上传，将作为文件附件发送'}
           </span>
           <button
             type="button"
@@ -283,15 +303,14 @@ export function Composer({
         <button
           type="button"
           className="composer__plus"
-          title={`从本地选择图片（不超过 ${MAX_UPLOAD_MB}MB）`}
+          title={`从本地选择文件（图片或任意文件，不超过 ${MAX_UPLOAD_MB}MB）`}
           onClick={() => fileRef.current?.click()}
         >
-          <ImagePlus size={18} />
+          <Paperclip size={18} />
         </button>
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
           style={{ display: 'none' }}
           onChange={(e) => {
             const file = e.target.files?.[0];
@@ -306,7 +325,7 @@ export function Composer({
             className="composer__input"
             rows={1}
             value={draft}
-            placeholder="输入消息，支持 Markdown、粘贴图片、@ 提及成员或 AI"
+            placeholder="输入消息，支持 Markdown、粘贴图片、发送文件、@ 提及成员或 AI"
             onChange={(e) => {
               setDraft(e.target.value);
               syncMentionState(e.target.value);

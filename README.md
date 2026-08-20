@@ -55,8 +55,10 @@ DEMO_PASSWORD=只在本地用的密码
 **聊天**
 - 左右气泡布局，消息以 Markdown 存储与渲染（段落、列表、加粗、行内代码、链接、图片、@提及）。
 - 历史消息按游标分页，默认加载最新 50 条，顶部「加载更早的消息」或上滑继续往前翻。
-- 输入框默认单行、与「+」按钮等高；「+」从本地选图，也支持直接粘贴图片。
-- 图片按附件流程走：先上传到对象存储拿到链接，再拼成 Markdown 图片随消息发出。
+- 输入框默认单行、与回形针按钮等高；回形针从本地选**任意文件**，也支持直接粘贴图片或文件。
+- 附件按用途分两档，服务端按**真实字节**判定，不看客户端自报的类型和文件名（见下节）：
+  图片（PNG/JPEG/GIF/WebP）拼成 Markdown 图片内联显示；PDF/ZIP/DOCX 等普通文件拼成
+  链接，渲染成「文件卡片 + 下载」，永远不内联。
 - 输入 `@` 弹出提及气泡，支持 ↑↓ 选择、Enter/Tab 确认、Esc 关闭。
 - 群聊右栏显示成员、在线状态与「AI 掌握的上下文」摘要。
 - 新消息、AI 输入中、在线状态通过 SSE (`/api/stream`) 实时推送。
@@ -81,6 +83,37 @@ DEMO_PASSWORD=只在本地用的密码
 **响应式**
 - 桌面 64px 图标侧栏（含选中态）；≤720px 切换为底部标签栏，会话列表与聊天页互相切换。
 - 浅色 / 深色两套主题，跟随系统并可手动切换后记忆。
+
+## 附件的安全策略（issue #22）
+
+上传目录 `/uploads` 和聊天系统**同源**，所以「这份文件会不会被浏览器当网页执行」是一道
+安全边界，不是格式偏好问题。规则全部收在 `server/src/attachments.js`：
+
+| | 判定 | 落盘 | 回源响应头 | 前端 |
+| --- | --- | --- | --- | --- |
+| 图片 | magic number 嗅探，只认 PNG / JPEG / GIF / WebP | 扩展名**由嗅探结果决定** | `image/*` + `nosniff` | 内联 `<img>` |
+| 普通文件 | 其余任意内容照收 | 一律 `<uuid>.bin` | `application/octet-stream` + `Content-Disposition: attachment` + `nosniff` + `CSP: default-src 'none'` | 文件卡片 + 下载，永不内联 |
+| SVG | 开头 1KB 出现 `<svg` 即命中 | 拒收（400） | — | — |
+
+要点：
+
+- 客户端自报的 `Content-Type` 和文件名都**不参与安全判定**。声称是图片却拿不出图片字节
+  的一律 400（不会悄悄降级成附件）；原始文件名只作为**显示名**存库和进消息，绝不参与
+  磁盘路径与 URL。
+- 头像只走图片这一档 —— 它一定会被渲染成 `<img>`。
+- 回源响应头按扩展名白名单发，白名单之外一律强制下载，所以**修复之前**遗留在磁盘上的
+  `.html` / `.svg` 从升级那一刻起也已经跑不起来了。
+
+历史文件的清点/清理是**手动**的，不在启动时自动删用户数据：
+
+```bash
+node scripts/cleanup-legacy-uploads.mjs                  # 只清点，什么都不改（默认）
+node scripts/cleanup-legacy-uploads.mjs --apply          # 移进 uploads/quarantine/，可恢复
+node scripts/cleanup-legacy-uploads.mjs --apply --delete # 直接删除，不可恢复
+```
+
+回归用例：`server/test/issue-22.test.js`（真实字节样本见 `server/test/samples.js`）、
+`web/src/lib/md.test.ts`、`web/src/components/Composer.file.test.tsx`。
 
 ## 部署（Docker）
 
@@ -140,6 +173,7 @@ server/                Express + node:sqlite 后端
   src/bootstrap.js      账号初始化：系统 AI + .env 里的管理员与本地联系人
   src/auth.js           bcrypt + JWT（15 天）、在线判定
   src/ai.js             供应商调用、@ 解析、回复策略、画像学习
+  src/attachments.js    附件类型判定（magic number 嗅探）与 /uploads 回源响应头策略
   src/storage.js        附件存储（默认本地磁盘，S3 driver 留了接入点）
   src/events.js         SSE 推送
   src/routes/           auth / users / conversations / uploads / ai
@@ -175,7 +209,7 @@ chats/                 设计过程的对话记录
 | GET/POST | `/api/conversations/:id/messages` | 读取（游标分页）/ 发送消息 |
 | POST | `/api/conversations/:id/read` | 上报已读位置 |
 | GET | `/api/conversations/:id/ai-context` | 群内 AI 上下文摘要 |
-| POST | `/api/uploads` | 图片附件上传 |
+| POST | `/api/uploads` | 附件上传（图片按真实字节嗅探，其余作为只能下载的文件） |
 | GET | `/api/stream` | SSE：新消息 / AI 输入中 / 在线状态 / 已读回执 |
 | GET/PUT | `/api/ai/settings` | AI 配置（管理员） |
 | POST | `/api/ai/test` | 测试连通性（管理员） |
