@@ -85,6 +85,11 @@ export interface Conversation {
    * 普通未读里，这一档单独拎出来给徽标做区分。老接口没有这个字段时按 0 处理。
    */
   mentionsUnread?: number;
+  /**
+   * 会话免打扰：开着的时候不弹桌面通知（未读该怎么算还怎么算）。
+   * 可选，老接口 / 老 fixture 不带这个字段时按 false 处理。
+   */
+  muted?: boolean;
 }
 
 /**
