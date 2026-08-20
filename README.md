@@ -42,8 +42,19 @@ DEMO_PASSWORD=只在本地用的密码
 - 列出系统内全部成员，无需加好友，右侧「去聊天」直接开会话。
 - 管理员额外可见「添加联系人」（开通新成员账号，返回初始密码）与「建群」；普通成员只能去聊天。
 
+**未读与已读**
+- 会话列表显示未读条数，侧栏与底部标签栏的「会话」上显示总未读（超过 99 显示 `99+`）。
+- 真实已读回执：打开会话、窗口重新聚焦时上报已读位置，自己的气泡随之从「已发送」
+  变为「已读」（私聊）或「n 人已读」（群聊）。只依据对方真实上报的位置，不拿在线状态推断。
+
+**群管理**
+- 建群者与系统管理员可以添加 / 移除成员、修改群名；任何成员都能自己退群。
+- 群主不能被别人移除；Aria 可以被移出群，移出后新消息不再对 AI 可见，也可以再加回来。
+- 成员变动与改群名会在聊天里留下一行居中的系统提示。
+
 **聊天**
 - 左右气泡布局，消息以 Markdown 存储与渲染（段落、列表、加粗、行内代码、链接、图片、@提及）。
+- 历史消息按游标分页，默认加载最新 50 条，顶部「加载更早的消息」或上滑继续往前翻。
 - 输入框默认单行、与「+」按钮等高；「+」从本地选图，也支持直接粘贴图片。
 - 图片按附件流程走：先上传到对象存储拿到链接，再拼成 Markdown 图片随消息发出。
 - 输入 `@` 弹出提及气泡，支持 ↑↓ 选择、Enter/Tab 确认、Esc 关闭。
@@ -156,12 +167,16 @@ chats/                 设计过程的对话记录
 | GET | `/api/users` | 全部成员 |
 | POST | `/api/users` | 管理员开通新成员 |
 | GET | `/api/conversations` | 我的会话列表 |
-| POST | `/api/conversations/group` | 管理员建群（2–3 人，AI 默认加入） |
+| POST | `/api/conversations/group` | 管理员建群（至少 1 人，AI 默认加入） |
 | POST | `/api/conversations/direct` | 打开/创建一对一（含 AI 私聊） |
-| GET/POST | `/api/conversations/:id/messages` | 读取/发送消息 |
+| PATCH | `/api/conversations/:id` | 改群名（群主 / 管理员） |
+| POST/DELETE | `/api/conversations/:id/members` | 添加 / 移除群成员（群主 / 管理员） |
+| POST | `/api/conversations/:id/leave` | 退出群聊 |
+| GET/POST | `/api/conversations/:id/messages` | 读取（游标分页）/ 发送消息 |
+| POST | `/api/conversations/:id/read` | 上报已读位置 |
 | GET | `/api/conversations/:id/ai-context` | 群内 AI 上下文摘要 |
 | POST | `/api/uploads` | 图片附件上传 |
-| GET | `/api/stream` | SSE：新消息 / AI 输入中 / 在线状态 |
+| GET | `/api/stream` | SSE：新消息 / AI 输入中 / 在线状态 / 已读回执 |
 | GET/PUT | `/api/ai/settings` | AI 配置（管理员） |
 | POST | `/api/ai/test` | 测试连通性（管理员） |
 | GET | `/api/ai/overview` | AI 管理列表与统计（管理员） |
@@ -178,6 +193,10 @@ chats/                 设计过程的对话记录
 | `ADMIN_NAME` / `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 首个管理员账号，只在该邮箱不存在时创建 |
 | `DEMO_USERS` / `DEMO_PASSWORD` | 本地开发用的联系人（`姓名:邮箱:部门`，逗号分隔），留空则不创建 |
 | `AI_NAME` | AI 成员显示名，默认 `Aria` |
+| `ENCRYPTION_KEY` | 加密落库的密钥（目前用于 AI 供应商的 API Key）。留空则 Key 仍以明文存库 |
+| `CORS_ORIGIN` | 跨域白名单，逗号分隔。默认同源部署不需要填；留空时生产环境不发跨域头 |
+| `TRUST_PROXY` | 部署在反向代理后面时填，否则按 IP 限流会把所有请求算成反代的 IP |
+| `LOGIN_WINDOW_MS` / `LOGIN_MAX_FAILURES` | 登录失败限流的窗口与上限，默认 15 分钟 10 次 |
 | `S3_BUCKET` / `S3_REGION` | 配置后附件走 S3（需在 `src/storage.js` 的 s3 分支接入客户端），留空用本地磁盘 |
 | `CODEX_ENDPOINT` | Codex 本地 Agent 的调用地址（可选） |
 
