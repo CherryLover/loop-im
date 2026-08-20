@@ -12,6 +12,7 @@
     "test:server": "npm test --prefix server",
     "test:web": "npm test --prefix web",
     "test:e2e": "npm run build --prefix web && npm test --prefix e2e",
-    "typecheck": "npm run typecheck --prefix web"
+    "typecheck": "npm run typecheck --prefix web",
+    "test:coverage": "npm run test:coverage --prefix server && npm run test:coverage --prefix web"
   }
 }
