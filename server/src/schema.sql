@@ -32,10 +32,14 @@ CREATE TABLE IF NOT EXISTS conversations (
   created_at INTEGER NOT NULL
 );
 
+-- 「用户 × 会话」这一维。除了成员关系本身，每个人对每个会话的个人偏好也挂在这里：
+-- 置顶和免打扰都是「我」的设置，A 置顶某个群不会影响 B 看到的顺序。
 CREATE TABLE IF NOT EXISTS conversation_members (
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   joined_at       INTEGER NOT NULL,
+  pinned          INTEGER NOT NULL DEFAULT 0,     -- 我把它置顶了：只改会话列表的分组排序
+  muted           INTEGER NOT NULL DEFAULT 0,     -- 我把它设为免打扰：只改「怎么提醒」，不改未读计数
   PRIMARY KEY (conversation_id, user_id)
 );
 

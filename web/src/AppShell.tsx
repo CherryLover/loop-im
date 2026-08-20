@@ -13,6 +13,7 @@ import { ApiError, api } from './lib/api';
 import { initialOf } from './lib/md';
 import { unreadAriaLabel, unreadBadgeClass, unreadLabel } from './lib/format';
 import { mergeMessage, replyTargetOf } from './lib/messages';
+import { sortConversations } from './lib/conversations';
 import { notifyMessage, useDesktopNotify } from './lib/notify';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
@@ -88,6 +89,9 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   // send 里要就地查出被引用的那条消息来拼乐观气泡的引用块，同样用 ref，免得进 deps。
   const messagesRef = useRef<Record<string, Message[]>>({});
   messagesRef.current = messages;
+  // 改置顶/免打扰时要拿到改之前的那一项来做回滚，用 ref 镜像一份，免得进 deps。
+  const conversationsRef = useRef<Conversation[]>([]);
+  conversationsRef.current = conversations;
   const signingOutRef = useRef(false);
   // 退出或卸载时要把在途的列表 / 消息请求一起取消：它们的凭据马上就作废了。
   const abortRef = useRef<AbortController | null>(null);
@@ -390,6 +394,31 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     onSignOut();
   }, [abortInFlight, onSignOut]);
 
+  /**
+   * 置顶 / 免打扰：先本地就位再落库。置顶会让这一项跳到列表顶部，等一轮往返再动
+   * 会有明显的迟滞感，所以就地改完顺手重排（口径与服务端同一份，见 lib/conversations.ts）。
+   * 失败就把这一项整个换回改之前的样子并提示——设置没存上却留着新样子，比不改更让人困惑。
+   *
+   * 注意这里只碰 pinned / muted 两个字段：unread、mentionsUnread 一律不动。
+   * 设为免打扰不代表这个会话被读过，未读该是多少还是多少。
+   */
+  const setConversationPrefs = useCallback(async (
+    conversationId: string,
+    patch: { pinned?: boolean; muted?: boolean },
+  ) => {
+    const before = conversationsRef.current.find((c) => c.id === conversationId);
+    setConversations((list) =>
+      sortConversations(list.map((c) => (c.id === conversationId ? { ...c, ...patch } : c))));
+    try {
+      await api.updateConversationPrefs(conversationId, patch);
+    } catch (err) {
+      if (before) {
+        setConversations((list) => sortConversations(list.map((c) => (c.id === conversationId ? before : c))));
+      }
+      setToast(err instanceof Error ? err.message : '设置失败');
+    }
+  }, []);
+
   /** 移除成员：可逆操作（还能再加回来），所以不额外弹确认，用提示条回执。 */
   const removeMember = useCallback(async (conversationId: string, userId: string, name: string) => {
     try {
@@ -505,6 +534,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             onRemoveMember={(id, userId, name) => void removeMember(id, userId, name)}
             onRenameGroup={(id) => setManage({ mode: 'rename', conversationId: id })}
             onLeaveGroup={(id) => setManage({ mode: 'leave', conversationId: id })}
+            onTogglePin={(id, pinned) => void setConversationPrefs(id, { pinned })}
+            onToggleMute={(id, muted) => void setConversationPrefs(id, { muted })}
           />
         ) : null}
 
