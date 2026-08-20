@@ -264,13 +264,16 @@ input, textarea { font-family: inherit; }
   display: flex; align-items: center; justify-content: center;
 }
 .composer__plus:hover { background: var(--surface2); color: var(--text); }
+/* min-width: 0 是必需的：textarea 的内在宽度按 cols=20 算，随字体可以到 300px 以上，
+   而 flex item 默认 min-width: auto 不肯收缩到内在宽度以下。缺了它，390px 的手机
+   视口上这一行会被撑开，把 flex: none 的「发送」按钮整个推出右边界。 */
 .composer__box {
-  flex: 1; height: 40px; border: 1px solid var(--border2); border-radius: 11px;
+  flex: 1; min-width: 0; height: 40px; border: 1px solid var(--border2); border-radius: 11px;
   background: var(--bg); padding: 0 10px; display: flex; align-items: center; gap: 8px;
 }
 .composer__box:focus-within { border-color: var(--accent); }
 .composer__input {
-  flex: 1; height: 20px; border: none; background: transparent; color: var(--text);
+  flex: 1; min-width: 0; height: 20px; border: none; background: transparent; color: var(--text);
   resize: none; outline: none; font-size: 13.5px; line-height: 20px; padding: 0;
 }
 .composer__md { font-size: 10.5px; color: var(--faint); font-family: 'JetBrains Mono', monospace; }
