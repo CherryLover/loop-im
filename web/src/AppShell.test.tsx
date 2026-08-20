@@ -170,7 +170,9 @@ describe('历史翻页', () => {
     const button = await screen.findByRole('button', { name: '加载更早的消息' });
     await userEvent.click(button);
 
-    await waitFor(() => expect(mockApi.messages).toHaveBeenCalledWith('c1', { before: 'm5' }));
+    await waitFor(() => expect(mockApi.messages).toHaveBeenCalledWith(
+      'c1', expect.objectContaining({ before: 'm5' }),
+    ));
     await waitFor(() => expect(screen.getByText('内容 m1')).toBeInTheDocument());
     expect(screen.getByText('内容 m5')).toBeInTheDocument();
     // 没有更早的了，入口应当消失
