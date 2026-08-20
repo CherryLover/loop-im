@@ -95,6 +95,11 @@ docker run -d -p 4000:4000 \
   -v "$PWD/data:/app/data" loop-im
 ```
 
+## 变更记录
+
+- [12 个 issue 的修复报告](docs/issue-fixes-2026-08.md)（2026-08）：逐条根因、修法、回归用例，
+  以及升级注意事项与仍未覆盖的三项。
+
 ## 测试与 CI
 
 ```bash
