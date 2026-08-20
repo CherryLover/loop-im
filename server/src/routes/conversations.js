@@ -338,7 +338,68 @@ router.post('/:id/read', (req, res) => {
   res.json({ conversationId: convo.id, lastReadAt: next, unread: unreadCount(convo.id, req.user.id) });
 });
 
-router.post('/:id/messages', async (req, res) => {
+/**
+ * 响应发出之后才跑的那一步失败了，只能记在服务端日志里——响应已经走了，没别的地方可说。
+ * 测试环境下不打印，免得污染测试输出（与 app.js 的错误中间件同一处理）。
+ */
+function reportAiTurnFailure(err) {
+  if (process.env.NODE_ENV !== 'test') console.error('[ai-turn] AI 后台流程出错：', err);
+}
+
+/**
+ * 发消息接口把 201 响应发出去之后，才轮到 Aria 干活：学习沟通习惯、必要时生成回复。
+ *
+ * 这段工作必须自成一体、绝不向外抛。发消息的 handler 是 async 的，响应之后再出现的
+ * rejection 会被 Express 5 转给 app.js 末尾的错误中间件；那时 res.headersSent 已经是
+ * true，中间件再 res.status().json() 就撞上 ERR_HTTP_HEADERS_SENT，日志里留下一串跟真实
+ * 故障毫无关系的堆栈，把排查带偏。所以这里每一步（含 finally 里的 ai-typing）各自兜住
+ * 自己的错误，函数本身永远 resolve。
+ *
+ * 依赖都可以从 deps 覆盖，方便测试注入失败。
+ */
+export async function runAiTurn(ctx, deps = {}) {
+  const { convo, userId, audience, mentions, settings: s } = ctx;
+  const {
+    learn = learnAbout,
+    generate = generateReply,
+    insert = insertAiMessage,
+    emit = emitTo,
+    onError = reportAiTurnFailure,
+  } = deps;
+
+  const safeEmit = (event, data) => {
+    try {
+      emit(audience, event, data);
+    } catch (err) {
+      onError(err);       // 某个 SSE 连接写失败，不该连累后面的步骤
+    }
+  };
+  const typing = (on) => safeEmit('ai-typing', { conversationId: convo.id, typing: on });
+
+  try {
+    // 学习画像与生成回复互不依赖，保持原来的并行关系；各自吞掉自己的错误。
+    const learning = (async () => learn(userId, convo))().catch(onError);
+
+    if (shouldReply(convo, mentions, s)) {
+      typing(true);
+      try {
+        const { body: reply } = await generate(convo, userId);
+        const row = insert(convo.id, reply);
+        safeEmit('message', { message: serializeMessage(row, { name: 'Aria' }) });
+      } catch (err) {
+        onError(err);
+      } finally {
+        // 无论上面成没成，都要收掉「正在输入」，否则前端会一直转。
+        typing(false);
+      }
+    }
+    await learning;
+  } catch (err) {
+    onError(err);         // 兜底：任何没预料到的错误也不许逃出这个函数
+  }
+}
+
+router.post('/:id/messages', (req, res) => {
   const convo = requireMembership(req, res, req.params.id);
   if (!convo) return;
   const body = String(req.body?.body || '').trim();
@@ -359,16 +420,8 @@ router.post('/:id/messages', async (req, res) => {
   res.status(201).json({ message });
 
   // Aria: 被 @ 时必回；未被 @ 时按「群聊静默读取」决定是否读取上下文并学习沟通习惯。
+  // 响应已经发出，这里只能「发射后不管」：runAiTurn 自己兜住所有错误，
+  // 末尾的 catch 只是多一道保险，避免任何 rejection 变成 Express 的 headers-sent 噪音。
   if (!aiVisible) return;
-  learnAbout(req.user.id, convo).catch(() => {});
-  if (!shouldReply(convo, mentions, s)) return;
-
-  emitTo(audience, 'ai-typing', { conversationId: convo.id, typing: true });
-  try {
-    const { body: reply } = await generateReply(convo, req.user.id);
-    const row = insertAiMessage(convo.id, reply);
-    emitTo(audience, 'message', { message: serializeMessage(row, { name: 'Aria' }) });
-  } finally {
-    emitTo(audience, 'ai-typing', { conversationId: convo.id, typing: false });
-  }
+  runAiTurn({ convo, userId: req.user.id, audience, mentions, settings: s }).catch(reportAiTurnFailure);
 });
