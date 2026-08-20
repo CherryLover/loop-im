@@ -3,6 +3,7 @@ import { all, get, run, now, uid } from '../db.js';
 import { authenticate, publicUser, requireAdmin } from '../auth.js';
 import { emitTo } from '../events.js';
 import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
+import { decrypt } from '../secret-box.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -81,8 +82,44 @@ const readsOf = (conversationId, viewerId) => all(
   conversationId, viewerId,
 ).map((r) => ({ userId: r.user_id, lastReadAt: r.last_read_at }));
 
-const previewOf = (body) =>
-  body.replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]').replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 26);
+const previewOf = (body, limit = 26) =>
+  body.replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]').replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit);
+
+// 引用块比会话列表那一行宽，可以多给几个字，但也只是一眼扫过去认出「回的是哪条」。
+const QUOTE_PREVIEW_LIMIT = 48;
+/** 原消息查不到（被删了、id 是伪造的）时统一这么说，界面照此降级。 */
+export const QUOTE_UNAVAILABLE = '消息已不可用';
+
+/**
+ * 被引用消息的摘要：发送者名字 + 正文截断，跟着消息一起下发，前端不用再发一轮请求。
+ *
+ * 三件事必须守住：
+ * 1. 查询条件里带上 conversation_id —— 这是跨会话引用的第二道防线。就算库里因为
+ *    历史数据或别处的 bug 存进了一个属于别的会话的 reply_to，摘要也绝不会把那边的
+ *    正文带出来，只会降级成「消息已不可用」。
+ * 2. 只展开一层：这里返回的是纯数据，不含被引用消息自己的 quote / replyTo，
+ *    所以 A 引用 B、B 引用 C 时不会顺着链子递归下去。
+ * 3. 正文走 decrypt()：今天 messages.body 是明文，decrypt() 对明文是原样返回；
+ *    真到了正文落库加密的那天，摘要读的也一定是解密后的值，而不是 v1: 开头的密文。
+ *
+ * 发送者已退群不影响摘要 —— 退群删的是 conversation_members，users 那行还在，名字照常。
+ * 只有连 users 那行都没了（历史脏数据）才用 LEFT JOIN 兜底给个占位名。
+ */
+export function quoteOf(replyToId, conversationId) {
+  if (!replyToId) return null;
+  const row = get(
+    `SELECT m.body, u.name AS sender_name FROM messages m
+     LEFT JOIN users u ON u.id = m.sender_id
+     WHERE m.id = ? AND m.conversation_id = ?`,
+    replyToId, conversationId,
+  );
+  if (!row) return { senderName: '', preview: QUOTE_UNAVAILABLE, available: false };
+  return {
+    senderName: row.sender_name || '已注销的成员',
+    preview: previewOf(decrypt(row.body), QUOTE_PREVIEW_LIMIT) || QUOTE_UNAVAILABLE,
+    available: true,
+  };
+}
 
 export function serializeMessage(row, sender) {
   return {
@@ -96,6 +133,8 @@ export function serializeMessage(row, sender) {
     createdAt: row.created_at,
     isAI: row.sender_id === AI_ID,
     kind: row.kind || 'user',
+    replyTo: row.reply_to || null,               // 被引用消息的 id，前端据此跳转
+    quote: quoteOf(row.reply_to, row.conversation_id),
   };
 }
 
@@ -438,6 +477,15 @@ router.post('/:id/messages', (req, res) => {
   const body = String(req.body?.body || '').trim();
   if (!body) return res.status(400).json({ error: '消息不能为空' });
 
+  // 引用回复：被引用的消息必须存在，而且必须属于同一个会话。少了后半句，任何人
+  // 都能拿别的群的消息 id 当 replyTo 发一条，再从引用摘要里把那边的正文读出来 ——
+  // 会话成员校验就等于白做了。两种失败给同一句提示：分开说等于告诉调用方
+  // 「这个 id 在别处存在」，接口就成了消息是否存在的探针。
+  const replyTo = req.body?.replyTo ? String(req.body.replyTo) : null;
+  if (replyTo && !get('SELECT id FROM messages WHERE id = ? AND conversation_id = ?', replyTo, convo.id)) {
+    return res.status(400).json({ error: '引用的消息不存在或不属于当前会话' });
+  }
+
   const roster = memberRows(convo.id);
   const mentions = parseMentions(body, roster);
   const audience = roster.map((m) => m.id);
@@ -446,8 +494,8 @@ router.post('/:id/messages', (req, res) => {
   const aiInRoom = audience.includes(AI_ID);
   const aiVisible = isVisibleToAi(convo, mentions, aiInRoom, s);
   const id = uid('m');
-  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    id, convo.id, req.user.id, body, JSON.stringify(mentions), aiVisible ? 1 : 0, now());
+  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    id, convo.id, req.user.id, body, JSON.stringify(mentions), aiVisible ? 1 : 0, replyTo, now());
   const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), req.user);
   emitTo(audience, 'message', { message });
   res.status(201).json({ message });

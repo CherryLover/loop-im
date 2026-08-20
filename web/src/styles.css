@@ -329,6 +329,45 @@ input, textarea { font-family: inherit; }
 .attach__state { color: var(--muted); }
 .attach__x { margin-left: auto; border: none; background: transparent; color: var(--muted); cursor: pointer; display: flex; }
 
+/* ---- 引用回复 -------------------------------------------------------- */
+/* 输入框上方的引用态：正在回复谁、回复的是哪一句，右边一个叉可以取消。 */
+.reply-bar {
+  display: flex; align-items: center; gap: 8px; background: var(--surface2);
+  border: 1px solid var(--border); border-left: 2px solid var(--accent);
+  border-radius: 10px; padding: 7px 9px; margin-bottom: 8px; font-size: 12px;
+}
+.reply-bar__icon { color: var(--accent-text); flex: none; }
+.reply-bar__who { color: var(--accent-text); font-weight: 500; flex: none; }
+.reply-bar__text { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reply-bar__x { margin-left: auto; border: none; background: transparent; color: var(--muted); cursor: pointer; display: flex; flex: none; }
+
+/* 气泡上方的引用块：点一下跳到原消息。 */
+.quote {
+  display: flex; align-items: baseline; gap: 6px; max-width: 100%; text-align: left;
+  background: var(--surface2); border: 1px solid var(--border); border-left: 2px solid var(--accent);
+  border-radius: 8px; padding: 5px 8px; font-size: 11.5px; cursor: pointer; color: var(--muted);
+}
+.quote__who { color: var(--accent-text); font-weight: 500; flex: none; }
+.quote__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quote--gone { border-left-color: var(--border2); cursor: default; font-style: italic; opacity: .75; }
+
+/* 气泡上的「回复」入口：平时淡出，指上去或键盘聚焦时才显形。 */
+.msg__reply {
+  border: none; background: transparent; color: var(--faint); cursor: pointer;
+  font-size: 10.5px; padding: 0 2px; margin-left: 6px;
+  display: inline-flex; align-items: center; gap: 3px; vertical-align: -1px;
+  opacity: 0; transition: opacity .12s ease-out;
+}
+.msg--me:hover .msg__reply, .msg--other:hover .msg__reply, .msg__reply:focus-visible { opacity: 1; }
+.msg__reply:hover { color: var(--accent-text); }
+
+/* 从引用块跳过去之后，把落点消息短暂点亮一下。 */
+.msg--flash { animation: quote-flash 1.4s ease-out; border-radius: 12px; }
+@keyframes quote-flash {
+  0%, 55% { background: var(--accent-soft); }
+  100% { background: transparent; }
+}
+
 .mentions {
   position: absolute; bottom: 100%; left: 14px; margin-bottom: 8px; width: 230px;
   background: var(--surface); border: 1px solid var(--border2); border-radius: 12px;

@@ -15,6 +15,18 @@ export interface GroupMember extends User {
   roleInGroup: string;
 }
 
+/**
+ * 被引用消息的摘要，随消息一起下发，前端不必再发一轮请求。
+ * 只有一层：被引用的那条自己引了谁，这里不再展开。
+ */
+export interface MessageQuote {
+  senderName: string;
+  /** 正文截断后的一行；原消息不可用时是「消息已不可用」。 */
+  preview: string;
+  /** 原消息还在不在（被删掉、或不属于本会话时为 false）。 */
+  available: boolean;
+}
+
 export interface Message {
   id: string;
   conversationId: string;
@@ -28,6 +40,17 @@ export interface Message {
   pending?: boolean;
   /** user = 普通消息；system = 成员变动、改群名之类的提示。 */
   kind?: 'user' | 'system';
+  /** 引用回复指向的原消息 id；没有引用时为 null。老接口没有这个字段。 */
+  replyTo?: string | null;
+  /** 被引用消息的摘要；没有引用时为 null。 */
+  quote?: MessageQuote | null;
+}
+
+/** 输入框上方那块「正在回复某条消息」的引用态。 */
+export interface ReplyTarget {
+  id: string;
+  senderName: string;
+  preview: string;
 }
 
 /** 某人在某个会话里读到了哪一刻。 */
