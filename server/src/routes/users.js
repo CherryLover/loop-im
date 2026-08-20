@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { all, get, run, now } from '../db.js';
-import { authenticate, hashPassword, publicUser, requireAdmin } from '../auth.js';
+import { authenticate, generatePassword, hashPassword, publicUser, requireAdmin, resetPasswordFor } from '../auth.js';
 import { emitAll } from '../events.js';
 import { uid } from '../db.js';
 
@@ -32,4 +32,25 @@ router.post('/', requireAdmin, (req, res) => {
   const user = publicUser(get('SELECT * FROM users WHERE id = ?', id));
   emitAll('user-created', { user });
   res.status(201).json({ user, initialPassword });
+});
+
+/**
+ * 管理员重置成员密码：这是忘了密码之后唯一的入口（本系统发不了邮件，没有邮箱找回）。
+ * 新密码只在这次响应里出现一次，管理员抄给本人；服务端不留明文。
+ */
+router.post('/:id/reset-password', requireAdmin, (req, res) => {
+  const target = get('SELECT * FROM users WHERE id = ?', req.params.id);
+  if (!target) return res.status(404).json({ error: '成员不存在' });
+  // 自己的密码走 /auth/me/password，那条要验旧密码；从这里绕过去等于少一道校验。
+  if (target.id === req.user.id) {
+    return res.status(400).json({ error: '不能重置自己的密码，请在个人设置里修改' });
+  }
+  if (target.role === 'ai') return res.status(400).json({ error: 'AI 账号没有密码' });
+
+  const password = generatePassword();
+  resetPasswordFor(target.id, password);
+  // 所有设备已被踢下线，在线点也跟着灭掉，不用等 90 秒心跳窗口过期。
+  run('UPDATE users SET last_seen_at = 0 WHERE id = ?', target.id);
+  emitAll('presence', { userId: target.id, online: false });
+  res.json({ user: publicUser(get('SELECT * FROM users WHERE id = ?', target.id)), password });
 });

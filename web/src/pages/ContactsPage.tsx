@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Search, UserPlus, Users } from 'lucide-react';
+import { KeyRound, Search, UserPlus, Users } from 'lucide-react';
 import { Avatar, AiBadge } from '../components/Avatar';
+import { ResetPasswordModal } from '../modals/ResetPasswordModal';
 import type { User } from '../lib/types';
 
 interface ContactsPageProps {
@@ -14,6 +15,8 @@ interface ContactsPageProps {
 
 export function ContactsPage({ me, users, isAdmin, onChat, onAddContact, onCreateGroup }: ContactsPageProps) {
   const [query, setQuery] = useState('');
+  // 忘了密码的成员只能靠管理员在这里重置，所以入口就放在名单里每个人身上。
+  const [resetting, setResetting] = useState<User | null>(null);
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -75,6 +78,17 @@ export function ContactsPage({ me, users, isAdmin, onChat, onAddContact, onCreat
                   <span className={`dot ${u.online ? 'dot--online' : 'dot--offline'}`} />
                   {u.isAI ? '常驻在线' : u.online ? '在线' : '离线'}
                 </span>
+                {isAdmin && !u.isAI ? (
+                  <button
+                    type="button"
+                    className="contact__chat"
+                    title={`重置 ${u.name} 的密码`}
+                    onClick={() => setResetting(u)}
+                  >
+                    <KeyRound size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />
+                    重置密码
+                  </button>
+                ) : null}
                 <button type="button" className="contact__chat" onClick={() => onChat(u.id)}>去聊天</button>
               </div>
             </div>
@@ -82,6 +96,8 @@ export function ContactsPage({ me, users, isAdmin, onChat, onAddContact, onCreat
           {list.length === 0 ? <div className="convos__empty">没有匹配的成员。</div> : null}
         </div>
       </div>
+
+      {resetting ? <ResetPasswordModal user={resetting} onClose={() => setResetting(null)} /> : null}
     </div>
   );
 }
