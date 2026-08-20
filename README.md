@@ -208,6 +208,7 @@ chats/                 设计过程的对话记录
 | POST | `/api/conversations/:id/leave` | 退出群聊 |
 | GET/POST | `/api/conversations/:id/messages` | 读取（游标分页）/ 发送消息 |
 | POST | `/api/conversations/:id/read` | 上报已读位置 |
+| PATCH | `/api/conversations/:id/prefs` | 置顶 / 免打扰（个人设置，只改自己那一份） |
 | GET | `/api/conversations/:id/ai-context` | 群内 AI 上下文摘要 |
 | POST | `/api/uploads` | 附件上传（图片按真实字节嗅探，其余作为只能下载的文件） |
 | GET | `/api/stream` | SSE：新消息 / AI 输入中 / 在线状态 / 已读回执 |

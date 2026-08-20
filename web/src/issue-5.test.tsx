@@ -65,6 +65,8 @@ const renderChat = (showChatOnMobile: boolean, onBack = vi.fn()) => {
       onRemoveMember={vi.fn()}
       onRenameGroup={vi.fn()}
       onLeaveGroup={vi.fn()}
+      onTogglePin={vi.fn()}
+      onToggleMute={vi.fn()}
     />,
   );
   return { ...view, onBack };

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, LogOut, Pencil, Search, UserPlus, X } from 'lucide-react';
+import { Bell, BellOff, ChevronLeft, LogOut, Pencil, Pin, PinOff, Search, UserPlus, X } from 'lucide-react';
 import { Avatar, AiBadge } from '../components/Avatar';
 import { MessageList } from '../components/MessageList';
 import { Composer } from '../components/Composer';
@@ -38,6 +38,10 @@ interface ChatPageProps {
   onRemoveMember: (conversationId: string, userId: string, name: string) => void;
   onRenameGroup: (conversationId: string, currentTitle: string) => void;
   onLeaveGroup: (conversationId: string, title: string) => void;
+  /** 置顶 / 取消置顶。传的是「改成什么」，不是「当前是什么」。 */
+  onTogglePin: (conversationId: string, pinned: boolean) => void;
+  /** 免打扰 / 取消免打扰。同样传「改成什么」。 */
+  onToggleMute: (conversationId: string, muted: boolean) => void;
 }
 
 export function ChatPage(props: ChatPageProps) {
@@ -149,38 +153,73 @@ export function ChatPage(props: ChatPageProps) {
           {filtered.map((c) => {
             const isAI = c.type === 'ai';
             const mentioned = c.mentionsUnread || 0;       // 未读里有多少条 @ 到我
+            // 置顶与免打扰是「我」的个人设置；老接口不带这两个字段时按关着处理。
+            const pinned = !!c.pinned;
+            const muted = !!c.muted;
             const groupPeer = c.type !== 'group' ? c.members.find((m) => m.id !== me.id) : null;
             return (
-              <button
-                key={c.id}
-                type="button"
-                className={`convo${c.id === activeId ? ' convo--on' : ''}`}
-                onClick={() => props.onSelect(c.id)}
-              >
-                <Avatar
-                  name={groupPeer?.name || c.title}
-                  url={groupPeer?.avatarUrl}
-                  isAI={isAI}
-                  size={34}
-                  radius={10}
-                  label={c.type === 'group' ? '群' : undefined}
-                />
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div className="convo__row">
-                    <div className="convo__title">{c.title}</div>
-                    {isAI ? <AiBadge /> : null}
-                    <span className="convo__time">{c.lastMessage ? listTime(c.lastMessage.createdAt) : ''}</span>
-                    {c.unread > 0 ? (
-                      <span className={unreadBadgeClass(mentioned)} aria-label={unreadAriaLabel(c.unread, mentioned)}>
-                        {/* 颜色之外再给一个记号：只靠高亮色区分，色觉障碍的人是看不出来的 */}
-                        {mentioned > 0 ? <span className="badge__at" aria-hidden="true">@</span> : null}
-                        {unreadLabel(c.unread)}
-                      </span>
-                    ) : null}
+              // 会话本身是一个按钮，置顶/免打扰是另外两个按钮，按钮不能套按钮，
+              // 所以在外面包一层容器，让操作区跟会话行并排而不是嵌进去。
+              <div key={c.id} className={`convo-item${pinned ? ' convo-item--pinned' : ''}`}>
+                <button
+                  type="button"
+                  className={`convo${c.id === activeId ? ' convo--on' : ''}`}
+                  onClick={() => props.onSelect(c.id)}
+                >
+                  <Avatar
+                    name={groupPeer?.name || c.title}
+                    url={groupPeer?.avatarUrl}
+                    isAI={isAI}
+                    size={34}
+                    radius={10}
+                    label={c.type === 'group' ? '群' : undefined}
+                  />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className="convo__row">
+                      {/* 置顶和免打扰各有一个明确的记号，不用点开也不用悬浮就能看出来 */}
+                      {pinned ? <Pin size={11} className="convo__flag" aria-label="已置顶" /> : null}
+                      <div className="convo__title">{c.title}</div>
+                      {isAI ? <AiBadge /> : null}
+                      {muted ? <BellOff size={11} className="convo__flag" aria-label="已免打扰" /> : null}
+                      <span className="convo__time">{c.lastMessage ? listTime(c.lastMessage.createdAt) : ''}</span>
+                      {/* 免打扰只是让徽标弱化，未读数照显、照算 —— 免打扰不是不计未读 */}
+                      {c.unread > 0 ? (
+                        <span
+                          className={unreadBadgeClass(mentioned, muted)}
+                          aria-label={unreadAriaLabel(c.unread, mentioned)}
+                        >
+                          {/* 颜色之外再给一个记号：只靠高亮色区分，色觉障碍的人是看不出来的 */}
+                          {mentioned > 0 ? <span className="badge__at" aria-hidden="true">@</span> : null}
+                          {unreadLabel(c.unread)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="convo__preview">{c.lastMessage?.preview || '还没有消息'}</div>
                   </div>
-                  <div className="convo__preview">{c.lastMessage?.preview || '还没有消息'}</div>
+                </button>
+                <div className="convo__actions">
+                  <button
+                    type="button"
+                    className={`convo__action${pinned ? ' convo__action--on' : ''}`}
+                    aria-pressed={pinned}
+                    title={pinned ? `取消置顶「${c.title}」` : `置顶「${c.title}」`}
+                    aria-label={pinned ? `取消置顶「${c.title}」` : `置顶「${c.title}」`}
+                    onClick={() => props.onTogglePin(c.id, !pinned)}
+                  >
+                    {pinned ? <PinOff size={12} /> : <Pin size={12} />}
+                  </button>
+                  <button
+                    type="button"
+                    className={`convo__action${muted ? ' convo__action--on' : ''}`}
+                    aria-pressed={muted}
+                    title={muted ? `取消免打扰「${c.title}」` : `免打扰「${c.title}」`}
+                    aria-label={muted ? `取消免打扰「${c.title}」` : `免打扰「${c.title}」`}
+                    onClick={() => props.onToggleMute(c.id, !muted)}
+                  >
+                    {muted ? <Bell size={12} /> : <BellOff size={12} />}
+                  </button>
                 </div>
-              </button>
+              </div>
             );
           })}
 

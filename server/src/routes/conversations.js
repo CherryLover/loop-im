@@ -35,6 +35,33 @@ const lastReadAt = (conversationId, userId) =>
   get('SELECT last_read_at FROM conversation_reads WHERE conversation_id = ? AND user_id = ?',
     conversationId, userId)?.last_read_at || 0;
 
+// ---- 个人偏好：置顶 / 免打扰 -------------------------------------------
+// 两者都写在 conversation_members 里「我自己」那一行上，是「这个人在这个会话里」的
+// 设置，不是会话的全局属性：A 把某个群置顶或设为免打扰，B 那边一个字都不会变。
+//
+// 免打扰（muted）的语义只有一条，务必守住：**不打扰，不是不计数**。
+// 消息照收、未读照算、@我 照样统计，muted 只影响「怎么提醒」——不弹桌面通知、
+// 会话列表徽标弱化。所以 unreadSummary 那段 SQL 里绝不能掺进 muted：
+// 一旦掺进去就成了「静音即已读」，那是另一回事，也是这块最容易做错的地方。
+
+/** 我对这个会话的个人偏好。成员行不在（历史脏数据）时一律按默认值走。 */
+const prefsOf = (conversationId, userId) => {
+  const row = get(
+    'SELECT pinned, muted FROM conversation_members WHERE conversation_id = ? AND user_id = ?',
+    conversationId, userId,
+  );
+  return { pinned: !!row?.pinned, muted: !!row?.muted };
+};
+
+/**
+ * 会话列表的排序口径：置顶的整体排在前面，置顶组与非置顶组各自内部仍按
+ * 最后消息时间倒序（没有消息的算 0，排在本组最后）。置顶只改分组，不改组内规则。
+ * 导出供前端之外的测试直接验证，前端 lib/conversations.ts 是同一份口径的镜像。
+ */
+export const compareConversations = (a, b) =>
+  Number(!!b.pinned) - Number(!!a.pinned)
+  || (b.lastMessage?.createdAt || 0) - (a.lastMessage?.createdAt || 0);
+
 /**
  * messages.mentions 存的是 JSON 数组文本（如 `["u_1","all"]`），要在 SQL 里判断
  * 「有没有我」只能做文本匹配。裸着 LIKE '%id%' 会踩 id 互为前缀的坑：u_1 会命中
@@ -174,6 +201,7 @@ function serializeConversation(convo, viewerId) {
   });
   const peer = convo.type !== 'group' ? members.find((m) => m.id !== viewerId) : null;
   const counts = unreadSummary(convo.id, viewerId);
+  const prefs = prefsOf(convo.id, viewerId);
   const last = get(
     'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
     convo.id,
@@ -190,6 +218,11 @@ function serializeConversation(convo, viewerId) {
       : null,
     unread: counts.unread,
     mentionsUnread: counts.mentions,      // 未读里「有人 @ 我」的条数，前端据此高亮
+    // 下面两个是「我」的个人设置，同一个会话对不同的人可以给出不同的值。
+    pinned: prefs.pinned,
+    // 注意 muted 与 unread 是两回事：muted 为 true 时 unread 照样在涨，
+    // 免打扰改的是提醒方式（不弹通知、徽标弱化），不是把未读抹掉。
+    muted: prefs.muted,
   };
 }
 
@@ -199,13 +232,43 @@ router.get('/', (req, res) => {
      WHERE cm.user_id = ?`,
     req.user.id,
   ).map((c) => serializeConversation(c, req.user.id));
-  rows.sort((a, b) => (b.lastMessage?.createdAt || 0) - (a.lastMessage?.createdAt || 0));
+  // 置顶的排在最前面，两组内部照旧按最后消息时间倒序（见 compareConversations）。
+  rows.sort(compareConversations);
   res.json({ conversations: rows });
 });
 
 router.get('/:id', (req, res) => {
   const convo = requireMembership(req, res, req.params.id);
   if (!convo) return;
+  res.json({ conversation: serializeConversation(convo, req.user.id) });
+});
+
+/** 只允许改这两项，也只有这两项会被拼进 SET 子句（白名单，不接受任意列名）。 */
+const PREF_COLUMNS = ['pinned', 'muted'];
+
+/**
+ * 置顶 / 取消置顶、免打扰 / 取消免打扰。两项可以分开改也可以一起改。
+ *
+ * 写的是 conversation_members 里「我自己」那一行 —— WHERE 同时带上 conversation_id
+ * 和 req.user.id，所以任何情况下都只会动到自己的设置，别人的行原封不动。
+ * 免打扰在这里只是存一个标记，未读计数那条路径完全不看它（免打扰 ≠ 不计未读）。
+ */
+router.patch('/:id/prefs', (req, res) => {
+  const convo = requireMembership(req, res, req.params.id);
+  if (!convo) return;
+
+  const body = req.body || {};
+  const changing = PREF_COLUMNS.filter((key) => body[key] !== undefined);
+  if (!changing.length) return res.status(400).json({ error: '请指定 pinned 或 muted' });
+  if (changing.some((key) => typeof body[key] !== 'boolean')) {
+    return res.status(400).json({ error: 'pinned 与 muted 只能是 true 或 false' });
+  }
+
+  run(
+    `UPDATE conversation_members SET ${changing.map((key) => `${key} = ?`).join(', ')}
+     WHERE conversation_id = ? AND user_id = ?`,
+    ...changing.map((key) => (body[key] ? 1 : 0)), convo.id, req.user.id,
+  );
   res.json({ conversation: serializeConversation(convo, req.user.id) });
 });
 

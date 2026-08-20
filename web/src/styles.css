@@ -139,6 +139,8 @@ input, textarea { font-family: inherit; }
   gap: 1px; padding: 0 6px;
 }
 .badge__at { font-size: 9.5px; font-weight: 800; opacity: .9; }
+/* 免打扰：数字照显（免打扰不是不计未读），只是褪成中性色，不再往眼睛里跳。 */
+.badge--muted { background: var(--surface3); color: var(--muted); box-shadow: none; }
 
 .nav-btn__icon { position: relative; display: inline-flex; }
 .nav-btn__icon .badge {
@@ -236,13 +238,37 @@ input, textarea { font-family: inherit; }
 .convos__title { font-size: 15px; font-weight: 700; }
 .convos__search { padding: 0 14px 10px; }
 .convos__list { flex: 1; overflow-y: auto; padding: 0 8px 12px; display: flex; flex-direction: column; gap: 2px; }
+/* 会话行本身是个按钮，置顶/免打扰是另外两个按钮，按钮不能套按钮：
+   外层容器负责定位，操作区浮在会话行右下角。 */
+.convo-item { position: relative; display: flex; }
 .convo {
   text-align: left; border: none; background: transparent; border-radius: 11px; padding: 10px;
   cursor: pointer; display: flex; gap: 10px; align-items: flex-start; color: var(--text);
+  flex: 1; min-width: 0;
 }
 .convo:hover { background: var(--surface2); }
 .convo--on { background: var(--surface2); }
+/* 置顶的会话整块微微抬起来，扫一眼就能看出上面这几条是被钉住的。 */
+.convo-item--pinned .convo { background: var(--surface2); }
+.convo-item--pinned .convo--on { background: var(--surface3); }
 .convo__row { display: flex; align-items: center; gap: 6px; }
+/* 标题旁的置顶 / 免打扰记号，不悬浮也能看见 */
+.convo__flag { color: var(--faint); flex: none; }
+
+/* 操作区浮在会话行右下角。故意不做成 hover 才出现：手机上没有悬浮态，
+   藏起来就等于点不到。平时用最浅的一档颜色，悬浮/聚焦时加深。 */
+.convo__actions { position: absolute; right: 8px; bottom: 7px; display: flex; gap: 2px; }
+.convo__action {
+  border: none; background: transparent; color: var(--faint); cursor: pointer;
+  width: 20px; height: 20px; border-radius: 6px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.convo-item:hover .convo__action, .convo__action:focus-visible { color: var(--muted); }
+.convo__action:hover { background: var(--surface3); color: var(--text); }
+/* 已经开着的那一项用强调色，不悬浮也能看出「这个会话我设过」。 */
+.convo__action--on, .convo-item:hover .convo__action--on { color: var(--accent); }
+/* 给操作区让出位置，摘要不要从按钮底下穿过去。 */
+.convo-item .convo__preview { padding-right: 46px; }
 .convo__title { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .convo__time { margin-left: auto; font-size: 11px; color: var(--faint); flex: none; }
 .convo__preview {

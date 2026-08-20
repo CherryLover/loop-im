@@ -120,6 +120,13 @@ export const api = {
     }),
   leaveConversation: (id: string) =>
     request<{ ok: true }>(`/conversations/${id}/leave`, { method: 'POST' }),
+  // 置顶 / 免打扰：都是「我对这个会话」的个人设置，服务端只改 conversation_members 里
+  // 我自己那一行，别人看到的顺序和提醒方式不受影响。两项可分开改也可一起改。
+  updateConversationPrefs: (id: string, prefs: { pinned?: boolean; muted?: boolean }) =>
+    request<{ conversation: Conversation }>(`/conversations/${id}/prefs`, {
+      method: 'PATCH',
+      body: JSON.stringify(prefs),
+    }),
   aiContext: (id: string) => request<{ line: string }>(`/conversations/${id}/ai-context`),
   // 默认只取最新一页；翻历史时把上一页最早那条的 id 作为 before 传回来。
   messages: (id: string, opts: { before?: string; limit?: number; signal?: AbortSignal } = {}) => {
