@@ -129,6 +129,14 @@ test('移动端：长提示不越界，也不压住输入框与底部导航', as
 
   expect(overlaps(toastBox, await boxOf(page.locator('.composer'))), '提示不应压住输入栏').toBe(false);
   expect(overlaps(toastBox, await boxOf(page.locator('.tabbar'))), '提示不应压住底部导航').toBe(false);
+
+  // 输入行一旦被 textarea 的内在宽度撑开，「发送」就会被推出右边界。这条比下面的
+  // 命中断言更早触发，也直接指向原因，免得只报一句「中心点落在视口之外」。
+  const row = await page.locator('.composer__row').evaluate((el) => ({
+    scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
+  }));
+  expect(row.scrollWidth, '输入行不能横向溢出').toBeLessThanOrEqual(row.clientWidth);
+
   await expectNotCovered(page.locator('.composer__send'), '发送');
 });
 
