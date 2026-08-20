@@ -20,6 +20,7 @@ export const setToken = (token: string, remember = true) => {
 
 // 图片体积上限，和服务端 upload-middleware.js 保持一致。
 export const MAX_UPLOAD_MB = 8;
+export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 export const OVERSIZED_MESSAGE = `图片大小不能超过 ${MAX_UPLOAD_MB}MB`;
 
 export class ApiError extends Error {
@@ -30,9 +31,14 @@ export class ApiError extends Error {
   }
 }
 
-/** 上传前先在本地卡一道体积，超限就不必白跑一趟服务端。 */
+/**
+ * 上传前先在本地卡一道体积，超限就不必白跑一趟服务端。
+ * 严格大于：界面文案是「不超过 8MB」，正好 8MB 属于合法范围，要放行。
+ * 服务端 multer 的 limits.fileSize 因此写成 MAX_UPLOAD_BYTES + 1（busboy 是「不得达到」语义），
+ * 否则这一档会前端放行、服务端 413，白跑一趟——正是本地拦截要避免的。见 issue #15。
+ */
 function checkSize(file: File) {
-  if (file.size > MAX_UPLOAD_MB * 1024 * 1024) throw new ApiError(413, OVERSIZED_MESSAGE);
+  if (file.size > MAX_UPLOAD_BYTES) throw new ApiError(413, OVERSIZED_MESSAGE);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
