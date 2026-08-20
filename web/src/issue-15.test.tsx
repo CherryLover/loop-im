@@ -38,7 +38,7 @@ const image = (name: string, size: number) => {
   return file;
 };
 
-const OVERSIZED_TEXT = `图片大小不能超过 ${MAX_UPLOAD_MB}MB`;
+const OVERSIZED_TEXT = `文件大小不能超过 ${MAX_UPLOAD_MB}MB`;
 const fetchMock = vi.fn();
 
 beforeEach(() => {

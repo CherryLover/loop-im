@@ -4,6 +4,7 @@ import {
   authenticate, createSession, endSession, hashPassword, isOnline, publicUser, signToken,
   tokenDaysFor, touch, verifyPassword,
 } from '../auth.js';
+import { AVATAR_NOT_IMAGE, inspectUpload } from '../attachments.js';
 import { putObject } from '../storage.js';
 import { AI_NAME, providerOf, settings } from '../ai.js';
 import { upload } from '../upload-middleware.js';
@@ -84,9 +85,14 @@ router.patch('/me', authenticate, (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
+// 头像只走图片通道：它会被渲染成 <img>，必须是按真实字节确认过的图片（见 issue #22）。
 router.post('/me/avatar', authenticate, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: '请选择图片' });
-  const { url } = await putObject({ buffer: req.file.buffer, filename: req.file.originalname, mime: req.file.mimetype });
+  const verdict = inspectUpload(req.file.buffer, req.file.mimetype);
+  if (verdict.kind !== 'image') {
+    return res.status(400).json({ error: verdict.kind === 'rejected' ? verdict.error : AVATAR_NOT_IMAGE });
+  }
+  const { url } = await putObject({ buffer: req.file.buffer, ext: verdict.ext, mime: verdict.mime });
   run('UPDATE users SET avatar_url = ? WHERE id = ?', url, req.user.id);
   const user = get('SELECT * FROM users WHERE id = ?', req.user.id);
   emitAll('user-updated', { user: publicUser(user) });

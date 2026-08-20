@@ -28,9 +28,9 @@ const setup = (conversation: Conversation = group) => {
 };
 
 describe('输入框', () => {
-  it('提示文案说明支持 Markdown、粘贴图片和 @', () => {
+  it('提示文案说明支持 Markdown、粘贴图片、发文件和 @', () => {
     setup();
-    expect(screen.getByPlaceholderText(/支持 Markdown、粘贴图片、@ 提及成员或 AI/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/支持 Markdown、粘贴图片、发送文件、@ 提及成员或 AI/)).toBeInTheDocument();
   });
 
   it('Enter 发送，Shift+Enter 换行', async () => {

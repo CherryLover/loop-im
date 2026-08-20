@@ -4,14 +4,17 @@ import './helpers.js';
 // 结果这一档图片绕过本地拦截、白跑一趟服务端才失败——正是 #9 加本地拦截要省掉的那一趟。
 // 这里把边界的三个字节数钉死，避免以后有人把 upload-middleware.js 里的 +1 当成笔误删掉。
 import { startServer } from './helpers.js';
+import { pngOfSize } from './samples.js';
 import { MAX_UPLOAD_BYTES } from '../src/upload-middleware.js';
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 let api, token;
 
-// 只关心字节数，内容不必是合法 PNG：服务端在这一层只按 mimetype 和体积判断。
-const bytes = (size) => Buffer.alloc(size, 1);
+// 样本必须是**指定字节数的合法 PNG**：issue #22 之后服务端会按真实字节嗅探，
+// 原来那片 Buffer.alloc(size, 1) 不再是图片，撞到的会是格式判定而不是体积判定，
+// 这条边界用例就名存实亡了。pngOfSize 用一个 tEXt 填充块把尺寸凑到精确值。
+const bytes = (size) => pngOfSize(size);
 
 const post = (path, buffer) => {
   const form = new FormData();

@@ -1,6 +1,6 @@
 import type {
   AiOverview, AiProfileDetail, AiPublicInfo, AiSettings, Conversation, Message, MessagePage,
-  MessageSearchPage, User,
+  MessageSearchPage, UploadResult, User,
 } from './types';
 
 const TOKEN_KEY = 'loop-im-token';
@@ -19,10 +19,10 @@ export const setToken = (token: string, remember = true) => {
   (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
 };
 
-// 图片体积上限，和服务端 upload-middleware.js 保持一致。
+// 附件体积上限，和服务端 upload-middleware.js 保持一致（图片和普通文件共用同一档）。
 export const MAX_UPLOAD_MB = 8;
 export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
-export const OVERSIZED_MESSAGE = `图片大小不能超过 ${MAX_UPLOAD_MB}MB`;
+export const OVERSIZED_MESSAGE = `文件大小不能超过 ${MAX_UPLOAD_MB}MB`;
 
 export class ApiError extends Error {
   status: number;
@@ -147,11 +147,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(replyTo ? { body, replyTo } : { body }),
     }),
+  // 图片和普通文件走同一个入口，由服务端按真实字节判定 kind（image 可内联、file 只能下载）。
   upload: (file: File) => {
     checkSize(file);
     const form = new FormData();
     form.append('file', file);
-    return request<{ url: string; filename: string; storage: string }>('/uploads', { method: 'POST', body: form });
+    return request<UploadResult>('/uploads', { method: 'POST', body: form });
   },
 
   // 管理员重置成员密码：新密码只在这次响应里回来一次，界面显示完就没了。

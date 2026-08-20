@@ -65,6 +65,26 @@ input, textarea { font-family: inherit; }
 /* Mentions inside the sender's own (filled) bubble need to invert instead. */
 .bubble--me .mention { color: #fff; }
 
+/* 非图片附件：一张「文件卡片 + 下载」，永远不内联渲染（见 issue #22）。 */
+.md .filecard {
+  display: flex; align-items: center; gap: 8px; margin: 6px 0; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface2);
+  color: inherit; text-decoration: none; max-width: 280px;
+}
+.md .filecard::before {
+  content: ''; flex: none; width: 18px; height: 22px; border-radius: 3px;
+  background: var(--surface3); border: 1px solid var(--border2);
+}
+.md .filecard__name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+}
+.md .filecard__hint { flex: none; font-size: 10.5px; color: var(--muted); }
+.bubble--me .filecard { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .3); }
+.bubble--me .filecard__hint { color: rgba(255, 255, 255, .8); }
+/* 附件条上的文件图标（Composer 的待发送预览）。 */
+.attach__thumb--file { color: var(--muted); }
+
 /* ---------- Shared primitives ---------- */
 .app { height: 100%; display: flex; flex-direction: column; background: var(--surface); position: relative; }
 .app__body { flex: 1; display: flex; min-height: 0; }

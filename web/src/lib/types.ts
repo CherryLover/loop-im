@@ -87,6 +87,23 @@ export interface Conversation {
   mentionsUnread?: number;
 }
 
+/**
+ * 附件走的是哪条通道（服务端按真实字节判定，见 server/src/attachments.js）：
+ * image = PNG/JPEG/GIF/WebP，可以内联渲染成图片；
+ * file  = 其余任意文件，只能下载，永远不内联。
+ */
+export type AttachmentKind = 'image' | 'file';
+
+/** POST /api/uploads 的返回。kind/mime 是 issue #22 之后新增的，老服务端不带。 */
+export interface UploadResult {
+  url: string;
+  /** 原始文件名，只作为显示名；它不参与磁盘路径，也不出现在 url 里。 */
+  filename: string;
+  storage: string;
+  kind?: AttachmentKind;
+  mime?: string;
+}
+
 /** AI facts every signed-in member may see (the full settings are admin-only). */
 export interface AiPublicInfo {
   name: string;

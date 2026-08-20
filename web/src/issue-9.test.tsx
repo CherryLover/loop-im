@@ -53,7 +53,7 @@ describe('超过 8MB 的图片', () => {
     const { container } = composer();
     fireEvent.change(fileInput(container), { target: { files: [oversized()] } });
 
-    expect(await screen.findByText(`图片大小不能超过 ${MAX_UPLOAD_MB}MB`)).toBeInTheDocument();
+    expect(await screen.findByText(`文件大小不能超过 ${MAX_UPLOAD_MB}MB`)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -64,11 +64,11 @@ describe('超过 8MB 的图片', () => {
       clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }] },
     });
 
-    expect(await screen.findByText(`图片大小不能超过 ${MAX_UPLOAD_MB}MB`)).toBeInTheDocument();
+    expect(await screen.findByText(`文件大小不能超过 ${MAX_UPLOAD_MB}MB`)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
     // 附件条上仍然可以移除失败的附件，重新选一张。
     fireEvent.click(screen.getByTitle('移除附件'));
-    expect(screen.queryByText(`图片大小不能超过 ${MAX_UPLOAD_MB}MB`)).not.toBeInTheDocument();
+    expect(screen.queryByText(`文件大小不能超过 ${MAX_UPLOAD_MB}MB`)).not.toBeInTheDocument();
     expect(container.querySelector('.attach')).toBeNull();
   });
 
@@ -81,7 +81,7 @@ describe('超过 8MB 的图片', () => {
     );
     fireEvent.change(fileInput(container), { target: { files: [oversized()] } });
 
-    expect(await screen.findByText(`图片大小不能超过 ${MAX_UPLOAD_MB}MB`)).toBeInTheDocument();
+    expect(await screen.findByText(`文件大小不能超过 ${MAX_UPLOAD_MB}MB`)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -101,7 +101,8 @@ describe('超过 8MB 的图片', () => {
 describe('上限提示', () => {
   it('输入框和个人资料都写明了 8MB 上限', () => {
     composer();
-    expect(screen.getByTitle(`从本地选择图片（不超过 ${MAX_UPLOAD_MB}MB）`)).toBeInTheDocument();
+    // 入口在 issue #22 之后改成「任意文件」，上限文案不变。
+    expect(screen.getByTitle(`从本地选择文件（图片或任意文件，不超过 ${MAX_UPLOAD_MB}MB）`)).toBeInTheDocument();
 
     render(
       <ProfileModal
