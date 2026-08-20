@@ -17,6 +17,7 @@ const group: Conversation = {
   peerId: null,
   members: [member('u_lin', '林悦'), member('u_chen', '陈子航'), member('u_zhou', '周明'), member('ai', 'Aria', true)],
   lastMessage: null,
+  unread: 0,
 };
 
 const setup = (conversation: Conversation = group) => {

@@ -28,11 +28,18 @@ export interface Message {
   pending?: boolean;
 }
 
+/** 某人在某个会话里读到了哪一刻。 */
+export interface ReadState {
+  userId: string;
+  lastReadAt: number;
+}
+
 /** 一页消息。nextBefore 是下一页的游标（本页最早那条的 id），没有更早的就是 null。 */
 export interface MessagePage {
   messages: Message[];
   hasMore: boolean;
   nextBefore: string | null;
+  reads: ReadState[];
 }
 
 export type ConversationType = 'group' | 'dm' | 'ai';
@@ -44,6 +51,8 @@ export interface Conversation {
   peerId: string | null;
   members: GroupMember[];
   lastMessage: { preview: string; createdAt: number } | null;
+  /** 我在这个会话里的未读条数（不含自己发的）。 */
+  unread: number;
 }
 
 /** AI facts every signed-in member may see (the full settings are admin-only). */

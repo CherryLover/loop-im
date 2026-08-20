@@ -50,6 +50,16 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_convo ON messages(conversation_id, created_at);
 
+-- 每个人在每个会话读到哪里。未读计数与已读回执共用这一张表：
+-- 未读 = 该会话里比 last_read_at 更新、且不是自己发的消息条数。
+CREATE TABLE IF NOT EXISTS conversation_reads (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_read_at    INTEGER NOT NULL DEFAULT 0,
+  updated_at      INTEGER NOT NULL,
+  PRIMARY KEY (conversation_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS attachments (
   id         TEXT PRIMARY KEY,
   owner_id   TEXT NOT NULL REFERENCES users(id),

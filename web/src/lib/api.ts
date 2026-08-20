@@ -105,6 +105,12 @@ export const api = {
     const qs = q.toString();
     return request<MessagePage>(`/conversations/${id}/messages${qs ? `?${qs}` : ''}`);
   },
+  // 上报已读位置。省略 upTo 就按服务端的此刻算。
+  markRead: (id: string, upTo?: number) =>
+    request<{ conversationId: string; lastReadAt: number; unread: number }>(`/conversations/${id}/read`, {
+      method: 'POST',
+      body: JSON.stringify(upTo ? { upTo } : {}),
+    }),
   sendMessage: (id: string, body: string) =>
     request<{ message: Message }>(`/conversations/${id}/messages`, {
       method: 'POST',

@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Avatar, AiBadge } from './Avatar';
 import { renderMarkdown } from '../lib/md';
 import { clock, dayLabel } from '../lib/format';
-import type { Message } from '../lib/types';
+import type { Message, ReadState } from '../lib/types';
 
 interface MessageListProps {
   messages: Message[];
@@ -13,11 +13,26 @@ interface MessageListProps {
   hasOlder?: boolean;
   loadingOlder?: boolean;
   onLoadOlder?: () => void;
+  /** 会话里其他人的已读位置；据此把自己的气泡标成已读。 */
+  reads?: ReadState[];
+  /** 群聊显示「n 人已读」，私聊只显示「已读」。 */
+  showReaderCount?: boolean;
 }
 
 export function MessageList({
   messages, meId, showSenderName, aiProviderLabel, typing, hasOlder, loadingOlder, onLoadOlder,
+  reads = [], showReaderCount = false,
 }: MessageListProps) {
+  /**
+   * 自己那条消息的状态。有人的已读位置不早于这条消息的时间，就算被读过了。
+   * 没有任何人读过时仍然只说「已发送」—— 送达服务端不等于对方看过。
+   */
+  const statusOf = (m: Message) => {
+    if (m.pending) return '发送中…';
+    const readers = reads.filter((r) => r.lastReadAt >= m.createdAt).length;
+    if (!readers) return `${clock(m.createdAt)} · 已发送`;
+    return showReaderCount ? `${clock(m.createdAt)} · ${readers} 人已读` : `${clock(m.createdAt)} · 已读`;
+  };
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   // 加载历史前记下「距底部多远」，插入后按这个距离还原，视线不会被顶走。
@@ -85,8 +100,8 @@ export function MessageList({
                     className={`md bubble bubble--me${m.pending ? ' bubble--sending' : ''}`}
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(m.body) }}
                   />
-                  {/* 服务端收下消息只说明发送成功，对方是否看过没人统计过，别写「已读」。 */}
-                  <div className="msg__meta">{m.pending ? '发送中…' : `${clock(m.createdAt)} · 已发送`}</div>
+                  {/* 「已读」只依据对方真实上报的已读位置，不拿在线状态或送达去推断。 */}
+                  <div className="msg__meta">{statusOf(m)}</div>
                 </div>
               </div>
             ) : (

@@ -4,8 +4,8 @@ import { Avatar, AiBadge } from '../components/Avatar';
 import { MessageList } from '../components/MessageList';
 import { Composer } from '../components/Composer';
 import { api } from '../lib/api';
-import { listTime } from '../lib/format';
-import type { Conversation, Message, User } from '../lib/types';
+import { listTime, unreadLabel } from '../lib/format';
+import type { Conversation, Message, ReadState, User } from '../lib/types';
 
 interface ChatPageProps {
   me: User;
@@ -17,6 +17,7 @@ interface ChatPageProps {
   silentRead: boolean;
   canCreateGroup: boolean;
   showChatOnMobile: boolean;
+  reads: ReadState[];
   hasOlder: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
@@ -107,6 +108,9 @@ export function ChatPage(props: ChatPageProps) {
                     <div className="convo__title">{c.title}</div>
                     {isAI ? <AiBadge /> : null}
                     <span className="convo__time">{c.lastMessage ? listTime(c.lastMessage.createdAt) : ''}</span>
+                    {c.unread > 0 ? (
+                      <span className="badge" aria-label={`${c.unread} 条未读`}>{unreadLabel(c.unread)}</span>
+                    ) : null}
                   </div>
                   <div className="convo__preview">{c.lastMessage?.preview || '还没有消息'}</div>
                 </div>
@@ -148,6 +152,8 @@ export function ChatPage(props: ChatPageProps) {
               showSenderName={active.type === 'group'}
               aiProviderLabel={aiProviderLabel}
               typing={typing}
+              reads={props.reads}
+              showReaderCount={active.type === 'group'}
               hasOlder={props.hasOlder}
               loadingOlder={props.loadingOlder}
               onLoadOlder={props.onLoadOlder}

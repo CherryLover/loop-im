@@ -35,6 +35,7 @@ const group: Conversation = {
   peerId: null,
   members: [member('u_lin', '林悦'), member('u_chen', '陈子航'), member('ai', 'Aria', true)],
   lastMessage: null,
+  unread: 0,
 };
 
 // 建群成功后 AppShell 会走 selectConversation（选中会话 + 手机端展开详情），
@@ -47,6 +48,7 @@ const renderChat = (showChatOnMobile: boolean, onBack = vi.fn()) => {
       activeId={group.id}
       messages={[]}
       typing={false}
+      reads={[]}
       hasOlder={false}
       loadingOlder={false}
       onLoadOlder={vi.fn()}

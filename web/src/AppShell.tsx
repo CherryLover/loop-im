@@ -10,10 +10,11 @@ import { AddContactModal } from './modals/AddContactModal';
 import { ProfileModal } from './modals/ProfileModal';
 import { api } from './lib/api';
 import { initialOf } from './lib/md';
+import { unreadLabel } from './lib/format';
 import { mergeMessage } from './lib/messages';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
-import type { AiPublicInfo, Conversation, Message, User } from './lib/types';
+import type { AiPublicInfo, Conversation, Message, ReadState, User } from './lib/types';
 
 type Tab = 'chat' | 'contacts' | 'ai';
 
@@ -42,6 +43,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   // 每个会话的历史翻页状态：下一页游标、还有没有更早的、是否正在加载。
   const [older, setOlder] = useState<Record<string, OlderState>>({});
+  // 每个会话里其他人的已读位置，用来把自己的气泡标成「已读」。
+  const [reads, setReads] = useState<Record<string, ReadState[]>>({});
   const [typing, setTyping] = useState<Record<string, boolean>>({});
   // 手机端「会话列表 / 会话详情」的开合状态放在这里，切换底部 tab 时不会被重置。
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
@@ -51,6 +54,11 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   // loadOlder 要读最新的翻页状态又不想因此重建回调，用 ref 镜像一份。
   const olderRef = useRef<Record<string, OlderState>>({});
   olderRef.current = older;
+  // 上次上报已读的时间，用来节流。
+  const markedRef = useRef<Record<string, number>>({});
+  // SSE 回调里要判断「消息是不是发到当前正开着的会话」，用 ref 拿最新值。
+  const activeIdRef = useRef<string | null>(null);
+  activeIdRef.current = activeId;
 
   const isAdmin = me.role === 'admin';
 
@@ -92,6 +100,24 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     const page = await api.messages(conversationId);
     setMessages((m) => ({ ...m, [conversationId]: page.messages }));
     setOlder((o) => ({ ...o, [conversationId]: { cursor: page.nextBefore, hasMore: page.hasMore, loading: false } }));
+    setReads((r) => ({ ...r, [conversationId]: page.reads }));
+  }, []);
+
+  /**
+   * 上报已读。会话打开、窗口重新聚焦、以及在当前会话里收到新消息时都会调用，
+   * 所以这里挡一道：同一会话 1 秒内不重复上报，未读本来就是 0 时也不上报。
+   */
+  const markRead = useCallback(async (conversationId: string) => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    const last = markedRef.current[conversationId] || 0;
+    if (Date.now() - last < 1000) return;
+    markedRef.current[conversationId] = Date.now();
+    try {
+      await api.markRead(conversationId);
+      setConversations((list) => list.map((c) => (c.id === conversationId ? { ...c, unread: 0 } : c)));
+    } catch {
+      markedRef.current[conversationId] = 0;   // 失败就允许下次重试
+    }
   }, []);
 
   /** 往前翻一页历史，接在当前列表前面。重复点击靠 loading 挡住。 */
@@ -114,6 +140,24 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     void loadMessages(activeId);
   }, [activeId, loadMessages]);
 
+  // 打开会话即视为读到此刻。
+  useEffect(() => {
+    if (activeId) void markRead(activeId);
+  }, [activeId, markRead]);
+
+  // 从别的标签页/窗口切回来时补一次：期间收到的消息此刻才真正被看到。
+  useEffect(() => {
+    const onFocus = () => {
+      if (!document.hidden && activeIdRef.current) void markRead(activeIdRef.current);
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [markRead]);
+
   const appendMessage = useCallback((message: Message) => {
     setMessages((all) => ({
       ...all,
@@ -125,11 +169,24 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     onMessage: (message) => {
       appendMessage(message);
       void refreshConversations();
+      // 正开着这个会话就直接标已读，别让未读徽标闪一下再消失。
+      if (message.conversationId === activeIdRef.current && message.senderId !== me.id) {
+        void markRead(message.conversationId);
+      }
     },
     onTyping: (conversationId, isTyping) => setTyping((t) => ({ ...t, [conversationId]: isTyping })),
     onConversationCreated: () => void refreshConversations(),
     onUserChanged: () => void refreshUsers(),
     onPresence: () => void refreshUsers(),
+    onRead: (conversationId, userId, lastReadAt) => {
+      setReads((all) => {
+        const list = all[conversationId] || [];
+        const next = list.some((r) => r.userId === userId)
+          ? list.map((r) => (r.userId === userId ? { ...r, lastReadAt } : r))
+          : [...list, { userId, lastReadAt }];
+        return { ...all, [conversationId]: next };
+      });
+    },
   });
 
   const send = useCallback(async (body: string) => {
@@ -193,6 +250,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   }, [isAdmin]);
 
   const activeMessages = activeId ? messages[activeId] || [] : [];
+  const activeReads = activeId ? reads[activeId] || [] : [];
+  const totalUnread = conversations.reduce((n, c) => n + (c.unread || 0), 0);
 
   return (
     <div className="app">
@@ -212,7 +271,12 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
                 aria-current={tab === item.key}
                 onClick={() => setTab(item.key)}
               >
-                <Icon size={16} />
+                <span className="nav-btn__icon">
+                  <Icon size={16} />
+                  {item.key === 'chat' && totalUnread > 0 ? (
+                    <span className="badge" aria-label={`${totalUnread} 条未读`}>{unreadLabel(totalUnread)}</span>
+                  ) : null}
+                </span>
                 {item.short}
               </button>
             );
@@ -234,6 +298,7 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             silentRead={ai.silentRead}
             canCreateGroup={isAdmin}
             showChatOnMobile={mobileChatOpen}
+            reads={activeReads}
             hasOlder={activeId ? !!older[activeId]?.hasMore : false}
             loadingOlder={activeId ? !!older[activeId]?.loading : false}
             onLoadOlder={() => { if (activeId) void loadOlder(activeId); }}
@@ -268,7 +333,12 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
               className={`tab${tab === item.key ? ' tab--on' : ''}`}
               onClick={() => setTab(item.key)}
             >
-              <Icon size={16} />
+              <span className="nav-btn__icon">
+                <Icon size={16} />
+                {item.key === 'chat' && totalUnread > 0 ? (
+                  <span className="badge" aria-label={`${totalUnread} 条未读`}>{unreadLabel(totalUnread)}</span>
+                ) : null}
+              </span>
               {item.label}
             </button>
           );

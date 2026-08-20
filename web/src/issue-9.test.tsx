@@ -20,6 +20,7 @@ const group: Conversation = {
   peerId: null,
   members: [member('u_lin', '林悦'), member('u_chen', '陈子航'), member('ai', 'Aria', true)],
   lastMessage: null,
+  unread: 0,
 };
 
 const me: User = member('u_lin', '林悦');

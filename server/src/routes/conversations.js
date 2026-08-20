@@ -26,6 +26,30 @@ function requireMembership(req, res, id) {
   return convo;
 }
 
+// ---- 已读位置 ----------------------------------------------------------
+// 未读计数和已读回执共用 conversation_reads：一个人在一个会话里读到哪一刻。
+
+const lastReadAt = (conversationId, userId) =>
+  get('SELECT last_read_at FROM conversation_reads WHERE conversation_id = ? AND user_id = ?',
+    conversationId, userId)?.last_read_at || 0;
+
+/** 未读 = 比我的已读位置更新、且不是我自己发的消息。 */
+const unreadCount = (conversationId, userId) => get(
+  'SELECT count(*) AS n FROM messages WHERE conversation_id = ? AND sender_id != ? AND created_at > ?',
+  conversationId, userId, lastReadAt(conversationId, userId),
+).n;
+
+/**
+ * 会话里其他人的已读位置。一次性给出来，前端自己算每条消息被谁读过，
+ * 避免为每条消息都查一次库。AI 不参与已读统计。
+ */
+const readsOf = (conversationId, viewerId) => all(
+  `SELECT r.user_id, r.last_read_at FROM conversation_reads r
+   JOIN users u ON u.id = r.user_id
+   WHERE r.conversation_id = ? AND r.user_id != ? AND u.role != 'ai'`,
+  conversationId, viewerId,
+).map((r) => ({ userId: r.user_id, lastReadAt: r.last_read_at }));
+
 const previewOf = (body) =>
   body.replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]').replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 26);
 
@@ -63,6 +87,7 @@ function serializeConversation(convo, viewerId) {
     lastMessage: last
       ? { preview: `${last.sender_id === viewerId ? '我：' : ''}${previewOf(last.body)}`, createdAt: last.created_at }
       : null,
+    unread: unreadCount(convo.id, viewerId),
   };
 }
 
@@ -187,7 +212,35 @@ router.get('/:id/messages', (req, res) => {
     messages: page.map((r) => serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url })),
     hasMore,
     nextBefore: hasMore && page.length ? page[0].id : null,          // 下一页从本页最早那条往前翻
+    reads: readsOf(convo.id, req.user.id),                          // 谁读到了哪一刻，前端据此标已读
   });
+});
+
+/**
+ * 上报已读位置。upTo 省略时按此刻算；只允许前进，也不允许超过当前时间
+ * （否则客户端传一个很大的值就能把以后收到的消息也预先标成已读）。
+ */
+router.post('/:id/read', (req, res) => {
+  const convo = requireMembership(req, res, req.params.id);
+  if (!convo) return;
+
+  const ts = now();
+  const asked = Number(req.body?.upTo);
+  const upTo = Math.min(Number.isFinite(asked) && asked > 0 ? asked : ts, ts);
+  const current = lastReadAt(convo.id, req.user.id);
+  const next = Math.max(current, upTo);
+
+  run(
+    `INSERT INTO conversation_reads (conversation_id, user_id, last_read_at, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(conversation_id, user_id)
+     DO UPDATE SET last_read_at = excluded.last_read_at, updated_at = excluded.updated_at`,
+    convo.id, req.user.id, next, ts,
+  );
+  // 位置没变就不用惊动别人，省掉一轮无意义的广播。
+  if (next !== current) {
+    emitTo(memberIds(convo.id), 'read', { conversationId: convo.id, userId: req.user.id, lastReadAt: next });
+  }
+  res.json({ conversationId: convo.id, lastReadAt: next, unread: unreadCount(convo.id, req.user.id) });
 });
 
 router.post('/:id/messages', async (req, res) => {
