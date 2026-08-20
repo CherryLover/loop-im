@@ -33,11 +33,42 @@ const lastReadAt = (conversationId, userId) =>
   get('SELECT last_read_at FROM conversation_reads WHERE conversation_id = ? AND user_id = ?',
     conversationId, userId)?.last_read_at || 0;
 
+/**
+ * messages.mentions 存的是 JSON 数组文本（如 `["u_1","all"]`），要在 SQL 里判断
+ * 「有没有我」只能做文本匹配。裸着 LIKE '%id%' 会踩 id 互为前缀的坑：u_1 会命中
+ * ["u_12"]。所以连着两侧的引号一起匹配 —— `"u_1"` 这个模式在 `["u_12"]` 里不存在，
+ * 引号就是明确的分隔符（id 由 uid() 生成，不含引号和反斜杠，JSON 里不会被转义）。
+ *
+ * 另一半坑在 LIKE 自己身上：id 里的 `_` 是 LIKE 的单字符通配符，不转义的话
+ * `"u_1"` 会匹配到 `"uX1"`。统一给 `\ % _` 加转义前缀，查询侧配 ESCAPE '\'。
+ */
+export const mentionLike = (value) => `%"${String(value).replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`;
+
+/**
+ * 一次扫描同时给出两个数：
+ * - unread：比我的已读位置更新、且不是我自己发的消息；
+ * - mentions：上面这些未读里，`mentions` 含我的 id 或 'all'（@全员）的条数。
+ * 「不是我自己发的」这一条同时管住了「自己 @全员 不算自己被 @」。
+ *
+ * 会话列表每次刷新都会调，所以计数留在 SQL 里做，绝不把消息捞出来在 JS 里过滤。
+ */
+const unreadSummary = (conversationId, userId) => {
+  const row = get(
+    `SELECT count(*) AS unread,
+            coalesce(sum(CASE WHEN mentions LIKE ? ESCAPE '\\' OR mentions LIKE ? ESCAPE '\\'
+                              THEN 1 ELSE 0 END), 0) AS mentions
+     FROM messages WHERE conversation_id = ? AND sender_id != ? AND created_at > ?`,
+    mentionLike(userId), mentionLike('all'),
+    conversationId, userId, lastReadAt(conversationId, userId),
+  );
+  return { unread: row.unread, mentions: Number(row.mentions) };
+};
+
 /** 未读 = 比我的已读位置更新、且不是我自己发的消息。 */
-const unreadCount = (conversationId, userId) => get(
-  'SELECT count(*) AS n FROM messages WHERE conversation_id = ? AND sender_id != ? AND created_at > ?',
-  conversationId, userId, lastReadAt(conversationId, userId),
-).n;
+const unreadCount = (conversationId, userId) => unreadSummary(conversationId, userId).unread;
+
+/** 未读里「有人 @ 我」的条数（含 @全员）。导出供测试直接验证 SQL 判定口径。 */
+export const mentionUnreadCount = (conversationId, userId) => unreadSummary(conversationId, userId).mentions;
 
 /**
  * 会话里其他人的已读位置。一次性给出来，前端自己算每条消息被谁读过，
@@ -98,6 +129,7 @@ function serializeConversation(convo, viewerId) {
     return rank(a) - rank(b) || a.joined_at - b.joined_at;
   });
   const peer = convo.type !== 'group' ? members.find((m) => m.id !== viewerId) : null;
+  const counts = unreadSummary(convo.id, viewerId);
   const last = get(
     'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
     convo.id,
@@ -112,7 +144,8 @@ function serializeConversation(convo, viewerId) {
     lastMessage: last
       ? { preview: `${last.sender_id === viewerId ? '我：' : ''}${previewOf(last.body)}`, createdAt: last.created_at }
       : null,
-    unread: unreadCount(convo.id, viewerId),
+    unread: counts.unread,
+    mentionsUnread: counts.mentions,      // 未读里「有人 @ 我」的条数，前端据此高亮
   };
 }
 
