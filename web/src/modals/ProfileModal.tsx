@@ -111,8 +111,10 @@ export function ProfileModal({
       </div>
 
       <div className="modal__section">
-        <div className="appearance">
-          <span className="appearance__label">桌面通知</span>
+        {/* 布局和「外观」那一行一样，但类名要分开：桌面通知不是外观设置，
+            而且 .appearance 下只该有主题那一个按钮（e2e 靠它定位）。 */}
+        <div className="setting-row">
+          <span className="setting-row__label">桌面通知</span>
           <button
             type="button"
             className="btn btn--sm"

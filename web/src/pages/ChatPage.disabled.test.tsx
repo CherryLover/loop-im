@@ -81,6 +81,8 @@ const view = (conversations: Conversation[], activeId: string, messages: Message
       onRemoveMember={vi.fn()}
       onRenameGroup={vi.fn()}
       onLeaveGroup={vi.fn()}
+      onTogglePin={vi.fn()}
+      onToggleMute={vi.fn()}
     />,
   );
 };
