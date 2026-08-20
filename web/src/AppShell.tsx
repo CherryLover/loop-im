@@ -9,15 +9,31 @@ import { CreateGroupModal } from './modals/CreateGroupModal';
 import { AddContactModal } from './modals/AddContactModal';
 import { ProfileModal } from './modals/ProfileModal';
 import { ManageGroupModal, type ManageMode } from './modals/ManageGroupModal';
-import { api } from './lib/api';
+import { ApiError, api } from './lib/api';
 import { initialOf } from './lib/md';
 import { unreadAriaLabel, unreadBadgeClass, unreadLabel } from './lib/format';
-import { mergeMessage } from './lib/messages';
+import { mergeMessage, replyTargetOf } from './lib/messages';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
 import type { AiPublicInfo, Conversation, Message, ReadState, User } from './lib/types';
 
 type Tab = 'chat' | 'contacts' | 'ai';
+
+// 与 styles.css 里 `@media (max-width: 720px)` 的断点一致：手机布局下会话列表和聊天详情
+// 是前后两屏（.chat--hidden），桌面布局下两者并排常驻。判断「详情露出来没有」得先知道是哪一种。
+const MOBILE_QUERY = '(max-width: 720px)';
+const MOBILE_MAX_WIDTH = 720;
+
+function isMobileViewport() {
+  if (typeof window === 'undefined') return false;
+  if (typeof window.matchMedia === 'function') return window.matchMedia(MOBILE_QUERY).matches;
+  return window.innerWidth > 0 && window.innerWidth <= MOBILE_MAX_WIDTH;
+}
+
+/** 请求被主动取消（退出登录、组件卸载）不是错误，是预期内的结束。 */
+function isAbortError(err: unknown) {
+  return !!err && typeof err === 'object' && (err as { name?: string }).name === 'AbortError';
+}
 
 interface OlderState {
   cursor: string | null;
@@ -53,44 +69,128 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   // 群管理弹窗：加人 / 改群名 / 退群，三者共用一个组件。
   const [manage, setManage] = useState<{ mode: ManageMode; conversationId: string } | null>(null);
   const [toast, setToast] = useState(justSignedIn ? '已上线 · 与服务器保持连接' : '');
+  // 浏览器标签页可不可见。存成状态而不是每次现读 document.hidden：可见性一变，
+  // 「详情是不是在眼前」要跟着重算，切回来时才能补报已读。
+  const [pageVisible, setPageVisible] = useState(() => typeof document === 'undefined' || !document.hidden);
+  const [mobileLayout, setMobileLayout] = useState(isMobileViewport);
+  // 已经开始退出登录：实时连接、心跳和后台刷新都要立刻停手（issue #21）。
+  const [signingOut, setSigningOut] = useState(false);
   const loaded = useRef<Set<string>>(new Set());
   // loadOlder 要读最新的翻页状态又不想因此重建回调，用 ref 镜像一份。
   const olderRef = useRef<Record<string, OlderState>>({});
   olderRef.current = older;
-  // 上次上报已读的时间，用来节流。
-  const markedRef = useRef<Record<string, number>>({});
+  // 上次上报的已读位置：{ 上报时刻, 报到哪条消息 }。用来节流，也用来避免重复上报同一位置。
+  const markedRef = useRef<Record<string, { at: number; upTo: number }>>({});
   // SSE 回调里要判断「消息是不是发到当前正开着的会话」，用 ref 拿最新值。
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
+  // send 里要就地查出被引用的那条消息来拼乐观气泡的引用块，同样用 ref，免得进 deps。
+  const messagesRef = useRef<Record<string, Message[]>>({});
+  messagesRef.current = messages;
+  const signingOutRef = useRef(false);
+  // 退出或卸载时要把在途的列表 / 消息请求一起取消：它们的凭据马上就作废了。
+  const abortRef = useRef<AbortController | null>(null);
 
   const isAdmin = me.role === 'admin';
 
+  /**
+   * 「聊天详情真的在用户眼前」——所有已读上报共用这一个判据（issue #20）。
+   * 选中了某个会话不等于用户正看着它：切到联系人 / AI 管理页、手机端从详情退回会话列表、
+   * 浏览器标签页切走，详情都不在眼前，这期间收到的新消息不能算已读。
+   */
+  const desktopDetailShown = !mobileLayout && activeId !== null;      // 桌面布局：详情与列表并排常驻
+  const mobileDetailShown = mobileLayout && mobileChatOpen && activeId !== null;
+  const chatDetailVisible = tab === 'chat' && pageVisible && (desktopDetailShown || mobileDetailShown);
+  const chatDetailVisibleRef = useRef(false);
+  chatDetailVisibleRef.current = chatDetailVisible;
+
+  /**
+   * 当前会话里「别人发的、此刻确实渲染出来了的」最后一条消息的时间——已读只能报到这里。
+   * null 表示这个会话的消息还没加载出来，此时报已读等于闭着眼睛报，先不报。
+   * 自己发的消息不算「读到了什么」，不参与计算，也就不会因为自己发言而触发上报。
+   */
+  const readTarget = useMemo(() => {
+    const list = activeId ? messages[activeId] : undefined;
+    if (!list) return null;
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i].senderId !== me.id) return list[i].createdAt;
+    }
+    return 0;                                   // 加载过了，但没有别人发的消息
+  }, [activeId, messages, me.id]);
+  const readTargetRef = useRef<number | null>(null);
+  readTargetRef.current = readTarget;
+
+  /** 列表 / 消息请求共用的取消信号；退出或卸载时一次性掐掉。 */
+  const abortSignal = useCallback(() => {
+    if (!abortRef.current) abortRef.current = new AbortController();
+    return abortRef.current.signal;
+  }, []);
+
+  const abortInFlight = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;                    // 置空：StrictMode 会挂载两次，下次要用时再开一张新的
+  }, []);
+
+  useEffect(() => abortInFlight, [abortInFlight]);
+
+  /**
+   * 「发出去就不等结果」的请求统一在这里收尾（issue #21）：
+   * - 取消掉的：主动退出或组件卸载导致的，预期内，安静收场；
+   * - 401：凭据已经不作数了，api 层已经清掉本地登录态并把用户送回登录页，
+   *   这里只需把这个 rejection 正常消费掉，不再让它冒成没人接的页面错误；
+   * - 其余失败：仍然要留下痕迹，别让后台刷新静默失效。
+   */
+  const background = useCallback((task: Promise<unknown>, what: string) => {
+    void task.catch((err: unknown) => {
+      if (isAbortError(err)) return;
+      if (err instanceof ApiError && err.status === 401) return;
+      console.warn(`[loop-im] ${what}失败`, err);
+    });
+  }, []);
+
   const refreshConversations = useCallback(async () => {
-    const { conversations: list } = await api.conversations();
+    if (signingOutRef.current) return;
+    const { conversations: list } = await api.conversations({ signal: abortSignal() });
     setConversations(list);
     setActiveId((current) => current ?? list[0]?.id ?? null);
-  }, []);
+  }, [abortSignal]);
 
   const refreshUsers = useCallback(async () => {
-    const { users: list } = await api.users();
+    if (signingOutRef.current) return;
+    const { users: list } = await api.users({ signal: abortSignal() });
     setUsers(list);
-  }, []);
+  }, [abortSignal]);
 
   const refreshAiInfo = useCallback(async () => {
+    if (signingOutRef.current) return;
     const { ai: info } = await api.me();
     setAi(info);
   }, []);
 
   useEffect(() => {
-    void refreshConversations();
-    void refreshUsers();
-  }, [refreshConversations, refreshUsers]);
+    background(refreshConversations(), '刷新会话列表');
+    background(refreshUsers(), '刷新联系人');
+  }, [refreshConversations, refreshUsers, background]);
 
   // Heartbeat keeps this client "在线" and refreshes everyone else's presence.
   useEffect(() => {
-    const tick = () => api.ping().then((r) => setUsers(r.users)).catch(() => {});
+    if (signingOut) return;
+    const tick = () => background(api.ping().then((r) => setUsers(r.users)), '心跳');
     const timer = window.setInterval(tick, 45_000);
     return () => window.clearInterval(timer);
+  }, [signingOut, background]);
+
+  // 视口在断点两侧变化时重算布局：桌面转手机后，详情是不是还露着会跟着变。
+  useEffect(() => {
+    const sync = () => setMobileLayout(isMobileViewport());
+    sync();
+    const mq = typeof window.matchMedia === 'function' ? window.matchMedia(MOBILE_QUERY) : null;
+    if (mq && typeof mq.addEventListener === 'function') mq.addEventListener('change', sync);
+    window.addEventListener('resize', sync);
+    return () => {
+      if (mq && typeof mq.removeEventListener === 'function') mq.removeEventListener('change', sync);
+      window.removeEventListener('resize', sync);
+    };
   }, []);
 
   useEffect(() => {
@@ -100,27 +200,35 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   }, [toast]);
 
   const loadMessages = useCallback(async (conversationId: string) => {
-    const page = await api.messages(conversationId);
+    const page = await api.messages(conversationId, { signal: abortSignal() });
     setMessages((m) => ({ ...m, [conversationId]: page.messages }));
     setOlder((o) => ({ ...o, [conversationId]: { cursor: page.nextBefore, hasMore: page.hasMore, loading: false } }));
     setReads((r) => ({ ...r, [conversationId]: page.reads }));
-  }, []);
+  }, [abortSignal]);
 
   /**
-   * 上报已读。会话打开、窗口重新聚焦、以及在当前会话里收到新消息时都会调用，
-   * 所以这里挡一道：同一会话 1 秒内不重复上报，未读本来就是 0 时也不上报。
+   * 上报已读。打开会话、回到详情、窗口重新可见、详情里渲染出别人的新消息，都调这一个。
+   * 判据只有 chatDetailVisibleRef 一个（见上），此外再挡两道：
+   * 同一位置 1 秒内不重复上报；消息还没渲染出来时不报，等这一轮渲染完 effect 会补上。
    */
   const markRead = useCallback(async (conversationId: string) => {
-    if (typeof document !== 'undefined' && document.hidden) return;
-    const last = markedRef.current[conversationId] || 0;
-    if (Date.now() - last < 1000) return;
-    markedRef.current[conversationId] = Date.now();
+    if (!chatDetailVisibleRef.current || signingOutRef.current) return;
+    if (conversationId !== activeIdRef.current) return;
+    const upTo = readTargetRef.current;
+    if (upTo === null) return;
+    const last = markedRef.current[conversationId];
+    if (last && upTo <= last.upTo && Date.now() - last.at < 1000) return;
+    markedRef.current[conversationId] = { at: Date.now(), upTo };
     try {
-      await api.markRead(conversationId);
+      // 报到「此刻真的渲染出来的最后一条」，别顺手把还没进列表的新消息也标成已读。
+      await api.markRead(conversationId, upTo || undefined);
       // 未读清零的同时也清掉「@ 我」那一档，否则高亮徽标会一直挂在读过的会话上。
       setConversations((list) => list.map((c) => (c.id === conversationId ? { ...c, unread: 0, mentionsUnread: 0 } : c)));
-    } catch {
-      markedRef.current[conversationId] = 0;   // 失败就允许下次重试
+    } catch (err) {
+      delete markedRef.current[conversationId];   // 失败就允许下次重试
+      if (!isAbortError(err) && !(err instanceof ApiError && err.status === 401)) {
+        console.warn('[loop-im] 上报已读失败', err);
+      }
     }
   }, []);
 
@@ -130,28 +238,36 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     if (!state?.hasMore || state.loading || !state.cursor) return;
     setOlder((o) => ({ ...o, [conversationId]: { ...state, loading: true } }));
     try {
-      const page = await api.messages(conversationId, { before: state.cursor });
+      const page = await api.messages(conversationId, { before: state.cursor, signal: abortSignal() });
       setMessages((all) => ({ ...all, [conversationId]: [...page.messages, ...(all[conversationId] || [])] }));
       setOlder((o) => ({ ...o, [conversationId]: { cursor: page.nextBefore, hasMore: page.hasMore, loading: false } }));
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) return;             // 已经在退出/卸载了，不用再恢复按钮
       setOlder((o) => ({ ...o, [conversationId]: { ...state, loading: false } }));
     }
-  }, []);
+  }, [abortSignal]);
 
   useEffect(() => {
     if (!activeId || loaded.current.has(activeId)) return;
-    loaded.current.add(activeId);
-    void loadMessages(activeId);
-  }, [activeId, loadMessages]);
+    const id = activeId;
+    loaded.current.add(id);
+    background(loadMessages(id).catch((err) => {
+      loaded.current.delete(id);                 // 取消或失败都允许下次重新加载
+      throw err;
+    }), '加载消息');
+  }, [activeId, loadMessages, background]);
 
-  // 打开会话即视为读到此刻。
+  // 已读上报的唯一入口：详情真的在眼前时报一次。打开会话、从联系人 / AI 页或手机会话列表
+  // 回到详情、标签页重新可见、详情里渲染出别人的新消息，都会让这里重跑一遍。
   useEffect(() => {
-    if (activeId) void markRead(activeId);
-  }, [activeId, markRead]);
+    if (!chatDetailVisible || !activeId) return;
+    void markRead(activeId);
+  }, [chatDetailVisible, activeId, readTarget, markRead]);
 
   // 从别的标签页/窗口切回来时补一次：期间收到的消息此刻才真正被看到。
   useEffect(() => {
     const onFocus = () => {
+      setPageVisible(!document.hidden);
       if (!document.hidden && activeIdRef.current) void markRead(activeIdRef.current);
     };
     window.addEventListener('focus', onFocus);
@@ -169,19 +285,19 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     }));
   }, []);
 
-  useStream(true, {
+  // 退出一开始就断开实时连接：等待退出接口返回的这段时间里，再进来的事件只会引出
+  // 一串注定 401 的请求（issue #21）。
+  useStream(!signingOut, {
     onMessage: (message) => {
       appendMessage(message);
-      void refreshConversations();
-      // 正开着这个会话就直接标已读，别让未读徽标闪一下再消失。
-      if (message.conversationId === activeIdRef.current && message.senderId !== me.id) {
-        void markRead(message.conversationId);
-      }
+      background(refreshConversations(), '刷新会话列表');
+      // 已读不在这里报：消息进了列表、而且详情确实在眼前时，上面那个 effect 会报。
+      // 只按会话 id 判断的话，人在联系人页 / AI 页 / 手机会话列表也会被标成已读（issue #20）。
     },
     onTyping: (conversationId, isTyping) => setTyping((t) => ({ ...t, [conversationId]: isTyping })),
-    onConversationCreated: () => void refreshConversations(),
-    onUserChanged: () => void refreshUsers(),
-    onPresence: () => void refreshUsers(),
+    onConversationCreated: () => background(refreshConversations(), '刷新会话列表'),
+    onUserChanged: () => background(refreshUsers(), '刷新联系人'),
+    onPresence: () => background(refreshUsers(), '刷新联系人'),
     onRead: (conversationId, userId, lastReadAt) => {
       setReads((all) => {
         const list = all[conversationId] || [];
@@ -193,9 +309,14 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     },
   });
 
-  const send = useCallback(async (body: string) => {
+  const send = useCallback(async (body: string, replyTo?: string | null) => {
     const conversationId = activeId;
     if (!conversationId) return;
+    // 乐观气泡也要带上引用块，否则从回车到服务端确认之间引用会先消失再冒出来。
+    // 摘要就地从已加载的消息里取；取不到（原消息还没翻页出来）就先不显示，
+    // 服务端确认的那条消息会带着权威摘要把它替换掉。
+    const quoted = replyTo ? (messagesRef.current[conversationId] || []).find((m) => m.id === replyTo) : undefined;
+    const quotedTarget = quoted ? replyTargetOf(quoted) : null;
     const temp: Message = {
       id: `tmp_${Date.now()}`,
       conversationId,
@@ -207,15 +328,22 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
       createdAt: Date.now(),
       isAI: false,
       pending: true,
+      replyTo: replyTo ?? null,
+      quote: quotedTarget
+        ? { senderName: quotedTarget.senderName, preview: quotedTarget.preview, available: true }
+        : null,
     };
     setMessages((all) => ({ ...all, [conversationId]: [...(all[conversationId] || []), temp] }));
     try {
-      const { message } = await api.sendMessage(conversationId, body);
+      // 不引用时不带第三个参数，请求形态和以前一致。
+      const { message } = replyTo
+        ? await api.sendMessage(conversationId, body, replyTo)
+        : await api.sendMessage(conversationId, body);
       setMessages((all) => ({
         ...all,
         [conversationId]: mergeMessage((all[conversationId] || []).filter((m) => m.id !== temp.id), message),
       }));
-      void refreshConversations();
+      background(refreshConversations(), '刷新会话列表');
     } catch (err) {
       setMessages((all) => ({
         ...all,
@@ -225,7 +353,15 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
       // 抛回给 Composer：它据此把用户打的字还原到输入框，不能在这里吞掉。
       throw err;
     }
-  }, [activeId, me, refreshConversations]);
+  }, [activeId, me, refreshConversations, background]);
+
+  /** 主动退出：先掐掉实时连接、心跳和在途请求，再交给上层清登录态（issue #21）。 */
+  const handleSignOut = useCallback(() => {
+    signingOutRef.current = true;
+    setSigningOut(true);
+    abortInFlight();
+    onSignOut();
+  }, [abortInFlight, onSignOut]);
 
   /** 移除成员：可逆操作（还能再加回来），所以不额外弹确认，用提示条回执。 */
   const removeMember = useCallback(async (conversationId: string, userId: string, name: string) => {
@@ -393,7 +529,7 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             conversation={target}
             users={users}
             onClose={() => setManage(null)}
-            onDone={(message, left) => void onManageDone(message, left)}
+            onDone={(message, left) => background(onManageDone(message, left), '刷新会话列表')}
           />
         ) : null;
       })() : null}
@@ -403,19 +539,20 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
           users={users}
           meId={me.id}
           onClose={() => setModal(null)}
-          onCreated={async (id) => {
+          onCreated={(id) => {
             setModal(null);
-            await refreshConversations();
-            loaded.current.delete(id);
-            // 建群后直接进入新群：手机端也要跟着从会话列表切到聊天详情。
-            selectConversation(id);
-            setTab('chat');
+            background(refreshConversations().then(() => {
+              loaded.current.delete(id);
+              // 建群后直接进入新群：手机端也要跟着从会话列表切到聊天详情。
+              selectConversation(id);
+              setTab('chat');
+            }), '刷新会话列表');
           }}
         />
       ) : null}
 
       {modal === 'contact' ? (
-        <AddContactModal onClose={() => setModal(null)} onCreated={() => void refreshUsers()} />
+        <AddContactModal onClose={() => setModal(null)} onCreated={() => background(refreshUsers(), '刷新联系人')} />
       ) : null}
 
       {modal === 'profile' ? (
@@ -426,10 +563,10 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
           onClose={() => setModal(null)}
           onUpdated={(user) => {
             setMe(user);
-            void refreshUsers();
-            void refreshConversations();
+            background(refreshUsers(), '刷新联系人');
+            background(refreshConversations(), '刷新会话列表');
           }}
-          onSignOut={onSignOut}
+          onSignOut={handleSignOut}
         />
       ) : null}
     </div>

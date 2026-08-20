@@ -15,6 +15,18 @@ export interface GroupMember extends User {
   roleInGroup: string;
 }
 
+/**
+ * 被引用消息的摘要，随消息一起下发，前端不必再发一轮请求。
+ * 只有一层：被引用的那条自己引了谁，这里不再展开。
+ */
+export interface MessageQuote {
+  senderName: string;
+  /** 正文截断后的一行；原消息不可用时是「消息已不可用」。 */
+  preview: string;
+  /** 原消息还在不在（被删掉、或不属于本会话时为 false）。 */
+  available: boolean;
+}
+
 export interface Message {
   id: string;
   conversationId: string;
@@ -28,6 +40,17 @@ export interface Message {
   pending?: boolean;
   /** user = 普通消息；system = 成员变动、改群名之类的提示。 */
   kind?: 'user' | 'system';
+  /** 引用回复指向的原消息 id；没有引用时为 null。老接口没有这个字段。 */
+  replyTo?: string | null;
+  /** 被引用消息的摘要；没有引用时为 null。 */
+  quote?: MessageQuote | null;
+}
+
+/** 输入框上方那块「正在回复某条消息」的引用态。 */
+export interface ReplyTarget {
+  id: string;
+  senderName: string;
+  preview: string;
 }
 
 /** 某人在某个会话里读到了哪一刻。 */
@@ -62,6 +85,23 @@ export interface Conversation {
    * 普通未读里，这一档单独拎出来给徽标做区分。老接口没有这个字段时按 0 处理。
    */
   mentionsUnread?: number;
+}
+
+/**
+ * 附件走的是哪条通道（服务端按真实字节判定，见 server/src/attachments.js）：
+ * image = PNG/JPEG/GIF/WebP，可以内联渲染成图片；
+ * file  = 其余任意文件，只能下载，永远不内联。
+ */
+export type AttachmentKind = 'image' | 'file';
+
+/** POST /api/uploads 的返回。kind/mime 是 issue #22 之后新增的，老服务端不带。 */
+export interface UploadResult {
+  url: string;
+  /** 原始文件名，只作为显示名；它不参与磁盘路径，也不出现在 url 里。 */
+  filename: string;
+  storage: string;
+  kind?: AttachmentKind;
+  mime?: string;
 }
 
 /** AI facts every signed-in member may see (the full settings are admin-only). */
@@ -108,6 +148,23 @@ export interface AiTrackedPerson {
 export interface AiOverview extends AiSettings {
   stats: AiStat[];
   rows: AiTrackedPerson[];
+}
+
+/**
+ * 一条消息搜索结果：消息本身，外加它所属会话的标题与类型，
+ * 前端不必再去会话列表里回查就能渲染，也能直接跳过去。
+ */
+export interface MessageSearchResult extends Message {
+  conversationTitle: string;
+  conversationType: ConversationType;
+}
+
+/** 一页消息搜索结果，按时间倒序。nextBefore 是下一页游标（本页最早那条的 id）。 */
+export interface MessageSearchPage {
+  query: string;
+  results: MessageSearchResult[];
+  hasMore: boolean;
+  nextBefore: string | null;
 }
 
 export interface AiProfileDetail {

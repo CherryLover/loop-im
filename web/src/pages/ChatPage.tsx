@@ -5,7 +5,16 @@ import { MessageList } from '../components/MessageList';
 import { Composer } from '../components/Composer';
 import { api } from '../lib/api';
 import { listTime, unreadAriaLabel, unreadBadgeClass, unreadLabel } from '../lib/format';
-import type { Conversation, Message, ReadState, User } from '../lib/types';
+import { replyTargetOf } from '../lib/messages';
+import type { Conversation, Message, MessageSearchResult, ReadState, ReplyTarget, User } from '../lib/types';
+
+/** 搜索框里输入多久没动就发请求：每敲一个字都打一次服务端太浪费。 */
+const SEARCH_DEBOUNCE_MS = 250;
+const SEARCH_LIMIT = 20;
+
+/** 结果行只放一行摘要，把 Markdown 记号和图片压成纯文本（与服务端 previewOf 同一思路）。 */
+const plainPreview = (body: string) =>
+  body.replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]').replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim();
 
 interface ChatPageProps {
   me: User;
@@ -23,7 +32,7 @@ interface ChatPageProps {
   onLoadOlder: () => void;
   onSelect: (id: string) => void;
   onBack: () => void;
-  onSend: (body: string) => void | Promise<void>;
+  onSend: (body: string, replyTo?: string | null) => void | Promise<void>;
   onCreateGroup: () => void;
   onAddMembers: (conversationId: string) => void;
   onRemoveMember: (conversationId: string, userId: string, name: string) => void;
@@ -35,15 +44,59 @@ export function ChatPage(props: ChatPageProps) {
   const { me, conversations, activeId, messages, typing, aiProviderLabel, silentRead, canCreateGroup, showChatOnMobile } = props;
   const [query, setQuery] = useState('');
   const [aiContext, setAiContext] = useState('');
+  // 搜索框现在同时搜会话标题（本地过滤）和消息正文（走服务端）。
+  const [results, setResults] = useState<MessageSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  // 点了气泡上的「回复」之后转交给 Composer 的引用请求。每点一次都是新对象，
+  // Composer 认对象身份来消费；引用态本身归 Composer 按会话暂存，这里不做保管。
+  const [replyRequest, setReplyRequest] = useState<ReplyTarget | null>(null);
 
   const active = conversations.find((c) => c.id === activeId) || null;
   // 建群者本人和系统管理员可以增减成员、改群名（与服务端 canManageGroup 一致）。
   const canManage = !!active && active.type === 'group' && (active.createdBy === me.id || me.role === 'admin');
 
+  const trimmed = query.trim();
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = trimmed.toLowerCase();
     return q ? conversations.filter((c) => c.title.toLowerCase().includes(q)) : conversations;
-  }, [conversations, query]);
+  }, [conversations, trimmed]);
+
+  /**
+   * 消息正文只能问服务端（权限边界在那边，前端手里只有已加载的那点消息）。
+   * alive 标记 + clearTimeout：输入过程中前一次请求的结果不能覆盖后一次，
+   * 清空关键词时也要立刻收掉结果，不能等在途请求回来再闪一下。
+   */
+  useEffect(() => {
+    if (!trimmed) {
+      setResults([]);
+      setSearching(false);
+      setSearchError('');
+      return;
+    }
+    let alive = true;
+    setSearching(true);
+    const timer = window.setTimeout(() => {
+      api.searchMessages(trimmed, { limit: SEARCH_LIMIT })
+        .then((page) => {
+          if (!alive) return;
+          setResults(page.results);
+          setSearchError('');
+        })
+        .catch((err: unknown) => {
+          if (!alive) return;
+          setResults([]);
+          setSearchError(err instanceof Error ? err.message : '搜索失败');
+        })
+        .finally(() => {
+          if (alive) setSearching(false);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [trimmed]);
 
   useEffect(() => {
     if (!active || active.type !== 'group') {
@@ -83,13 +136,15 @@ export function ChatPage(props: ChatPageProps) {
             <input
               className="input input--search"
               style={{ paddingLeft: 27 }}
-              placeholder="搜索会话"
+              placeholder="搜索会话和消息"
+              aria-label="搜索会话和消息"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
         </div>
         <div className="convos__list">
+          {trimmed ? <div className="convos__section">会话 · {filtered.length}</div> : null}
           {filtered.length === 0 ? <div className="convos__empty">没有匹配的会话。</div> : null}
           {filtered.map((c) => {
             const isAI = c.type === 'ai';
@@ -128,6 +183,42 @@ export function ChatPage(props: ChatPageProps) {
               </button>
             );
           })}
+
+          {/* 消息命中。点一条就跳到它所在的会话（暂时只定位到会话，不滚到那条消息）。 */}
+          {trimmed ? (
+            <>
+              <div className="convos__section">
+                消息{searching ? ' · 搜索中…' : ` · ${results.length}`}
+              </div>
+              {searchError ? <div className="convos__empty">{searchError}</div> : null}
+              {!searching && !searchError && results.length === 0 ? (
+                <div className="convos__empty">没有匹配的消息。</div>
+              ) : null}
+              {results.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  className={`convo${r.conversationId === activeId ? ' convo--on' : ''}`}
+                  onClick={() => props.onSelect(r.conversationId)}
+                >
+                  <Avatar
+                    name={r.conversationTitle}
+                    isAI={r.conversationType === 'ai'}
+                    size={34}
+                    radius={10}
+                    label={r.conversationType === 'group' ? '群' : undefined}
+                  />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className="convo__row">
+                      <div className="convo__title">{r.conversationTitle}</div>
+                      <span className="convo__time">{listTime(r.createdAt)}</span>
+                    </div>
+                    <div className="convo__preview">{r.senderName}：{plainPreview(r.body)}</div>
+                  </div>
+                </button>
+              ))}
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -168,6 +259,7 @@ export function ChatPage(props: ChatPageProps) {
               hasOlder={props.hasOlder}
               loadingOlder={props.loadingOlder}
               onLoadOlder={props.onLoadOlder}
+              onReply={(m) => setReplyRequest(replyTargetOf(m))}
             />
 
             {active.type === 'group' && silentRead ? (
@@ -177,7 +269,7 @@ export function ChatPage(props: ChatPageProps) {
               </div>
             ) : null}
 
-            <Composer conversation={active} meId={me.id} onSend={props.onSend} />
+            <Composer conversation={active} meId={me.id} onSend={props.onSend} replyRequest={replyRequest} />
           </div>
 
           {active.type === 'group' ? (

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ImagePlus, X } from 'lucide-react';
+import { CornerUpLeft, FileText, Paperclip, X } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { api, MAX_UPLOAD_MB } from '../lib/api';
-import type { Conversation } from '../lib/types';
+import type { AttachmentKind, Conversation, ReplyTarget } from '../lib/types';
 
 interface MentionOption {
   key: string;
@@ -17,16 +17,27 @@ interface Attachment {
   url: string | null;
   previewUrl: string;
   uploading: boolean;
+  /** image 才会内联渲染成图片；file 一律拼成普通链接，只能下载（见 issue #22）。 */
+  kind: AttachmentKind;
   error?: string;
 }
+
+// 上传前只能按浏览器给的 type 猜一下，用来决定预览要不要显示缩略图。
+// 真正算数的是服务端按真实字节给出的 kind，落地时会覆盖这里的猜测。
+const guessKind = (file: File): AttachmentKind => (file.type.startsWith('image/') ? 'image' : 'file');
 
 /** 一个会话暂存下来的输入状态。 */
 interface DraftEntry {
   draft: string;
   attachment: Attachment | null;
+  /**
+   * 正在回复哪一条。和草稿、附件是同一类东西：属于某个会话而不是属于这个组件，
+   * 所以必须一起进暂存表 —— 否则在 A 群点了「回复」再切到 B 群，引用块会挂到 B 群头上。
+   */
+  replyTo: ReplyTarget | null;
 }
 
-const EMPTY_ENTRY: DraftEntry = { draft: '', attachment: null };
+const EMPTY_ENTRY: DraftEntry = { draft: '', attachment: null, replyTo: null };
 
 // previewUrl 是 URL.createObjectURL 造出来的，不主动释放会一直占着 blob。
 // 只在这张图确定不会再被渲染时调用：被替换、被移除、发送成功、组件卸载。
@@ -42,13 +53,21 @@ export function Composer({
   conversation,
   meId,
   onSend,
+  replyRequest = null,
 }: {
   conversation: Conversation;
   meId: string;
-  onSend: (body: string) => void | Promise<void>;
+  /** 第二个参数是被引用消息的 id；没有引用时不传，调用形态和以前完全一样。 */
+  onSend: (body: string, replyTo?: string | null) => void | Promise<void>;
+  /**
+   * 消息气泡上点「回复」发过来的引用请求。每点一次父组件给一个新对象，
+   * 这里只认对象身份的变化，所以切来切去不会把同一个请求重复消费。
+   */
+  replyRequest?: ReplyTarget | null;
 }) {
   const [draft, setDraft] = useState('');
   const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -64,19 +83,29 @@ export function Composer({
   liveId.current = conversation.id;
   // 卸载时要释放的当前附件。
   const liveEntry = useRef<DraftEntry>(EMPTY_ENTRY);
-  liveEntry.current = { draft, attachment };
+  liveEntry.current = { draft, attachment, replyTo };
 
   // 会话变了：把旧会话的输入状态存起来，换上新会话自己的那份。
   // 在渲染期同步切换，避免先渲染出上一个会话的内容再被 effect 改掉。
   if (shownId !== conversation.id) {
-    stash.current.set(shownId, { draft, attachment });
+    stash.current.set(shownId, { draft, attachment, replyTo });
     const restored = stash.current.get(conversation.id) ?? EMPTY_ENTRY;
     setShownId(conversation.id);
     setDraft(restored.draft);
     setAttachment(restored.attachment);
+    setReplyTo(restored.replyTo);
     setMentionQuery(null);
     setIndex(0);
   }
+
+  // 外面点了「回复」：把引用态记到当前这个会话上。用 ref 记住已经消费过哪一个请求，
+  // 免得切换会话导致的重渲染又把旧请求重新塞回来，把用户刚取消掉的引用态复活。
+  const consumedReply = useRef<ReplyTarget | null>(replyRequest);
+  useEffect(() => {
+    if (replyRequest === consumedReply.current) return;
+    consumedReply.current = replyRequest;
+    if (replyRequest) setReplyTo(replyRequest);
+  }, [replyRequest]);
 
   useEffect(() => () => {
     // 组件卸载（比如退出登录、没有选中会话）时，所有暂存的预览图一起释放。
@@ -102,6 +131,15 @@ export function Composer({
     }
     const entry = stash.current.get(id) ?? EMPTY_ENTRY;
     stash.current.set(id, { ...entry, attachment: update(entry.attachment) });
+  }
+
+  function writeReply(id: string, update: (prev: ReplyTarget | null) => ReplyTarget | null) {
+    if (id === liveId.current) {
+      setReplyTo(update);
+      return;
+    }
+    const entry = stash.current.get(id) ?? EMPTY_ENTRY;
+    stash.current.set(id, { ...entry, replyTo: update(entry.replyTo) });
   }
 
   const options = useMemo<MentionOption[]>(() => {
@@ -142,10 +180,11 @@ export function Composer({
 
   async function attach(file: File) {
     const convId = conversation.id;
+    const guessed = guessKind(file);
     const previewUrl = URL.createObjectURL(file);
     writeAttachment(convId, (prev) => {
-      revokePreview(prev);                       // 换图，旧预览没人看了
-      return { filename: file.name, url: null, previewUrl, uploading: true };
+      revokePreview(prev);                       // 换附件，旧预览没人看了
+      return { filename: file.name, url: null, previewUrl, uploading: true, kind: guessed };
     });
 
     // 上传期间用户可能已经换了图或把附件删了，落地时先确认还是同一张。
@@ -158,11 +197,12 @@ export function Composer({
     });
 
     try {
-      const { url, filename } = await api.upload(file);
-      land({ filename, url, previewUrl, uploading: false });
+      const { url, filename, kind } = await api.upload(file);
+      // kind 以服务端为准（老服务端不返回这个字段时退回本地的猜测）。
+      land({ filename, url, previewUrl, uploading: false, kind: kind ?? guessed });
     } catch (err) {
       land({
-        filename: file.name, url: null, previewUrl, uploading: false,
+        filename: file.name, url: null, previewUrl, uploading: false, kind: guessed,
         error: err instanceof Error ? err.message : '上传失败',
       });
     }
@@ -171,8 +211,13 @@ export function Composer({
   async function submit() {
     const text = draft.trim();
     if (attachment?.uploading) return;
-    const image = attachment?.url ? `![${attachment.filename}](${attachment.url})` : '';
-    if (!text && !image) return;
+    // 图片拼成 Markdown 图片（会内联渲染），普通文件拼成普通链接（渲染成文件卡片，只能下载）。
+    // 方括号会撑破 Markdown 的链接语法，从显示名里去掉，不影响服务端存的那份原名。
+    const label = attachment ? attachment.filename.replace(/[[\]]/g, '') : '';
+    const embed = attachment?.url
+      ? (attachment.kind === 'image' ? `![${label}](${attachment.url})` : `[${label}](${attachment.url})`)
+      : '';
+    if (!text && !embed) return;
 
     // 乐观清空：正常情况下输入框立刻空出来。但发送失败时必须把用户打的字还回去，
     // 否则内容直接丢失，而且草稿为空会让「发送」按钮一直处于禁用态。
@@ -180,11 +225,15 @@ export function Composer({
     const sentId = conversation.id;
     const sentDraft = draft;
     const sentAttachment = attachment;
+    const sentReply = replyTo;
     setDraft('');
     setAttachment(null);
+    setReplyTo(null);
     setMentionQuery(null);
     try {
-      await onSend([text, image].filter(Boolean).join(text && image ? '\n\n' : ''));
+      const payload = [text, embed].filter(Boolean).join(text && embed ? '\n\n' : '');
+      // 不引用时不传第二个参数：既有调用方（和它们的用例）看到的调用形态一点没变。
+      await (sentReply ? onSend(payload, sentReply.id) : onSend(payload));
       revokePreview(sentAttachment);             // 发出去的是服务端 url，预览图可以释放了
     } catch {
       // 只在用户没有重新打字时还原，别覆盖掉他在等待期间输入的新内容。
@@ -194,6 +243,8 @@ export function Composer({
         revokePreview(sentAttachment);           // 已经有新附件了，旧预览留着也没人看
         return current;
       });
+      // 引用态同样还给发送时的那个会话，而且不覆盖用户等待期间新选的引用。
+      writeReply(sentId, (current) => current ?? sentReply);
     }
   }
 
@@ -220,6 +271,12 @@ export function Composer({
         return;
       }
     }
+    // @ 气泡关着的时候，Esc 退掉引用态（气泡开着时上面那一档先吃掉 Esc）。
+    if (e.key === 'Escape' && replyTo) {
+      e.preventDefault();
+      setReplyTo(null);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void submit();
@@ -227,8 +284,10 @@ export function Composer({
   }
 
   function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const file = Array.from(e.clipboardData?.items || [])
-      .find((i) => i.kind === 'file' && i.type.startsWith('image/'))?.getAsFile();
+    // 截图（image/*）优先；从文件管理器复制过来的普通文件也接住，走文件附件那一档。
+    // kind === 'string' 的项是纯文本/富文本，交给输入框自己处理，别拦。
+    const items = Array.from(e.clipboardData?.items || []).filter((i) => i.kind === 'file');
+    const file = (items.find((i) => i.type.startsWith('image/')) ?? items[0])?.getAsFile();
     if (file) {
       e.preventDefault();
       void attach(file);
@@ -256,14 +315,36 @@ export function Composer({
         </div>
       ) : null}
 
+      {replyTo ? (
+        <div className="reply-bar">
+          <CornerUpLeft size={13} className="reply-bar__icon" />
+          <span className="reply-bar__who">回复 {replyTo.senderName}</span>
+          <span className="reply-bar__text">{replyTo.preview}</span>
+          <button
+            type="button"
+            className="reply-bar__x"
+            onClick={() => setReplyTo(null)}
+            title="取消引用"
+            aria-label="取消引用"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      ) : null}
+
       {attachment ? (
         <div className="attach">
-          <span className="attach__thumb">
-            <img src={attachment.previewUrl} alt={attachment.filename} />
+          <span className={`attach__thumb${attachment.kind === 'file' ? ' attach__thumb--file' : ''}`}>
+            {/* 只有确认过是图片的那一档才内联显示，其余一律给个文件图标。 */}
+            {attachment.kind === 'image'
+              ? <img src={attachment.previewUrl} alt={attachment.filename} />
+              : <FileText size={16} />}
           </span>
           <span className="attach__name">{attachment.filename}</span>
           <span className="attach__state">
-            {attachment.error ? attachment.error : attachment.uploading ? '上传中…' : '已上传，将作为图片附件发送'}
+            {attachment.error ? attachment.error
+              : attachment.uploading ? '上传中…'
+                : attachment.kind === 'image' ? '已上传，将作为图片附件发送' : '已上传，将作为文件附件发送'}
           </span>
           <button
             type="button"
@@ -283,15 +364,14 @@ export function Composer({
         <button
           type="button"
           className="composer__plus"
-          title={`从本地选择图片（不超过 ${MAX_UPLOAD_MB}MB）`}
+          title={`从本地选择文件（图片或任意文件，不超过 ${MAX_UPLOAD_MB}MB）`}
           onClick={() => fileRef.current?.click()}
         >
-          <ImagePlus size={18} />
+          <Paperclip size={18} />
         </button>
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
           style={{ display: 'none' }}
           onChange={(e) => {
             const file = e.target.files?.[0];
@@ -306,7 +386,7 @@ export function Composer({
             className="composer__input"
             rows={1}
             value={draft}
-            placeholder="输入消息，支持 Markdown、粘贴图片、@ 提及成员或 AI"
+            placeholder="输入消息，支持 Markdown、粘贴图片、发送文件、@ 提及成员或 AI"
             onChange={(e) => {
               setDraft(e.target.value);
               syncMentionState(e.target.value);

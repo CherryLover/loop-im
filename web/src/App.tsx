@@ -25,16 +25,16 @@ export function App() {
     setJustSignedIn(false);
   }, []);
 
-  // 主动退出：先告诉服务端，别人才会立刻看到离线；接口失败也不能卡住本地退出，
-  // 那种情况仍由 90 秒的心跳窗口兜底。
-  const signOut = useCallback(async () => {
-    try {
-      await api.logout();
-    } catch {
+  // 主动退出：请求先发出去（此刻凭据还在，别人才会立刻看到离线），但不等它回来就清本地状态。
+  // 服务端一删掉当前 session，同一凭据的在途请求就会拿回 401；等在这里的话，AppShell 还挂着，
+  // 那些 401 会变成没人接的页面错误（issue #21）。先清状态，AppShell 随之卸载并取消在途请求。
+  // 接口失败也不能卡住本地退出，那种情况仍由 90 秒的心跳窗口兜底。
+  const signOut = useCallback(() => {
+    const done = api.logout().catch(() => {
       /* 断网或服务端不可达：本地照样退出 */
-    } finally {
-      clearSession();
-    }
+    });
+    clearSession();
+    return done;
   }, [clearSession]);
 
   useEffect(() => {

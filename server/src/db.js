@@ -20,6 +20,10 @@ const MIGRATIONS = [
   ['users', 'auth_version', 'ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1'],
   // messages.kind：系统提示（谁加入/退出群、群名改了）与普通消息分开渲染。
   ['messages', 'kind', "ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'user'"],
+  // messages.reply_to：引用回复指向的原消息 id。可空，历史消息一律为 NULL（没有引用），
+  // 所以不需要回填。故意不加外键：原消息被删掉之后这一列要能留着，界面才能显示
+  // 「消息已不可用」；加了 ON DELETE 之后要么写不进去、要么被悄悄置空，都不是想要的。
+  ['messages', 'reply_to', 'ALTER TABLE messages ADD COLUMN reply_to TEXT'],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();

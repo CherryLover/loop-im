@@ -1,5 +1,6 @@
 import type {
-  AiOverview, AiProfileDetail, AiPublicInfo, AiSettings, Conversation, Message, MessagePage, User,
+  AiOverview, AiProfileDetail, AiPublicInfo, AiSettings, Conversation, Message, MessagePage,
+  MessageSearchPage, UploadResult, User,
 } from './types';
 
 const TOKEN_KEY = 'loop-im-token';
@@ -18,10 +19,10 @@ export const setToken = (token: string, remember = true) => {
   (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
 };
 
-// 图片体积上限，和服务端 upload-middleware.js 保持一致。
+// 附件体积上限，和服务端 upload-middleware.js 保持一致（图片和普通文件共用同一档）。
 export const MAX_UPLOAD_MB = 8;
 export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
-export const OVERSIZED_MESSAGE = `图片大小不能超过 ${MAX_UPLOAD_MB}MB`;
+export const OVERSIZED_MESSAGE = `文件大小不能超过 ${MAX_UPLOAD_MB}MB`;
 
 export class ApiError extends Error {
   status: number;
@@ -86,11 +87,14 @@ export const api = {
     return res;
   },
 
-  users: () => request<{ users: User[] }>('/users'),
+  // 列表和消息都接受取消信号：退出登录或组件卸载时，在途的这几个请求要能立刻掐掉，
+  // 否则它们会带着已经作废的凭据回来一个 401（见 issue #21）。
+  users: (opts: { signal?: AbortSignal } = {}) => request<{ users: User[] }>('/users', { signal: opts.signal }),
   addUser: (payload: { name: string; email: string; dept: string }) =>
     request<{ user: User; initialPassword: string }>('/users', { method: 'POST', body: JSON.stringify(payload) }),
 
-  conversations: () => request<{ conversations: Conversation[] }>('/conversations'),
+  conversations: (opts: { signal?: AbortSignal } = {}) =>
+    request<{ conversations: Conversation[] }>('/conversations', { signal: opts.signal }),
   conversation: (id: string) => request<{ conversation: Conversation }>(`/conversations/${id}`),
   createGroup: (title: string, memberIds: string[]) =>
     request<{ conversation: Conversation }>('/conversations/group', {
@@ -118,12 +122,12 @@ export const api = {
     request<{ ok: true }>(`/conversations/${id}/leave`, { method: 'POST' }),
   aiContext: (id: string) => request<{ line: string }>(`/conversations/${id}/ai-context`),
   // 默认只取最新一页；翻历史时把上一页最早那条的 id 作为 before 传回来。
-  messages: (id: string, opts: { before?: string; limit?: number } = {}) => {
+  messages: (id: string, opts: { before?: string; limit?: number; signal?: AbortSignal } = {}) => {
     const q = new URLSearchParams();
     if (opts.before) q.set('before', opts.before);
     if (opts.limit) q.set('limit', String(opts.limit));
     const qs = q.toString();
-    return request<MessagePage>(`/conversations/${id}/messages${qs ? `?${qs}` : ''}`);
+    return request<MessagePage>(`/conversations/${id}/messages${qs ? `?${qs}` : ''}`, { signal: opts.signal });
   },
   // 上报已读位置。省略 upTo 就按服务端的此刻算。
   markRead: (id: string, upTo?: number) =>
@@ -131,16 +135,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(upTo ? { upTo } : {}),
     }),
-  sendMessage: (id: string, body: string) =>
+  // 全文搜消息。省略 conversationId 就是全局搜（服务端只会给出我是成员的那些会话）。
+  // 翻页同样用 before 游标：把上一页 nextBefore 传回来。
+  searchMessages: (q: string, opts: { conversationId?: string; limit?: number; before?: string } = {}) => {
+    const params = new URLSearchParams({ q });
+    if (opts.conversationId) params.set('conversationId', opts.conversationId);
+    if (opts.limit) params.set('limit', String(opts.limit));
+    if (opts.before) params.set('before', opts.before);
+    return request<MessageSearchPage>(`/messages/search?${params.toString()}`);
+  },
+  // replyTo 是被引用消息的 id。不引用时整个字段都不带上，请求体保持原样。
+  sendMessage: (id: string, body: string, replyTo?: string | null) =>
     request<{ message: Message }>(`/conversations/${id}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ body }),
+      body: JSON.stringify(replyTo ? { body, replyTo } : { body }),
     }),
+  // 图片和普通文件走同一个入口，由服务端按真实字节判定 kind（image 可内联、file 只能下载）。
   upload: (file: File) => {
     checkSize(file);
     const form = new FormData();
     form.append('file', file);
-    return request<{ url: string; filename: string; storage: string }>('/uploads', { method: 'POST', body: form });
+    return request<UploadResult>('/uploads', { method: 'POST', body: form });
   },
 
   // 管理员重置成员密码：新密码只在这次响应里回来一次，界面显示完就没了。
