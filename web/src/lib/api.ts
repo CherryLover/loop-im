@@ -87,11 +87,14 @@ export const api = {
     return res;
   },
 
-  users: () => request<{ users: User[] }>('/users'),
+  // 列表和消息都接受取消信号：退出登录或组件卸载时，在途的这几个请求要能立刻掐掉，
+  // 否则它们会带着已经作废的凭据回来一个 401（见 issue #21）。
+  users: (opts: { signal?: AbortSignal } = {}) => request<{ users: User[] }>('/users', { signal: opts.signal }),
   addUser: (payload: { name: string; email: string; dept: string }) =>
     request<{ user: User; initialPassword: string }>('/users', { method: 'POST', body: JSON.stringify(payload) }),
 
-  conversations: () => request<{ conversations: Conversation[] }>('/conversations'),
+  conversations: (opts: { signal?: AbortSignal } = {}) =>
+    request<{ conversations: Conversation[] }>('/conversations', { signal: opts.signal }),
   conversation: (id: string) => request<{ conversation: Conversation }>(`/conversations/${id}`),
   createGroup: (title: string, memberIds: string[]) =>
     request<{ conversation: Conversation }>('/conversations/group', {
@@ -119,12 +122,12 @@ export const api = {
     request<{ ok: true }>(`/conversations/${id}/leave`, { method: 'POST' }),
   aiContext: (id: string) => request<{ line: string }>(`/conversations/${id}/ai-context`),
   // 默认只取最新一页；翻历史时把上一页最早那条的 id 作为 before 传回来。
-  messages: (id: string, opts: { before?: string; limit?: number } = {}) => {
+  messages: (id: string, opts: { before?: string; limit?: number; signal?: AbortSignal } = {}) => {
     const q = new URLSearchParams();
     if (opts.before) q.set('before', opts.before);
     if (opts.limit) q.set('limit', String(opts.limit));
     const qs = q.toString();
-    return request<MessagePage>(`/conversations/${id}/messages${qs ? `?${qs}` : ''}`);
+    return request<MessagePage>(`/conversations/${id}/messages${qs ? `?${qs}` : ''}`, { signal: opts.signal });
   },
   // 上报已读位置。省略 upTo 就按服务端的此刻算。
   markRead: (id: string, upTo?: number) =>

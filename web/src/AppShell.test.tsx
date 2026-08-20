@@ -100,7 +100,8 @@ afterEach(() => {
 describe('已读上报', () => {
   it('打开会话就上报一次已读', async () => {
     await mount();
-    await waitFor(() => expect(mockApi.markRead).toHaveBeenCalledWith('c1'));
+    // 上报位置是此刻渲染出来的最后一条消息，而不是「服务端的此刻」（issue #20）。
+    await waitFor(() => expect(mockApi.markRead).toHaveBeenCalledWith('c1', 1_700_000_000_000));
     expect(mockApi.markRead).toHaveBeenCalledTimes(1);
   });
 
@@ -169,7 +170,9 @@ describe('历史翻页', () => {
     const button = await screen.findByRole('button', { name: '加载更早的消息' });
     await userEvent.click(button);
 
-    await waitFor(() => expect(mockApi.messages).toHaveBeenCalledWith('c1', { before: 'm5' }));
+    await waitFor(() => expect(mockApi.messages).toHaveBeenCalledWith(
+      'c1', expect.objectContaining({ before: 'm5' }),
+    ));
     await waitFor(() => expect(screen.getByText('内容 m1')).toBeInTheDocument());
     expect(screen.getByText('内容 m5')).toBeInTheDocument();
     // 没有更早的了，入口应当消失
