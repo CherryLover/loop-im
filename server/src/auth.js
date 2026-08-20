@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { get, run, now, uid } from './db.js';
@@ -48,6 +49,32 @@ export function endSession(userId, sessionId) {
 
 export const hashPassword = (plain) => bcrypt.hashSync(plain, 10);
 export const verifyPassword = (plain, hash) => !!hash && bcrypt.compareSync(plain, hash);
+
+// 一次性密码的字母表：去掉 0/O/1/l/I 这些抄下来容易看错的字符，
+// 管理员是要把它念给或抄给本人的，认错一个字符就等于白重置一次。
+const PASSWORD_ALPHABET = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export const GENERATED_PASSWORD_LENGTH = 16;
+
+/** 随机一次性密码。用 crypto 的均匀取样，不用 Math.random——这串就是账号的全部凭据。 */
+export function generatePassword(length = GENERATED_PASSWORD_LENGTH) {
+  let out = '';
+  for (let i = 0; i < length; i += 1) out += PASSWORD_ALPHABET[randomInt(PASSWORD_ALPHABET.length)];
+  return out;
+}
+
+/**
+ * 管理员重置他人密码：换掉哈希、auth_version +1（此前签发的 token 全部作废），
+ * 再删掉该账号的全部会话，让所有设备立刻掉线——重置的意义就是夺回账号控制权。
+ * 注意这跟本人改密码（routes/auth.js 的 /me/password）不同：那里要留住当前会话并换发
+ * 新 token，所以不能共用这个函数。
+ */
+export function resetPasswordFor(userId, plain) {
+  run(
+    'UPDATE users SET password_hash = ?, auth_version = auth_version + 1 WHERE id = ?',
+    hashPassword(plain), userId,
+  );
+  run('DELETE FROM sessions WHERE user_id = ?', userId);
+}
 
 export function touch(userId, sessionId) {
   run('UPDATE users SET last_seen_at = ? WHERE id = ?', now(), userId);

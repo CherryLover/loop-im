@@ -143,6 +143,11 @@ export const api = {
     return request<{ url: string; filename: string; storage: string }>('/uploads', { method: 'POST', body: form });
   },
 
+  // 管理员重置成员密码：新密码只在这次响应里回来一次，界面显示完就没了。
+  // 该成员所有设备上的登录会同时失效。
+  resetUserPassword: (userId: string) =>
+    request<{ user: User; password: string }>(`/users/${userId}/reset-password`, { method: 'POST' }),
+
   aiSettings: () => request<AiSettings>('/ai/settings'),
   saveAiSettings: (patch: Record<string, unknown>) =>
     request<AiSettings>('/ai/settings', { method: 'PUT', body: JSON.stringify(patch) }),
