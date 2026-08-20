@@ -8,6 +8,7 @@ import { all, get } from '../db.js';
 import { authenticate } from '../auth.js';
 import { serializeMessage } from './conversations.js';
 import { escapeLike } from '../sql.js';
+import { reactionsOf } from '../reactions.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -114,10 +115,12 @@ router.get('/search', (req, res) => {
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   const titleOf = titleResolver(req.user.id);
+  // 表情回应也是整页一次查完，理由同 /conversations/:id/messages：逐条查就是一页 N 次往返。
+  const reactions = reactionsOf(page.map((r) => r.id), req.user.id);
   res.json({
     query: q,
     results: page.map((r) => ({
-      ...serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url }),
+      ...serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url }, reactions.get(r.id) || []),
       conversationTitle: titleOf(r),
       conversationType: r.convo_type,
     })),

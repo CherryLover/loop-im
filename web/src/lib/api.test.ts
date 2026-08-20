@@ -44,6 +44,29 @@ describe('消息分页', () => {
   });
 });
 
+describe('表情回应', () => {
+  it('加回应走 POST，表情放在请求体里', async () => {
+    await api.addReaction('c1', 'm_1', '👍');
+    const { url, method, body } = lastCall();
+    expect(url).toBe('/api/conversations/c1/messages/m_1/reactions');
+    expect(method).toBe('POST');
+    expect(body).toEqual({ emoji: '👍' });
+  });
+
+  it('取消走 DELETE，表情转义后放查询串（DELETE 带 body 在中间层里不一定活得下来）', async () => {
+    await api.removeReaction('c1', 'm_1', '👍');
+    const { url, method, init } = lastCall();
+    expect(method).toBe('DELETE');
+    expect(url).toBe('/api/conversations/c1/messages/m_1/reactions?emoji=%F0%9F%91%8D');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('带变体选择符的表情同样被完整转义，不会被截成半个', async () => {
+    await api.removeReaction('c1', 'm_1', '❤️');
+    expect(lastCall().url).toBe('/api/conversations/c1/messages/m_1/reactions?emoji=%E2%9D%A4%EF%B8%8F');
+  });
+});
+
 describe('已读上报', () => {
   it('不传 upTo 时发空对象，交给服务端按此刻算', async () => {
     await api.markRead('c1');

@@ -33,6 +33,8 @@ interface ChatPageProps {
   onSelect: (id: string) => void;
   onBack: () => void;
   onSend: (body: string, replyTo?: string | null) => void | Promise<void>;
+  /** 切换我在某条消息上的某个表情回应（点过就是取消）。不传就只读，与 MessageList 同一约定。 */
+  onReact?: (message: Message, emoji: string) => void;
   onCreateGroup: () => void;
   onAddMembers: (conversationId: string) => void;
   onRemoveMember: (conversationId: string, userId: string, name: string) => void;
@@ -260,6 +262,7 @@ export function ChatPage(props: ChatPageProps) {
               loadingOlder={props.loadingOlder}
               onLoadOlder={props.onLoadOlder}
               onReply={(m) => setReplyRequest(replyTargetOf(m))}
+              onReact={props.onReact}
             />
 
             {active.type === 'group' && silentRead ? (

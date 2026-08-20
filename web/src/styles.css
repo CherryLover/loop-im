@@ -386,6 +386,35 @@ input, textarea { font-family: inherit; }
 .msg--me:hover .msg__reply, .msg--other:hover .msg__reply, .msg__reply:focus-visible { opacity: 1; }
 .msg__reply:hover { color: var(--accent-text); }
 
+/* 气泡下方的表情回应：已有的一排 + 末尾的「加一个」入口。 */
+.reactions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.reaction {
+  display: inline-flex; align-items: center; gap: 3px; cursor: pointer;
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 99px;
+  padding: 1px 7px; font-size: 12px; line-height: 1.7; color: var(--muted);
+}
+.reaction:hover:not(:disabled) { border-color: var(--border2); }
+.reaction:disabled { cursor: default; }
+.reaction__n { font-size: 10.5px; font-variant-numeric: tabular-nums; }
+/* 自己点过的那个：颜色之外还有 aria-pressed，读屏软件也听得出来。 */
+.reaction--mine { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-text); }
+/* 「加一个」平时淡出，指上去或键盘聚焦时才显形，与气泡上的「回复」同一套做法。 */
+.reaction--add { padding: 1px 5px; color: var(--faint); opacity: 0; transition: opacity .12s ease-out; }
+.msg--me:hover .reaction--add, .msg--other:hover .reaction--add,
+.reaction--add:focus-visible, .reaction--open { opacity: 1; }
+.reactions__pick { position: relative; display: inline-flex; }
+.reactions__menu {
+  position: absolute; bottom: 100%; left: 0; margin-bottom: 6px; z-index: 5;
+  display: flex; gap: 2px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border2); border-radius: 12px;
+  box-shadow: var(--shadow); animation: pop .14s ease-out;
+}
+.reactions__menu button {
+  border: none; background: transparent; cursor: pointer; border-radius: 8px;
+  padding: 3px 5px; font-size: 15px; line-height: 1.2;
+}
+.reactions__menu button:hover { background: var(--surface2); }
+
 /* 从引用块跳过去之后，把落点消息短暂点亮一下。 */
 .msg--flash { animation: quote-flash 1.4s ease-out; border-radius: 12px; }
 @keyframes quote-flash {

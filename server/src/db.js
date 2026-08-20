@@ -24,8 +24,19 @@ const MIGRATIONS = [
   // 所以不需要回填。故意不加外键：原消息被删掉之后这一列要能留着，界面才能显示
   // 「消息已不可用」；加了 ON DELETE 之后要么写不进去、要么被悄悄置空，都不是想要的。
   ['messages', 'reply_to', 'ALTER TABLE messages ADD COLUMN reply_to TEXT'],
+  // message_reactions 的唯一约束：同一个人对同一条消息的同一个表情只能有一行，
+  // 再点一次是取消而不是加一行。这是索引不是列，所以 column 传 null（见下面的循环）：
+  // 幂等由 DDL 自带的 IF NOT EXISTS 保证。约束不写进 schema.sql 的建表语句，
+  // 是因为 CREATE TABLE IF NOT EXISTS 对已经建好的表什么也不做——那样老库补不上它。
+  [null, null, `CREATE UNIQUE INDEX IF NOT EXISTS idx_message_reactions_unique
+                ON message_reactions(message_id, user_id, emoji)`],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
+  // column 为 null：这条迁移不是补列（索引、新表之类），DDL 自己保证幂等，直接跑。
+  if (!column) {
+    db.exec(ddl);
+    continue;
+  }
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();
   if (!columns.some((c) => c.name === column)) db.exec(ddl);
 }

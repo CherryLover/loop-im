@@ -111,6 +111,14 @@ describe('事件分发', () => {
     expect(onUserChanged).toHaveBeenCalledTimes(2);
   });
 
+  it('reaction 事件带出会话、消息和整份聚合', () => {
+    const onReaction = vi.fn();
+    const reactions = [{ emoji: '👍', count: 1, users: [{ id: 'u_chen', name: '陈子航' }], mine: false }];
+    mount({ onReaction });
+    latest().emit('reaction', { conversationId: 'c1', messageId: 'm1', reactions });
+    expect(onReaction).toHaveBeenCalledWith('c1', 'm1', reactions);
+  });
+
   it('没有提供对应回调时收到事件也不会报错', () => {
     mount({});
     expect(() => latest().emit('read', { conversationId: 'c1', userId: 'u', lastReadAt: 1 })).not.toThrow();
