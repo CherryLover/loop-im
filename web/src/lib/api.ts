@@ -1,5 +1,6 @@
 import type {
-  AiOverview, AiProfileDetail, AiPublicInfo, AiSettings, Conversation, Message, MessagePage, User,
+  AiOverview, AiProfileDetail, AiPublicInfo, AiSettings, Conversation, Message, MessagePage,
+  MessageSearchPage, User,
 } from './types';
 
 const TOKEN_KEY = 'loop-im-token';
@@ -131,6 +132,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(upTo ? { upTo } : {}),
     }),
+  // 全文搜消息。省略 conversationId 就是全局搜（服务端只会给出我是成员的那些会话）。
+  // 翻页同样用 before 游标：把上一页 nextBefore 传回来。
+  searchMessages: (q: string, opts: { conversationId?: string; limit?: number; before?: string } = {}) => {
+    const params = new URLSearchParams({ q });
+    if (opts.conversationId) params.set('conversationId', opts.conversationId);
+    if (opts.limit) params.set('limit', String(opts.limit));
+    if (opts.before) params.set('before', opts.before);
+    return request<MessageSearchPage>(`/messages/search?${params.toString()}`);
+  },
   sendMessage: (id: string, body: string) =>
     request<{ message: Message }>(`/conversations/${id}/messages`, {
       method: 'POST',
