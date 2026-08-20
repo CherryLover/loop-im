@@ -1,6 +1,6 @@
 import type {
   AiOverview, AiProfileDetail, AiPublicInfo, AiSettings, Conversation, Message, MessagePage,
-  MessageSearchPage, UploadResult, User,
+  MessageReaction, MessageSearchPage, UploadResult, User,
 } from './types';
 
 const TOKEN_KEY = 'loop-im-token';
@@ -120,6 +120,13 @@ export const api = {
     }),
   leaveConversation: (id: string) =>
     request<{ ok: true }>(`/conversations/${id}/leave`, { method: 'POST' }),
+  // 置顶 / 免打扰：都是「我对这个会话」的个人设置，服务端只改 conversation_members 里
+  // 我自己那一行，别人看到的顺序和提醒方式不受影响。两项可分开改也可一起改。
+  updateConversationPrefs: (id: string, prefs: { pinned?: boolean; muted?: boolean }) =>
+    request<{ conversation: Conversation }>(`/conversations/${id}/prefs`, {
+      method: 'PATCH',
+      body: JSON.stringify(prefs),
+    }),
   aiContext: (id: string) => request<{ line: string }>(`/conversations/${id}/ai-context`),
   // 默认只取最新一页；翻历史时把上一页最早那条的 id 作为 before 传回来。
   messages: (id: string, opts: { before?: string; limit?: number; signal?: AbortSignal } = {}) => {
@@ -150,6 +157,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(replyTo ? { body, replyTo } : { body }),
     }),
+  // 表情回应：加和取消是两个接口，各自幂等（重复点不会多出一条，没点过时取消也不报错）。
+  // 两者都返回这条消息回应的最新聚合，直接拿去替换本地那一份即可。
+  addReaction: (conversationId: string, messageId: string, emoji: string) =>
+    request<{ messageId: string; reactions: MessageReaction[] }>(
+      `/conversations/${conversationId}/messages/${messageId}/reactions`,
+      { method: 'POST', body: JSON.stringify({ emoji }) },
+    ),
+  // 表情走查询串而不是请求体：DELETE 带 body 在中间层里不一定活得下来。
+  removeReaction: (conversationId: string, messageId: string, emoji: string) =>
+    request<{ messageId: string; reactions: MessageReaction[] }>(
+      `/conversations/${conversationId}/messages/${messageId}/reactions?emoji=${encodeURIComponent(emoji)}`,
+      { method: 'DELETE' },
+    ),
   // 图片和普通文件走同一个入口，由服务端按真实字节判定 kind（image 可内联、file 只能下载）。
   upload: (file: File) => {
     checkSize(file);
@@ -162,6 +182,11 @@ export const api = {
   // 该成员所有设备上的登录会同时失效。
   resetUserPassword: (userId: string) =>
     request<{ user: User; password: string }>(`/users/${userId}/reset-password`, { method: 'POST' }),
+
+  // 停用 / 恢复成员账号。停用同样会让该成员所有设备上的登录立刻失效（连 SSE 长连接
+  // 一起断），但聊天记录、群成员身份、名字头像一律留着——停用不是删除。
+  setUserDisabled: (userId: string, disabled: boolean) =>
+    request<{ user: User }>(`/users/${userId}/${disabled ? 'disable' : 'enable'}`, { method: 'POST' }),
 
   aiSettings: () => request<AiSettings>('/ai/settings'),
   saveAiSettings: (patch: Record<string, unknown>) =>

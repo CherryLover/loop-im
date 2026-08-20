@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { CornerUpLeft } from 'lucide-react';
+import { CornerUpLeft, SmilePlus } from 'lucide-react';
 import { Avatar, AiBadge } from './Avatar';
 import { renderMarkdown } from '../lib/md';
 import { clock, dayLabel } from '../lib/format';
+import { REACTION_EMOJIS } from '../lib/reactions';
 import type { Message, ReadState } from '../lib/types';
 
 interface MessageListProps {
@@ -20,11 +21,16 @@ interface MessageListProps {
   showReaderCount?: boolean;
   /** 点了气泡上的「回复」：把这条消息交给输入框做引用。不传就不显示回复入口。 */
   onReply?: (message: Message) => void;
+  /**
+   * 点了某个表情：切换我自己在这条消息上的这个回应（点过就是取消）。
+   * 不传就只读——已有的回应照常显示，但点不动，也没有选表情的入口。
+   */
+  onReact?: (message: Message, emoji: string) => void;
 }
 
 export function MessageList({
   messages, meId, showSenderName, aiProviderLabel, typing, hasOlder, loadingOlder, onLoadOlder,
-  reads = [], showReaderCount = false, onReply,
+  reads = [], showReaderCount = false, onReply, onReact,
 }: MessageListProps) {
   /**
    * 自己那条消息的状态。有人的已读位置不早于这条消息的时间，就算被读过了。
@@ -92,6 +98,74 @@ export function MessageList({
       </button>
     );
   }
+
+  // 表情面板此刻开在哪条消息上（同一时刻只开一个）。
+  const [pickerFor, setPickerFor] = useState<string | null>(null);
+
+  /**
+   * 气泡下方那一行已有回应：一个表情一个按钮，显示计数，指上去能看到都有谁。
+   * 自己点过的那个高亮（aria-pressed 同时把状态说给读屏软件），再点一下就是取消。
+   * 在途的乐观气泡（pending）还没有服务端的 id，先不给回应入口。
+   */
+  function reactionRow(m: Message) {
+    const list = m.reactions || [];
+    if (m.pending || (!list.length && !onReact)) return null;
+    const picking = pickerFor === m.id;
+    return (
+      <div className="reactions">
+        {list.map((r) => (
+          <button
+            key={r.emoji}
+            type="button"
+            className={`reaction${r.mine ? ' reaction--mine' : ''}`}
+            title={`${r.users.map((u) => u.name).join('、')} 点了 ${r.emoji}`}
+            aria-label={`${r.emoji} ${r.count} 人${r.mine ? '，包括我，再点一次取消' : ''}`}
+            aria-pressed={r.mine}
+            disabled={!onReact}
+            onClick={() => onReact?.(m, r.emoji)}
+          >
+            <span aria-hidden="true">{r.emoji}</span>
+            <span className="reaction__n">{r.count}</span>
+          </button>
+        ))}
+
+        {onReact ? (
+          // Esc 关面板挂在外层：点开之后焦点还留在入口按钮上，挂在面板里收不到这个键。
+          <span
+            className="reactions__pick"
+            onKeyDown={(e) => { if (e.key === 'Escape') setPickerFor(null); }}
+          >
+            <button
+              type="button"
+              className={`reaction reaction--add${picking ? ' reaction--open' : ''}`}
+              aria-label="添加表情回应"
+              aria-expanded={picking}
+              onClick={() => setPickerFor(picking ? null : m.id)}
+            >
+              <SmilePlus size={13} />
+            </button>
+            {picking ? (
+              // 固定的一小组表情，不引表情选择器依赖。Esc 关掉，选完也关掉。
+              <div className="reactions__menu" role="menu">
+                {REACTION_EMOJIS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    role="menuitem"
+                    aria-label={`用 ${emoji} 回应`}
+                    onClick={() => { setPickerFor(null); onReact(m, emoji); }}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
   // 加载历史前记下「距底部多远」，插入后按这个距离还原，视线不会被顶走。
   const restoreFromBottom = useRef<number | null>(null);
   const lastId = messages.at(-1)?.id;
@@ -161,6 +235,7 @@ export function MessageList({
                     className={`md bubble bubble--me${m.pending ? ' bubble--sending' : ''}`}
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(m.body) }}
                   />
+                  {reactionRow(m)}
                   {/* 「已读」只依据对方真实上报的已读位置，不拿在线状态或送达去推断。 */}
                   <div className="msg__meta">
                     {statusOf(m)}
@@ -185,6 +260,7 @@ export function MessageList({
                     className={`md bubble ${m.isAI ? 'bubble--ai' : 'bubble--other'}`}
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(m.body) }}
                   />
+                  {reactionRow(m)}
                   <div className="msg__meta">
                     {clock(m.createdAt)}
                     {m.isAI ? ` · 由 ${aiProviderLabel} 生成` : ''}

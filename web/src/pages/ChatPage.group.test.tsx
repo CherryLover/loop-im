@@ -27,7 +27,8 @@ const room = (): Conversation => ({
 
 const view = (me: User, handlers: Record<string, ReturnType<typeof vi.fn>> = {}) => {
   const props = {
-    onAddMembers: vi.fn(), onRemoveMember: vi.fn(), onRenameGroup: vi.fn(), onLeaveGroup: vi.fn(), ...handlers,
+    onAddMembers: vi.fn(), onRemoveMember: vi.fn(), onRenameGroup: vi.fn(), onLeaveGroup: vi.fn(),
+    onTogglePin: vi.fn(), onToggleMute: vi.fn(), ...handlers,
   };
   render(
     <ChatPage

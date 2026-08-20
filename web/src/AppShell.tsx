@@ -13,9 +13,11 @@ import { ApiError, api } from './lib/api';
 import { initialOf } from './lib/md';
 import { unreadAriaLabel, unreadBadgeClass, unreadLabel } from './lib/format';
 import { mergeMessage, replyTargetOf } from './lib/messages';
+import { sortConversations } from './lib/conversations';
+import { notifyMessage, useDesktopNotify } from './lib/notify';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
-import type { AiPublicInfo, Conversation, Message, ReadState, User } from './lib/types';
+import type { AiPublicInfo, Conversation, Message, MessageReaction, ReadState, User } from './lib/types';
 
 type Tab = 'chat' | 'contacts' | 'ai';
 
@@ -87,9 +89,15 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   // send 里要就地查出被引用的那条消息来拼乐观气泡的引用块，同样用 ref，免得进 deps。
   const messagesRef = useRef<Record<string, Message[]>>({});
   messagesRef.current = messages;
+  // 改置顶/免打扰时要拿到改之前的那一项来做回滚，用 ref 镜像一份，免得进 deps。
+  const conversationsRef = useRef<Conversation[]>([]);
+  conversationsRef.current = conversations;
   const signingOutRef = useRef(false);
   // 退出或卸载时要把在途的列表 / 消息请求一起取消：它们的凭据马上就作废了。
   const abortRef = useRef<AbortController | null>(null);
+
+  // 桌面通知的开关与权限。权限只在用户于个人资料里主动打开时才申请，页面加载时不碰。
+  const notify = useDesktopNotify();
 
   const isAdmin = me.role === 'admin';
 
@@ -103,6 +111,16 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   const chatDetailVisible = tab === 'chat' && pageVisible && (desktopDetailShown || mobileDetailShown);
   const chatDetailVisibleRef = useRef(false);
   chatDetailVisibleRef.current = chatDetailVisible;
+
+  /**
+   * 「某个会话里的消息此刻正摆在用户眼前」——已读上报和桌面通知共用的唯一判据。
+   * 在 chatDetailVisible（issue #20 的定义）之上再加一条：露着的得正好是这个会话。
+   * 两件事共用它，同一条消息就不可能既被标成已读、又弹出一个通知来。
+   */
+  const messageVisibleNow = useCallback(
+    (conversationId: string) => chatDetailVisibleRef.current && conversationId === activeIdRef.current,
+    [],
+  );
 
   /**
    * 当前会话里「别人发的、此刻确实渲染出来了的」最后一条消息的时间——已读只能报到这里。
@@ -208,12 +226,11 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
 
   /**
    * 上报已读。打开会话、回到详情、窗口重新可见、详情里渲染出别人的新消息，都调这一个。
-   * 判据只有 chatDetailVisibleRef 一个（见上），此外再挡两道：
+   * 判据只有 messageVisibleNow 一个（见上），此外再挡两道：
    * 同一位置 1 秒内不重复上报；消息还没渲染出来时不报，等这一轮渲染完 effect 会补上。
    */
   const markRead = useCallback(async (conversationId: string) => {
-    if (!chatDetailVisibleRef.current || signingOutRef.current) return;
-    if (conversationId !== activeIdRef.current) return;
+    if (!messageVisibleNow(conversationId) || signingOutRef.current) return;
     const upTo = readTargetRef.current;
     if (upTo === null) return;
     const last = markedRef.current[conversationId];
@@ -230,7 +247,7 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
         console.warn('[loop-im] 上报已读失败', err);
       }
     }
-  }, []);
+  }, [messageVisibleNow]);
 
   /** 往前翻一页历史，接在当前列表前面。重复点击靠 loading 挡住。 */
   const loadOlder = useCallback(async (conversationId: string) => {
@@ -285,11 +302,53 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     }));
   }, []);
 
+  /**
+   * 把某条消息的回应换成服务端给的最新一份。整份替换而不是就地加减：计数、都有谁、
+   * 我点没点都由服务端算好，前端自己拼容易和别人同时点时算岔。
+   * 那个会话还没加载过（或消息已经翻页出去了）就什么也不做，等下次读消息时一起带回来。
+   */
+  const applyReactions = useCallback((conversationId: string, messageId: string, reactions: MessageReaction[]) => {
+    setMessages((all) => {
+      const list = all[conversationId];
+      if (!list?.some((m) => m.id === messageId)) return all;
+      return { ...all, [conversationId]: list.map((m) => (m.id === messageId ? { ...m, reactions } : m)) };
+    });
+  }, []);
+
+  /** 点一个表情：自己点过就是取消，没点过就是加上。两个接口都返回最新聚合。 */
+  const toggleReaction = useCallback(async (message: Message, emoji: string) => {
+    const { conversationId, id } = message;
+    const mine = (message.reactions || []).some((r) => r.emoji === emoji && r.mine);
+    try {
+      const res = mine
+        ? await api.removeReaction(conversationId, id, emoji)
+        : await api.addReaction(conversationId, id, emoji);
+      applyReactions(conversationId, id, res.reactions);
+    } catch (err) {
+      if (isAbortError(err) || (err instanceof ApiError && err.status === 401)) return;
+      setToast(err instanceof Error ? err.message : '操作失败');
+    }
+  }, [applyReactions]);
+
   // 退出一开始就断开实时连接：等待退出接口返回的这段时间里，再进来的事件只会引出
   // 一串注定 401 的请求（issue #21）。
   useStream(!signingOut, {
     onMessage: (message) => {
       appendMessage(message);
+      // 桌面通知和已读上报共用 messageVisibleNow：看得见就只标已读、不通知，
+      // 看不见（切走了标签页、在联系人页、手机端退回了会话列表）才弹通知。
+      // 自己发的、系统消息、免打扰会话、没开开关或没权限，都在 notifyMessage 里挡掉。
+      notifyMessage({
+        message,
+        conversation: conversations.find((c) => c.id === message.conversationId),
+        meId: me.id,
+        visible: messageVisibleNow(message.conversationId),
+        enabled: notify.enabled,
+        onClick: () => {
+          setTab('chat');
+          selectConversation(message.conversationId);
+        },
+      });
       background(refreshConversations(), '刷新会话列表');
       // 已读不在这里报：消息进了列表、而且详情确实在眼前时，上面那个 effect 会报。
       // 只按会话 id 判断的话，人在联系人页 / AI 页 / 手机会话列表也会被标成已读（issue #20）。
@@ -298,6 +357,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     onConversationCreated: () => background(refreshConversations(), '刷新会话列表'),
     onUserChanged: () => background(refreshUsers(), '刷新联系人'),
     onPresence: () => background(refreshUsers(), '刷新联系人'),
+    // 别人点了回应，我这边立刻跟着变。服务端按人各发一份，mine 已经是我这一份。
+    onReaction: (conversationId, messageId, reactions) => applyReactions(conversationId, messageId, reactions),
     onRead: (conversationId, userId, lastReadAt) => {
       setReads((all) => {
         const list = all[conversationId] || [];
@@ -362,6 +423,31 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     abortInFlight();
     onSignOut();
   }, [abortInFlight, onSignOut]);
+
+  /**
+   * 置顶 / 免打扰：先本地就位再落库。置顶会让这一项跳到列表顶部，等一轮往返再动
+   * 会有明显的迟滞感，所以就地改完顺手重排（口径与服务端同一份，见 lib/conversations.ts）。
+   * 失败就把这一项整个换回改之前的样子并提示——设置没存上却留着新样子，比不改更让人困惑。
+   *
+   * 注意这里只碰 pinned / muted 两个字段：unread、mentionsUnread 一律不动。
+   * 设为免打扰不代表这个会话被读过，未读该是多少还是多少。
+   */
+  const setConversationPrefs = useCallback(async (
+    conversationId: string,
+    patch: { pinned?: boolean; muted?: boolean },
+  ) => {
+    const before = conversationsRef.current.find((c) => c.id === conversationId);
+    setConversations((list) =>
+      sortConversations(list.map((c) => (c.id === conversationId ? { ...c, ...patch } : c))));
+    try {
+      await api.updateConversationPrefs(conversationId, patch);
+    } catch (err) {
+      if (before) {
+        setConversations((list) => sortConversations(list.map((c) => (c.id === conversationId ? before : c))));
+      }
+      setToast(err instanceof Error ? err.message : '设置失败');
+    }
+  }, []);
 
   /** 移除成员：可逆操作（还能再加回来），所以不额外弹确认，用提示条回执。 */
   const removeMember = useCallback(async (conversationId: string, userId: string, name: string) => {
@@ -473,11 +559,14 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             onSelect={selectConversation}
             onBack={() => setMobileChatOpen(false)}
             onSend={send}
+            onReact={(message, emoji) => void toggleReaction(message, emoji)}
             onCreateGroup={() => setModal('group')}
             onAddMembers={(id) => setManage({ mode: 'add', conversationId: id })}
             onRemoveMember={(id, userId, name) => void removeMember(id, userId, name)}
             onRenameGroup={(id) => setManage({ mode: 'rename', conversationId: id })}
             onLeaveGroup={(id) => setManage({ mode: 'leave', conversationId: id })}
+            onTogglePin={(id, pinned) => void setConversationPrefs(id, { pinned })}
+            onToggleMute={(id, muted) => void setConversationPrefs(id, { muted })}
           />
         ) : null}
 
@@ -489,6 +578,12 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             onChat={openDirect}
             onAddContact={() => setModal('contact')}
             onCreateGroup={() => setModal('group')}
+            onUserChanged={(message) => {
+              setToast(message);
+              // 停用会改变名单上的在线状态与「已停用」标记，也会影响会话里那个人的显示。
+              background(refreshUsers(), '刷新联系人');
+              background(refreshConversations(), '刷新会话列表');
+            }}
           />
         ) : null}
 
@@ -560,6 +655,9 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
           me={me}
           theme={theme}
           onToggleTheme={onToggleTheme}
+          notifyEnabled={notify.enabled}
+          notifyPermission={notify.permission}
+          onToggleNotify={() => void notify.toggle()}
           onClose={() => setModal(null)}
           onUpdated={(user) => {
             setMe(user);

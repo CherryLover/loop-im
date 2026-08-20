@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT,                             -- NULL for the AI account
   avatar_url    TEXT,
   auth_version  INTEGER NOT NULL DEFAULT 1,       -- 改密码时递增，之前签发的 token 立即失效
+  disabled_at   INTEGER,                          -- 账号停用时刻；NULL = 正常。停用不删数据
   last_seen_at  INTEGER NOT NULL DEFAULT 0,
   created_at    INTEGER NOT NULL
 );
@@ -32,10 +33,14 @@ CREATE TABLE IF NOT EXISTS conversations (
   created_at INTEGER NOT NULL
 );
 
+-- 「用户 × 会话」这一维。除了成员关系本身，每个人对每个会话的个人偏好也挂在这里：
+-- 置顶和免打扰都是「我」的设置，A 置顶某个群不会影响 B 看到的顺序。
 CREATE TABLE IF NOT EXISTS conversation_members (
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   joined_at       INTEGER NOT NULL,
+  pinned          INTEGER NOT NULL DEFAULT 0,     -- 我把它置顶了：只改会话列表的分组排序
+  muted           INTEGER NOT NULL DEFAULT 0,     -- 我把它设为免打扰：只改「怎么提醒」，不改未读计数
   PRIMARY KEY (conversation_id, user_id)
 );
 
@@ -69,6 +74,22 @@ CREATE TABLE IF NOT EXISTS attachments (
   url        TEXT NOT NULL,
   mime       TEXT,
   bytes      INTEGER,
+  created_at INTEGER NOT NULL
+);
+
+-- 消息表情回应：谁给哪条消息点了哪个表情。
+--
+-- 唯一性（同一个人 × 同一条消息 × 同一个表情只有一行）故意不写成 PRIMARY KEY，
+-- 而是 db.js 的 MIGRATIONS 里那条具名唯一索引：CREATE TABLE IF NOT EXISTS 对已经
+-- 存在的表什么也不做，约束写在建表语句里的话，老库永远补不上它。
+--
+-- emoji 存原样的 UTF-8 文本（👍 是 4 字节，❤️ 还带变体选择符），SQLite 的 TEXT 默认
+-- BINARY 比较，整串逐字节比，不会按字节截断；写入前由 reactions.js 的白名单归一。
+-- message_id 上的 ON DELETE CASCADE 保证消息删掉时回应跟着走，不留孤儿。
+CREATE TABLE IF NOT EXISTS message_reactions (
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji      TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
 

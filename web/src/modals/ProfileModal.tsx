@@ -1,17 +1,29 @@
 import { useRef, useState } from 'react';
-import { Moon, Sun } from 'lucide-react';
+import { Bell, BellOff, Moon, Sun } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { Avatar } from '../components/Avatar';
 import { api, MAX_UPLOAD_MB } from '../lib/api';
 import type { Theme } from '../lib/theme';
+import type { NotifyPermission } from '../lib/notify';
 import type { User } from '../lib/types';
 
+/** 权限被拒 / 浏览器不支持时给一句人话，而不是让开关默默失灵。 */
+const notifyHint = (permission: NotifyPermission, enabled: boolean) => {
+  if (permission === 'unsupported') return '当前浏览器不支持桌面通知。';
+  if (permission === 'denied') return '浏览器已拒绝本站的通知权限。需要到地址栏的站点设置里手动允许，这里才能再打开。';
+  if (enabled) return '切到别的标签页时，新消息会弹系统通知（免打扰的会话除外）。';
+  return '打开后会向浏览器申请一次通知权限。';
+};
+
 export function ProfileModal({
-  me, theme, onToggleTheme, onClose, onUpdated, onSignOut,
+  me, theme, onToggleTheme, notifyEnabled, notifyPermission, onToggleNotify, onClose, onUpdated, onSignOut,
 }: {
   me: User;
   theme: Theme;
   onToggleTheme: () => void;
+  notifyEnabled: boolean;
+  notifyPermission: NotifyPermission;
+  onToggleNotify: () => void;
   onClose: () => void;
   onUpdated: (user: User) => void;
   onSignOut: () => void;
@@ -96,6 +108,25 @@ export function ProfileModal({
           {theme === 'light' ? <Sun size={13} /> : <Moon size={13} />}
           {theme === 'light' ? '浅色' : '深色'}
         </button>
+      </div>
+
+      <div className="modal__section">
+        {/* 布局和「外观」那一行一样，但类名要分开：桌面通知不是外观设置，
+            而且 .appearance 下只该有主题那一个按钮（e2e 靠它定位）。 */}
+        <div className="setting-row">
+          <span className="setting-row__label">桌面通知</span>
+          <button
+            type="button"
+            className="btn btn--sm"
+            aria-pressed={notifyEnabled}
+            disabled={notifyPermission === 'unsupported' || notifyPermission === 'denied'}
+            onClick={onToggleNotify}
+          >
+            {notifyEnabled ? <Bell size={13} /> : <BellOff size={13} />}
+            {notifyEnabled ? '已开启' : '已关闭'}
+          </button>
+        </div>
+        <span className="section-label">{notifyHint(notifyPermission, notifyEnabled)}</span>
       </div>
 
       <div className="modal__section">

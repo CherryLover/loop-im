@@ -9,6 +9,11 @@ export interface User {
   avatarUrl: string | null;
   isAI: boolean;
   online: boolean;
+  /**
+   * 账号是否已停用（离职等原因）。停用不是删除：这个人照常留在名单、群成员和历史消息里，
+   * 只是不能再登录，也恒为离线。老接口没有这个字段时按未停用处理。
+   */
+  disabled?: boolean;
 }
 
 export interface GroupMember extends User {
@@ -25,6 +30,17 @@ export interface MessageQuote {
   preview: string;
   /** 原消息还在不在（被删掉、或不属于本会话时为 false）。 */
   available: boolean;
+}
+
+/**
+ * 一条消息上某一种表情的聚合结果，随消息一起下发（前端不必再发一轮请求）：
+ * 谁点了、一共几个、我点没点。mine 是相对当前登录者的。
+ */
+export interface MessageReaction {
+  emoji: string;
+  count: number;
+  users: { id: string; name: string }[];
+  mine: boolean;
 }
 
 export interface Message {
@@ -44,6 +60,8 @@ export interface Message {
   replyTo?: string | null;
   /** 被引用消息的摘要；没有引用时为 null。 */
   quote?: MessageQuote | null;
+  /** 已有的表情回应，按第一个人点的先后排。老接口没有这个字段时按「没有回应」处理。 */
+  reactions?: MessageReaction[];
 }
 
 /** 输入框上方那块「正在回复某条消息」的引用态。 */
@@ -85,6 +103,20 @@ export interface Conversation {
    * 普通未读里，这一档单独拎出来给徽标做区分。老接口没有这个字段时按 0 处理。
    */
   mentionsUnread?: number;
+  /**
+   * 我把这个会话置顶了没有。这是「我」的个人设置，同一个群对别人可以是未置顶的。
+   * 只影响会话列表排序：置顶的整体排在前面，组内仍按最后消息时间倒序。
+   * 老接口没有这个字段时按 false 处理。
+   */
+  pinned?: boolean;
+  /**
+   * 我把这个会话设为免打扰了没有。同样是「我」的个人设置。
+   *
+   * 语义只有一条：**不打扰，不是不计数**。消息照收、未读照算、@我 照样统计，
+   * muted 只影响「怎么提醒」——不弹桌面通知、会话列表徽标弱化。
+   * 千万别拿它去过滤 unread，那是「静音即已读」，是另一回事。
+   */
+  muted?: boolean;
 }
 
 /**

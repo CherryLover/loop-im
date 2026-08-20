@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { all, get, run, now, uid } from '../db.js';
-import { authenticate, publicUser, requireAdmin } from '../auth.js';
+import { authenticate, isDisabled, publicUser, requireAdmin } from '../auth.js';
 import { emitTo } from '../events.js';
 import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
+import { addReaction, groupReactions, normalizeEmoji, reactionRows, reactionsOf, removeReaction } from '../reactions.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -34,6 +35,33 @@ function requireMembership(req, res, id) {
 const lastReadAt = (conversationId, userId) =>
   get('SELECT last_read_at FROM conversation_reads WHERE conversation_id = ? AND user_id = ?',
     conversationId, userId)?.last_read_at || 0;
+
+// ---- 个人偏好：置顶 / 免打扰 -------------------------------------------
+// 两者都写在 conversation_members 里「我自己」那一行上，是「这个人在这个会话里」的
+// 设置，不是会话的全局属性：A 把某个群置顶或设为免打扰，B 那边一个字都不会变。
+//
+// 免打扰（muted）的语义只有一条，务必守住：**不打扰，不是不计数**。
+// 消息照收、未读照算、@我 照样统计，muted 只影响「怎么提醒」——不弹桌面通知、
+// 会话列表徽标弱化。所以 unreadSummary 那段 SQL 里绝不能掺进 muted：
+// 一旦掺进去就成了「静音即已读」，那是另一回事，也是这块最容易做错的地方。
+
+/** 我对这个会话的个人偏好。成员行不在（历史脏数据）时一律按默认值走。 */
+const prefsOf = (conversationId, userId) => {
+  const row = get(
+    'SELECT pinned, muted FROM conversation_members WHERE conversation_id = ? AND user_id = ?',
+    conversationId, userId,
+  );
+  return { pinned: !!row?.pinned, muted: !!row?.muted };
+};
+
+/**
+ * 会话列表的排序口径：置顶的整体排在前面，置顶组与非置顶组各自内部仍按
+ * 最后消息时间倒序（没有消息的算 0，排在本组最后）。置顶只改分组，不改组内规则。
+ * 导出供前端之外的测试直接验证，前端 lib/conversations.ts 是同一份口径的镜像。
+ */
+export const compareConversations = (a, b) =>
+  Number(!!b.pinned) - Number(!!a.pinned)
+  || (b.lastMessage?.createdAt || 0) - (a.lastMessage?.createdAt || 0);
 
 /**
  * messages.mentions 存的是 JSON 数组文本（如 `["u_1","all"]`），要在 SQL 里判断
@@ -126,7 +154,11 @@ export function quoteOf(replyToId, conversationId) {
   };
 }
 
-export function serializeMessage(row, sender) {
+/**
+ * reactions 由调用方批量查好再传进来（见 reactions.js 的 reactionsOf）：一页最多 200 条，
+ * 在这里现查就是 200 次往返。刚写入的消息还不可能有回应，默认空数组即可。
+ */
+export function serializeMessage(row, sender, reactions = []) {
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -140,6 +172,7 @@ export function serializeMessage(row, sender) {
     kind: row.kind || 'user',
     replyTo: row.reply_to || null,               // 被引用消息的 id，前端据此跳转
     quote: quoteOf(row.reply_to, row.conversation_id),
+    reactions,                                   // 每种表情：谁点了、多少个、我点没点
   };
 }
 
@@ -161,6 +194,17 @@ function insertSystemMessage(conversationId, actorId, body) {
   return row;
 }
 
+/**
+ * 建群 / 加成员时把停用的账号挡掉：他登不进来，拉进新群只会多一个永远不说话的人。
+ * 前端也不会把他列进可选名单（见 CreateGroupModal / ManageGroupModal），这里是后端那一道。
+ * 注意只挡「新拉进来」——已经在群里的停用成员照常留着，历史和成员名单都不动。
+ * 返回一句错误文案，没有停用的人则返回空字符串。
+ */
+function disabledAmong(rows) {
+  const blocked = rows.filter(isDisabled);
+  return blocked.length ? `${blocked.map((u) => u.name).join('、')} 的账号已停用，无法加入群聊` : '';
+}
+
 /** 群里能改成员和群名的人：建群者本人，或系统管理员。 */
 function canManageGroup(convo, user) {
   return convo.type === 'group' && (convo.created_by === user.id || user.role === 'admin');
@@ -174,6 +218,7 @@ function serializeConversation(convo, viewerId) {
   });
   const peer = convo.type !== 'group' ? members.find((m) => m.id !== viewerId) : null;
   const counts = unreadSummary(convo.id, viewerId);
+  const prefs = prefsOf(convo.id, viewerId);
   const last = get(
     'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
     convo.id,
@@ -190,6 +235,11 @@ function serializeConversation(convo, viewerId) {
       : null,
     unread: counts.unread,
     mentionsUnread: counts.mentions,      // 未读里「有人 @ 我」的条数，前端据此高亮
+    // 下面两个是「我」的个人设置，同一个会话对不同的人可以给出不同的值。
+    pinned: prefs.pinned,
+    // 注意 muted 与 unread 是两回事：muted 为 true 时 unread 照样在涨，
+    // 免打扰改的是提醒方式（不弹通知、徽标弱化），不是把未读抹掉。
+    muted: prefs.muted,
   };
 }
 
@@ -199,7 +249,8 @@ router.get('/', (req, res) => {
      WHERE cm.user_id = ?`,
     req.user.id,
   ).map((c) => serializeConversation(c, req.user.id));
-  rows.sort((a, b) => (b.lastMessage?.createdAt || 0) - (a.lastMessage?.createdAt || 0));
+  // 置顶的排在最前面，两组内部照旧按最后消息时间倒序（见 compareConversations）。
+  rows.sort(compareConversations);
   res.json({ conversations: rows });
 });
 
@@ -209,13 +260,44 @@ router.get('/:id', (req, res) => {
   res.json({ conversation: serializeConversation(convo, req.user.id) });
 });
 
+/** 只允许改这两项，也只有这两项会被拼进 SET 子句（白名单，不接受任意列名）。 */
+const PREF_COLUMNS = ['pinned', 'muted'];
+
+/**
+ * 置顶 / 取消置顶、免打扰 / 取消免打扰。两项可以分开改也可以一起改。
+ *
+ * 写的是 conversation_members 里「我自己」那一行 —— WHERE 同时带上 conversation_id
+ * 和 req.user.id，所以任何情况下都只会动到自己的设置，别人的行原封不动。
+ * 免打扰在这里只是存一个标记，未读计数那条路径完全不看它（免打扰 ≠ 不计未读）。
+ */
+router.patch('/:id/prefs', (req, res) => {
+  const convo = requireMembership(req, res, req.params.id);
+  if (!convo) return;
+
+  const body = req.body || {};
+  const changing = PREF_COLUMNS.filter((key) => body[key] !== undefined);
+  if (!changing.length) return res.status(400).json({ error: '请指定 pinned 或 muted' });
+  if (changing.some((key) => typeof body[key] !== 'boolean')) {
+    return res.status(400).json({ error: 'pinned 与 muted 只能是 true 或 false' });
+  }
+
+  run(
+    `UPDATE conversation_members SET ${changing.map((key) => `${key} = ?`).join(', ')}
+     WHERE conversation_id = ? AND user_id = ?`,
+    ...changing.map((key) => (body[key] ? 1 : 0)), convo.id, req.user.id,
+  );
+  res.json({ conversation: serializeConversation(convo, req.user.id) });
+});
+
 // 管理员建群，AI 助手默认加入。人数只要求至少 1 人，建完还可以随时增减。
 router.post('/group', requireAdmin, (req, res) => {
   const title = String(req.body?.title || '').trim() || '新群聊';
   const picked = [...new Set((req.body?.memberIds || []).filter((id) => id !== req.user.id && id !== AI_ID))];
   if (!picked.length) return res.status(400).json({ error: '请至少选择 1 名成员' });
-  const known = all(`SELECT id FROM users WHERE id IN (${picked.map(() => '?').join(',')})`, ...picked).map((r) => r.id);
+  const known = all(`SELECT * FROM users WHERE id IN (${picked.map(() => '?').join(',')})`, ...picked);
   if (known.length !== picked.length) return res.status(400).json({ error: '成员不存在' });
+  const blocked = disabledAmong(known);
+  if (blocked) return res.status(400).json({ error: blocked });
 
   const id = uid('c');
   const ts = now();
@@ -248,8 +330,12 @@ router.post('/direct', (req, res) => {
     req.user.id, peer.id, type,
   );
   if (existing) {
+    // 已经聊过就照常打开：停用不是删除，那段历史是双方共有的，任何时候都要能翻回来。
+    // 这一条故意排在下面的停用校验之前。
     return res.json({ conversation: serializeConversation(get('SELECT * FROM conversations WHERE id = ?', existing.id), req.user.id) });
   }
+  // 但不给「新开」一个跟停用账号的私聊：对方永远不会看见，凭空多一个空会话没有意义。
+  if (isDisabled(peer)) return res.status(400).json({ error: `${peer.name} 的账号已停用，无法发起新的会话` });
   const id = uid('c');
   const ts = now();
   run('INSERT INTO conversations (id, type, title, created_by, created_at) VALUES (?, ?, NULL, ?, ?)', id, type, req.user.id, ts);
@@ -273,6 +359,8 @@ router.post('/:id/members', (req, res) => {
 
   const rows = all(`SELECT * FROM users WHERE id IN (${picked.map(() => '?').join(',')})`, ...picked);
   if (rows.length !== picked.length) return res.status(400).json({ error: '成员不存在' });
+  const blocked = disabledAmong(rows);
+  if (blocked) return res.status(400).json({ error: blocked });
 
   const ts = now();
   for (const u of rows) {
@@ -380,8 +468,10 @@ router.get('/:id/messages', (req, res) => {
 
   const hasMore = rows.length > limit;
   const page = (hasMore ? rows.slice(0, limit) : rows).reverse();   // 返回给前端仍是由早到晚
+  // 整页的回应一次查完再分发给每条消息：逐条去查就是一页 200 次往返。
+  const reactions = reactionsOf(page.map((r) => r.id), req.user.id);
   res.json({
-    messages: page.map((r) => serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url })),
+    messages: page.map((r) => serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url }, reactions.get(r.id) || [])),
     hasMore,
     nextBefore: hasMore && page.length ? page[0].id : null,          // 下一页从本页最早那条往前翻
     reads: readsOf(convo.id, req.user.id),                          // 谁读到了哪一刻，前端据此标已读
@@ -510,4 +600,68 @@ router.post('/:id/messages', (req, res) => {
   // 末尾的 catch 只是多一道保险，避免任何 rejection 变成 Express 的 headers-sent 噪音。
   if (!aiVisible) return;
   runAiTurn({ convo, userId: req.user.id, audience, mentions, settings: s }).catch(reportAiTurnFailure);
+});
+
+// ---- 消息表情回应 -------------------------------------------------------
+// 给消息点 👍 ❤️ 之类，省掉一屏「收到」「好的」。加和取消是两个接口，各自幂等：
+// 重复点不会多出一行（唯一索引在库里），没点过时取消也不算错误。
+
+/**
+ * 加和取消共用的失败提示。「这条消息不存在」和「消息存在但不在我能看到的会话里」
+ * 必须是同一句话——分开说等于告诉调用方「这个 id 在别处是存在的」，接口就成了
+ * 消息存在性探针。引用回复那边（见上面的 POST /:id/messages）是同样的处理。
+ */
+export const REACTION_TARGET_MISSING = '消息不存在或无权访问';
+
+/**
+ * 定位要回应的那条消息。一条 SQL 同时管住两件事：消息属于 URL 上的这个会话，
+ * 而且我确实是这个会话的成员。任何一条不满足都走同一个 404，外面看不出差别。
+ */
+function reactionTarget(req, res) {
+  const row = get(
+    `SELECT m.id, m.conversation_id FROM messages m
+     JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = ?
+     WHERE m.id = ? AND m.conversation_id = ?`,
+    req.user.id, req.params.messageId, req.params.id,
+  );
+  if (!row) {
+    res.status(404).json({ error: REACTION_TARGET_MISSING });
+    return null;
+  }
+  return row;
+}
+
+/**
+ * 回应变了：广播给会话里每个人，并把「相对调用者」的那一份返回给他。
+ * mine 是相对观察者的，所以每人一份；但库只查一次，折叠在内存里做。
+ */
+function publishReactions(conversationId, messageId, viewerId) {
+  const rows = reactionRows([messageId]);
+  const viewOf = (userId) => groupReactions(rows, userId).get(messageId) || [];
+  for (const userId of memberIds(conversationId)) {
+    emitTo([userId], 'reaction', { conversationId, messageId, reactions: viewOf(userId) });
+  }
+  return viewOf(viewerId);
+}
+
+router.post('/:id/messages/:messageId/reactions', (req, res) => {
+  const target = reactionTarget(req, res);
+  if (!target) return;
+  // 白名单：客户端传什么就存什么的话，「表情」里能塞进一整段文本甚至 HTML。
+  const emoji = normalizeEmoji(req.body?.emoji);
+  if (!emoji) return res.status(400).json({ error: '不支持的表情' });
+
+  addReaction(target.id, req.user.id, emoji);    // 已经点过就什么也不发生，不是错误
+  res.json({ messageId: target.id, reactions: publishReactions(target.conversation_id, target.id, req.user.id) });
+});
+
+router.delete('/:id/messages/:messageId/reactions', (req, res) => {
+  const target = reactionTarget(req, res);
+  if (!target) return;
+  // 表情走查询串而不是请求体：DELETE 带 body 在中间层里不一定活得下来。
+  const emoji = normalizeEmoji(req.query.emoji);
+  if (!emoji) return res.status(400).json({ error: '不支持的表情' });
+
+  removeReaction(target.id, req.user.id, emoji); // 没点过就删 0 行，同样不是错误
+  res.json({ messageId: target.id, reactions: publishReactions(target.conversation_id, target.id, req.user.id) });
 });

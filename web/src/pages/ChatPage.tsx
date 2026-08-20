@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, LogOut, Pencil, Search, UserPlus, X } from 'lucide-react';
+import { Bell, BellOff, ChevronLeft, LogOut, Pencil, Pin, PinOff, Search, UserPlus, X } from 'lucide-react';
 import { Avatar, AiBadge } from '../components/Avatar';
 import { MessageList } from '../components/MessageList';
 import { Composer } from '../components/Composer';
@@ -33,11 +33,17 @@ interface ChatPageProps {
   onSelect: (id: string) => void;
   onBack: () => void;
   onSend: (body: string, replyTo?: string | null) => void | Promise<void>;
+  /** 切换我在某条消息上的某个表情回应（点过就是取消）。不传就只读，与 MessageList 同一约定。 */
+  onReact?: (message: Message, emoji: string) => void;
   onCreateGroup: () => void;
   onAddMembers: (conversationId: string) => void;
   onRemoveMember: (conversationId: string, userId: string, name: string) => void;
   onRenameGroup: (conversationId: string, currentTitle: string) => void;
   onLeaveGroup: (conversationId: string, title: string) => void;
+  /** 置顶 / 取消置顶。传的是「改成什么」，不是「当前是什么」。 */
+  onTogglePin: (conversationId: string, pinned: boolean) => void;
+  /** 免打扰 / 取消免打扰。同样传「改成什么」。 */
+  onToggleMute: (conversationId: string, muted: boolean) => void;
 }
 
 export function ChatPage(props: ChatPageProps) {
@@ -119,7 +125,9 @@ export function ChatPage(props: ChatPageProps) {
       ? `${active.members.length} 名成员 · Aria 常驻`
       : active.type === 'ai'
         ? `一对一 · ${aiProviderLabel}`
-        : peer?.online ? '在线' : '离线';
+        // 对方账号被停用后，这个私聊会话仍然留在列表里、历史照常可读（停用不是删除），
+        // 只是把状态如实说出来，免得有人对着一个永远不会回话的窗口干等。
+        : peer?.disabled ? '对方账号已停用' : peer?.online ? '在线' : '离线';
 
   return (
     <div className="chat">
@@ -149,38 +157,76 @@ export function ChatPage(props: ChatPageProps) {
           {filtered.map((c) => {
             const isAI = c.type === 'ai';
             const mentioned = c.mentionsUnread || 0;       // 未读里有多少条 @ 到我
+            // 置顶与免打扰是「我」的个人设置；老接口不带这两个字段时按关着处理。
+            const pinned = !!c.pinned;
+            const muted = !!c.muted;
             const groupPeer = c.type !== 'group' ? c.members.find((m) => m.id !== me.id) : null;
             return (
-              <button
-                key={c.id}
-                type="button"
-                className={`convo${c.id === activeId ? ' convo--on' : ''}`}
-                onClick={() => props.onSelect(c.id)}
-              >
-                <Avatar
-                  name={groupPeer?.name || c.title}
-                  url={groupPeer?.avatarUrl}
-                  isAI={isAI}
-                  size={34}
-                  radius={10}
-                  label={c.type === 'group' ? '群' : undefined}
-                />
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div className="convo__row">
-                    <div className="convo__title">{c.title}</div>
-                    {isAI ? <AiBadge /> : null}
-                    <span className="convo__time">{c.lastMessage ? listTime(c.lastMessage.createdAt) : ''}</span>
-                    {c.unread > 0 ? (
-                      <span className={unreadBadgeClass(mentioned)} aria-label={unreadAriaLabel(c.unread, mentioned)}>
-                        {/* 颜色之外再给一个记号：只靠高亮色区分，色觉障碍的人是看不出来的 */}
-                        {mentioned > 0 ? <span className="badge__at" aria-hidden="true">@</span> : null}
-                        {unreadLabel(c.unread)}
-                      </span>
-                    ) : null}
+              // 会话本身是一个按钮，置顶/免打扰是另外两个按钮，按钮不能套按钮，
+              // 所以在外面包一层容器，让操作区跟会话行并排而不是嵌进去。
+              <div key={c.id} className={`convo-item${pinned ? ' convo-item--pinned' : ''}`}>
+                <button
+                  type="button"
+                  className={`convo${c.id === activeId ? ' convo--on' : ''}`}
+                  onClick={() => props.onSelect(c.id)}
+                >
+                  <Avatar
+                    name={groupPeer?.name || c.title}
+                    url={groupPeer?.avatarUrl}
+                    isAI={isAI}
+                    size={34}
+                    radius={10}
+                    label={c.type === 'group' ? '群' : undefined}
+                  />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className="convo__row">
+                      {/* 置顶和免打扰各有一个明确的记号，不用点开也不用悬浮就能看出来 */}
+                      {pinned ? <Pin size={11} className="convo__flag" aria-label="已置顶" /> : null}
+                      <div className="convo__title">{c.title}</div>
+                      {isAI ? <AiBadge /> : null}
+                      {/* 停用的人的私聊照常留在列表里，只是打个标记：会话是双方共有的历史，
+                          藏起来只会让人以为聊天记录没了。 */}
+                      {groupPeer?.disabled ? <span className="tag-off">已停用</span> : null}
+                      {muted ? <BellOff size={11} className="convo__flag" aria-label="已免打扰" /> : null}
+                      <span className="convo__time">{c.lastMessage ? listTime(c.lastMessage.createdAt) : ''}</span>
+                      {/* 免打扰只是让徽标弱化，未读数照显、照算 —— 免打扰不是不计未读 */}
+                      {c.unread > 0 ? (
+                        <span
+                          className={unreadBadgeClass(mentioned, muted)}
+                          aria-label={unreadAriaLabel(c.unread, mentioned)}
+                        >
+                          {/* 颜色之外再给一个记号：只靠高亮色区分，色觉障碍的人是看不出来的 */}
+                          {mentioned > 0 ? <span className="badge__at" aria-hidden="true">@</span> : null}
+                          {unreadLabel(c.unread)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="convo__preview">{c.lastMessage?.preview || '还没有消息'}</div>
                   </div>
-                  <div className="convo__preview">{c.lastMessage?.preview || '还没有消息'}</div>
+                </button>
+                <div className="convo__actions">
+                  <button
+                    type="button"
+                    className={`convo__action${pinned ? ' convo__action--on' : ''}`}
+                    aria-pressed={pinned}
+                    title={pinned ? `取消置顶「${c.title}」` : `置顶「${c.title}」`}
+                    aria-label={pinned ? `取消置顶「${c.title}」` : `置顶「${c.title}」`}
+                    onClick={() => props.onTogglePin(c.id, !pinned)}
+                  >
+                    {pinned ? <PinOff size={12} /> : <Pin size={12} />}
+                  </button>
+                  <button
+                    type="button"
+                    className={`convo__action${muted ? ' convo__action--on' : ''}`}
+                    aria-pressed={muted}
+                    title={muted ? `取消免打扰「${c.title}」` : `免打扰「${c.title}」`}
+                    aria-label={muted ? `取消免打扰「${c.title}」` : `免打扰「${c.title}」`}
+                    onClick={() => props.onToggleMute(c.id, !muted)}
+                  >
+                    {muted ? <Bell size={12} /> : <BellOff size={12} />}
+                  </button>
                 </div>
-              </button>
+              </div>
             );
           })}
 
@@ -260,6 +306,7 @@ export function ChatPage(props: ChatPageProps) {
               loadingOlder={props.loadingOlder}
               onLoadOlder={props.onLoadOlder}
               onReply={(m) => setReplyRequest(replyTargetOf(m))}
+              onReact={props.onReact}
             />
 
             {active.type === 'group' && silentRead ? (
@@ -296,6 +343,8 @@ export function ChatPage(props: ChatPageProps) {
                       />
                       <span className="members__name">{m.name}</span>
                       {m.isAI ? <AiBadge /> : null}
+                      {/* 停用的成员不会被踢出群，名字头像照常，只是标出来 */}
+                      {m.disabled ? <span className="tag-off">已停用</span> : null}
                       <span className="members__role">{m.roleInGroup}</span>
                       {/* 群主不能被移除（他要走得自己退群），自己也不从这里移除 */}
                       {canManage && m.id !== active.createdBy && m.id !== me.id ? (

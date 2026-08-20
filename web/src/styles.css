@@ -139,6 +139,8 @@ input, textarea { font-family: inherit; }
   gap: 1px; padding: 0 6px;
 }
 .badge__at { font-size: 9.5px; font-weight: 800; opacity: .9; }
+/* 免打扰：数字照显（免打扰不是不计未读），只是褪成中性色，不再往眼睛里跳。 */
+.badge--muted { background: var(--surface3); color: var(--muted); box-shadow: none; }
 
 .nav-btn__icon { position: relative; display: inline-flex; }
 .nav-btn__icon .badge {
@@ -155,6 +157,14 @@ input, textarea { font-family: inherit; }
 .tag-ai {
   font-size: 10px; font-weight: 700; color: #fff; background: var(--accent);
   border-radius: 4px; padding: 0 4px; flex: none; line-height: 16px;
+}
+
+/* 「已停用」标记。跟 .tag-ai 同一个形状，但用中性的边框灰而不是强调色：
+   它是一个状态说明，不是需要被吸引注意的东西。 */
+.tag-off {
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  border: 1px solid var(--border2); border-radius: 4px;
+  padding: 0 4px; flex: none; line-height: 14px;
 }
 
 .chip {
@@ -236,13 +246,37 @@ input, textarea { font-family: inherit; }
 .convos__title { font-size: 15px; font-weight: 700; }
 .convos__search { padding: 0 14px 10px; }
 .convos__list { flex: 1; overflow-y: auto; padding: 0 8px 12px; display: flex; flex-direction: column; gap: 2px; }
+/* 会话行本身是个按钮，置顶/免打扰是另外两个按钮，按钮不能套按钮：
+   外层容器负责定位，操作区浮在会话行右下角。 */
+.convo-item { position: relative; display: flex; }
 .convo {
   text-align: left; border: none; background: transparent; border-radius: 11px; padding: 10px;
   cursor: pointer; display: flex; gap: 10px; align-items: flex-start; color: var(--text);
+  flex: 1; min-width: 0;
 }
 .convo:hover { background: var(--surface2); }
 .convo--on { background: var(--surface2); }
+/* 置顶的会话整块微微抬起来，扫一眼就能看出上面这几条是被钉住的。 */
+.convo-item--pinned .convo { background: var(--surface2); }
+.convo-item--pinned .convo--on { background: var(--surface3); }
 .convo__row { display: flex; align-items: center; gap: 6px; }
+/* 标题旁的置顶 / 免打扰记号，不悬浮也能看见 */
+.convo__flag { color: var(--faint); flex: none; }
+
+/* 操作区浮在会话行右下角。故意不做成 hover 才出现：手机上没有悬浮态，
+   藏起来就等于点不到。平时用最浅的一档颜色，悬浮/聚焦时加深。 */
+.convo__actions { position: absolute; right: 8px; bottom: 7px; display: flex; gap: 2px; }
+.convo__action {
+  border: none; background: transparent; color: var(--faint); cursor: pointer;
+  width: 20px; height: 20px; border-radius: 6px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.convo-item:hover .convo__action, .convo__action:focus-visible { color: var(--muted); }
+.convo__action:hover { background: var(--surface3); color: var(--text); }
+/* 已经开着的那一项用强调色，不悬浮也能看出「这个会话我设过」。 */
+.convo__action--on, .convo-item:hover .convo__action--on { color: var(--accent); }
+/* 给操作区让出位置，摘要不要从按钮底下穿过去。 */
+.convo-item .convo__preview { padding-right: 46px; }
 .convo__title { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .convo__time { margin-left: auto; font-size: 11px; color: var(--faint); flex: none; }
 .convo__preview {
@@ -385,6 +419,35 @@ input, textarea { font-family: inherit; }
 }
 .msg--me:hover .msg__reply, .msg--other:hover .msg__reply, .msg__reply:focus-visible { opacity: 1; }
 .msg__reply:hover { color: var(--accent-text); }
+
+/* 气泡下方的表情回应：已有的一排 + 末尾的「加一个」入口。 */
+.reactions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.reaction {
+  display: inline-flex; align-items: center; gap: 3px; cursor: pointer;
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 99px;
+  padding: 1px 7px; font-size: 12px; line-height: 1.7; color: var(--muted);
+}
+.reaction:hover:not(:disabled) { border-color: var(--border2); }
+.reaction:disabled { cursor: default; }
+.reaction__n { font-size: 10.5px; font-variant-numeric: tabular-nums; }
+/* 自己点过的那个：颜色之外还有 aria-pressed，读屏软件也听得出来。 */
+.reaction--mine { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-text); }
+/* 「加一个」平时淡出，指上去或键盘聚焦时才显形，与气泡上的「回复」同一套做法。 */
+.reaction--add { padding: 1px 5px; color: var(--faint); opacity: 0; transition: opacity .12s ease-out; }
+.msg--me:hover .reaction--add, .msg--other:hover .reaction--add,
+.reaction--add:focus-visible, .reaction--open { opacity: 1; }
+.reactions__pick { position: relative; display: inline-flex; }
+.reactions__menu {
+  position: absolute; bottom: 100%; left: 0; margin-bottom: 6px; z-index: 5;
+  display: flex; gap: 2px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border2); border-radius: 12px;
+  box-shadow: var(--shadow); animation: pop .14s ease-out;
+}
+.reactions__menu button {
+  border: none; background: transparent; cursor: pointer; border-radius: 8px;
+  padding: 3px 5px; font-size: 15px; line-height: 1.2;
+}
+.reactions__menu button:hover { background: var(--surface2); }
 
 /* 从引用块跳过去之后，把落点消息短暂点亮一下。 */
 .msg--flash { animation: quote-flash 1.4s ease-out; border-radius: 12px; }
@@ -546,8 +609,8 @@ input, textarea { font-family: inherit; }
 .modal__section { border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
 .modal__error { font-size: 12px; color: var(--anx); }
 .modal__ok { font-size: 12px; color: var(--calm); }
-.appearance { display: flex; align-items: center; gap: 10px; }
-.appearance__label { font-size: 12px; color: var(--muted); }
+.appearance, .setting-row { display: flex; align-items: center; gap: 10px; }
+.appearance__label, .setting-row__label { font-size: 12px; color: var(--muted); }
 
 .toast {
   position: fixed; top: 14px; right: 14px; max-width: calc(100vw - 28px); background: var(--surface);

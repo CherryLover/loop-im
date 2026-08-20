@@ -41,6 +41,9 @@ DEMO_PASSWORD=只在本地用的密码
 **联系人**
 - 列出系统内全部成员，无需加好友，右侧「去聊天」直接开会话。
 - 管理员额外可见「添加联系人」（开通新成员账号，返回初始密码）与「建群」；普通成员只能去聊天。
+- 管理员可以**停用 / 恢复**成员账号（员工离职）。停用**不是删除**：该成员所有设备上的登录
+  立刻失效（含已建立的 SSE 长连接），无法再登录、发消息，也不出现在建群 / 加成员的可选名单里；
+  但他发过的消息、群成员身份、头像和名字照常显示，随时可以恢复。不能停用自己，也不能停用 Aria。
 
 **未读与已读**
 - 会话列表显示未读条数，侧栏与底部标签栏的「会话」上显示总未读（超过 99 显示 `99+`）。
@@ -200,6 +203,8 @@ chats/                 设计过程的对话记录
 | POST | `/api/auth/me/password` | 改密码 |
 | GET | `/api/users` | 全部成员 |
 | POST | `/api/users` | 管理员开通新成员 |
+| POST | `/api/users/:id/disable` | 管理员停用账号（所有设备立刻失效，聊天记录保留） |
+| POST | `/api/users/:id/enable` | 管理员恢复账号 |
 | GET | `/api/conversations` | 我的会话列表 |
 | POST | `/api/conversations/group` | 管理员建群（至少 1 人，AI 默认加入） |
 | POST | `/api/conversations/direct` | 打开/创建一对一（含 AI 私聊） |
@@ -208,6 +213,7 @@ chats/                 设计过程的对话记录
 | POST | `/api/conversations/:id/leave` | 退出群聊 |
 | GET/POST | `/api/conversations/:id/messages` | 读取（游标分页）/ 发送消息 |
 | POST | `/api/conversations/:id/read` | 上报已读位置 |
+| PATCH | `/api/conversations/:id/prefs` | 置顶 / 免打扰（个人设置，只改自己那一份） |
 | GET | `/api/conversations/:id/ai-context` | 群内 AI 上下文摘要 |
 | POST | `/api/uploads` | 附件上传（图片按真实字节嗅探，其余作为只能下载的文件） |
 | GET | `/api/stream` | SSE：新消息 / AI 输入中 / 在线状态 / 已读回执 |

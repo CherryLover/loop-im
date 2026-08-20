@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { getToken } from './api';
-import type { Message, User } from './types';
+import type { Message, MessageReaction, User } from './types';
 
 export interface StreamHandlers {
   onMessage?: (message: Message) => void;
@@ -9,6 +9,8 @@ export interface StreamHandlers {
   onUserChanged?: (user: User) => void;
   onPresence?: (userId: string, online: boolean) => void;
   onRead?: (conversationId: string, userId: string, lastReadAt: number) => void;
+  /** 别人给某条消息点了/取消了回应。服务端按人各发一份，reactions 里的 mine 已经是我这一份。 */
+  onReaction?: (conversationId: string, messageId: string, reactions: MessageReaction[]) => void;
 }
 
 /** Server-sent events: new messages, AI typing, presence and roster changes. */
@@ -40,6 +42,11 @@ export function useStream(enabled: boolean, handlers: StreamHandlers) {
     es.addEventListener('read', (e) => {
       const d = json<{ conversationId: string; userId: string; lastReadAt: number }>(e);
       ref.current.onRead?.(d.conversationId, d.userId, d.lastReadAt);
+    });
+
+    es.addEventListener('reaction', (e) => {
+      const d = json<{ conversationId: string; messageId: string; reactions: MessageReaction[] }>(e);
+      ref.current.onReaction?.(d.conversationId, d.messageId, d.reactions);
     });
 
     return () => es.close();

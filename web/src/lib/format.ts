@@ -55,5 +55,12 @@ export const unreadLabel = (n: number) => (n > 99 ? '99+' : String(n));
 export const unreadAriaLabel = (unread: number, mentions = 0) =>
   (mentions > 0 ? `${unread} 条未读，其中 ${mentions} 条 @ 我` : `${unread} 条未读`);
 
-/** 有 @ 我的未读时徽标换一套样式，视觉上从一堆普通未读里跳出来。 */
-export const unreadBadgeClass = (mentions = 0) => (mentions > 0 ? 'badge badge--mention' : 'badge');
+/**
+ * 有 @ 我的未读时徽标换一套样式，视觉上从一堆普通未读里跳出来。
+ *
+ * 免打扰的会话反过来走弱化那一档：未读照算、徽标照显（免打扰不是不计未读，
+ * 数字一个都不少），只是不再抢眼，@我 也不再升级成告警色 —— 用户明确说了
+ * 「这个会话别吵我」，那就连 @ 一起安静下来。
+ */
+export const unreadBadgeClass = (mentions = 0, muted = false) =>
+  (muted ? 'badge badge--muted' : mentions > 0 ? 'badge badge--mention' : 'badge');

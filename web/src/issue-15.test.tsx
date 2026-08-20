@@ -61,6 +61,7 @@ const composer = () => render(<Composer conversation={group} meId="u_lin" onSend
 const profile = () => render(
   <ProfileModal
     me={me} theme="light" onToggleTheme={vi.fn()} onClose={vi.fn()}
+    notifyEnabled={false} notifyPermission="unsupported" onToggleNotify={vi.fn()}
     onUpdated={vi.fn()} onSignOut={vi.fn()}
   />,
 );

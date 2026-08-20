@@ -46,6 +46,8 @@ const view = (conversations: Conversation[]) =>
       onRemoveMember={vi.fn()}
       onRenameGroup={vi.fn()}
       onLeaveGroup={vi.fn()}
+      onTogglePin={vi.fn()}
+      onToggleMute={vi.fn()}
     />,
   );
 
