@@ -19,7 +19,7 @@ interface ChatPageProps {
   showChatOnMobile: boolean;
   onSelect: (id: string) => void;
   onBack: () => void;
-  onSend: (body: string) => void;
+  onSend: (body: string) => void | Promise<void>;
   onCreateGroup: () => void;
 }
 

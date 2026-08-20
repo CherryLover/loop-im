@@ -135,6 +135,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
         [conversationId]: (all[conversationId] || []).filter((m) => m.id !== temp.id),
       }));
       setToast(err instanceof Error ? err.message : '发送失败');
+      // 抛回给 Composer：它据此把用户打的字还原到输入框，不能在这里吞掉。
+      throw err;
     }
   }, [activeId, me, refreshConversations]);
 
