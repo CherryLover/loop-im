@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { all, get, run, now } from '../db.js';
-import { authenticate, generatePassword, hashPassword, publicUser, requireAdmin, resetPasswordFor } from '../auth.js';
-import { emitAll } from '../events.js';
+import {
+  authenticate, disableUser, enableUser, generatePassword, hashPassword, publicUser, requireAdmin,
+  resetPasswordFor,
+} from '../auth.js';
+import { disconnect, emitAll } from '../events.js';
 import { uid } from '../db.js';
 
 export const router = Router();
@@ -53,4 +56,57 @@ router.post('/:id/reset-password', requireAdmin, (req, res) => {
   run('UPDATE users SET last_seen_at = 0 WHERE id = ?', target.id);
   emitAll('presence', { userId: target.id, online: false });
   res.json({ user: publicUser(get('SELECT * FROM users WHERE id = ?', target.id)), password });
+});
+
+/**
+ * 停用 / 恢复的共同前置校验。三条边界都在这里，两个接口共用一套说法。
+ * 返回目标行；已经响应过就返回 null。
+ */
+function targetForStatusChange(req, res) {
+  const target = get('SELECT * FROM users WHERE id = ?', req.params.id);
+  if (!target) {
+    res.status(404).json({ error: '成员不存在' });
+    return null;
+  }
+  // 管理员把自己停了就没人能再恢复了——这是个单向的死锁，必须在这里挡住。
+  if (target.id === req.user.id) {
+    res.status(400).json({ error: '不能停用自己的账号' });
+    return null;
+  }
+  // Aria 本来就没有密码、登不了录，停用对它没有意义，只会让它从群里消失。
+  if (target.role === 'ai') {
+    res.status(400).json({ error: 'AI 账号不能停用' });
+    return null;
+  }
+  return target;
+}
+
+/**
+ * 停用账号：员工离职后不能再登录，但聊天记录、群成员身份、头像和名字全部留着。
+ * 用的就是「管理员重置密码」那套立刻生效的手法（auth_version +1 且清空 sessions，
+ * 见 auth.js 的 disableUser），所以他所有设备上的登录当场失效，不用等 token 过期。
+ */
+router.post('/:id/disable', requireAdmin, (req, res) => {
+  const target = targetForStatusChange(req, res);
+  if (!target) return;
+
+  disableUser(target.id);
+  // 已经建好的 SSE 连接不会再过一次 authenticate，得显式掐掉（见 events.js 的 disconnect）。
+  disconnect(target.id);
+  const user = publicUser(get('SELECT * FROM users WHERE id = ?', target.id));
+  // 在线点当场灭掉；名单上的「已停用」标记也要立刻铺到所有人的界面上。
+  emitAll('presence', { userId: target.id, online: false });
+  emitAll('user-updated', { user });
+  res.json({ user });
+});
+
+/** 恢复账号：抹掉停用标记，其余一概不动，本人用原密码重新登录即可。 */
+router.post('/:id/enable', requireAdmin, (req, res) => {
+  const target = targetForStatusChange(req, res);
+  if (!target) return;
+
+  enableUser(target.id);
+  const user = publicUser(get('SELECT * FROM users WHERE id = ?', target.id));
+  emitAll('user-updated', { user });
+  res.json({ user });
 });

@@ -25,7 +25,9 @@ export function ManageGroupModal({
   const [busy, setBusy] = useState(false);
 
   const inGroup = new Set(conversation.members.map((m) => m.id));
-  const pickable = users.filter((u) => !inGroup.has(u.id));
+  // 停用的账号不进可选名单（服务端也会拒）。注意只是「不能再拉进来」——
+  // 已经在群里的停用成员照常留在成员列表里，历史一条不动。
+  const pickable = users.filter((u) => !inGroup.has(u.id) && !u.disabled);
 
   async function run() {
     setBusy(true);

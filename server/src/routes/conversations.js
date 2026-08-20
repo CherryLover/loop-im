@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { all, get, run, now, uid } from '../db.js';
-import { authenticate, publicUser, requireAdmin } from '../auth.js';
+import { authenticate, isDisabled, publicUser, requireAdmin } from '../auth.js';
 import { emitTo } from '../events.js';
 import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
 import { decrypt } from '../secret-box.js';
@@ -194,6 +194,17 @@ function insertSystemMessage(conversationId, actorId, body) {
   return row;
 }
 
+/**
+ * 建群 / 加成员时把停用的账号挡掉：他登不进来，拉进新群只会多一个永远不说话的人。
+ * 前端也不会把他列进可选名单（见 CreateGroupModal / ManageGroupModal），这里是后端那一道。
+ * 注意只挡「新拉进来」——已经在群里的停用成员照常留着，历史和成员名单都不动。
+ * 返回一句错误文案，没有停用的人则返回空字符串。
+ */
+function disabledAmong(rows) {
+  const blocked = rows.filter(isDisabled);
+  return blocked.length ? `${blocked.map((u) => u.name).join('、')} 的账号已停用，无法加入群聊` : '';
+}
+
 /** 群里能改成员和群名的人：建群者本人，或系统管理员。 */
 function canManageGroup(convo, user) {
   return convo.type === 'group' && (convo.created_by === user.id || user.role === 'admin');
@@ -283,8 +294,10 @@ router.post('/group', requireAdmin, (req, res) => {
   const title = String(req.body?.title || '').trim() || '新群聊';
   const picked = [...new Set((req.body?.memberIds || []).filter((id) => id !== req.user.id && id !== AI_ID))];
   if (!picked.length) return res.status(400).json({ error: '请至少选择 1 名成员' });
-  const known = all(`SELECT id FROM users WHERE id IN (${picked.map(() => '?').join(',')})`, ...picked).map((r) => r.id);
+  const known = all(`SELECT * FROM users WHERE id IN (${picked.map(() => '?').join(',')})`, ...picked);
   if (known.length !== picked.length) return res.status(400).json({ error: '成员不存在' });
+  const blocked = disabledAmong(known);
+  if (blocked) return res.status(400).json({ error: blocked });
 
   const id = uid('c');
   const ts = now();
@@ -317,8 +330,12 @@ router.post('/direct', (req, res) => {
     req.user.id, peer.id, type,
   );
   if (existing) {
+    // 已经聊过就照常打开：停用不是删除，那段历史是双方共有的，任何时候都要能翻回来。
+    // 这一条故意排在下面的停用校验之前。
     return res.json({ conversation: serializeConversation(get('SELECT * FROM conversations WHERE id = ?', existing.id), req.user.id) });
   }
+  // 但不给「新开」一个跟停用账号的私聊：对方永远不会看见，凭空多一个空会话没有意义。
+  if (isDisabled(peer)) return res.status(400).json({ error: `${peer.name} 的账号已停用，无法发起新的会话` });
   const id = uid('c');
   const ts = now();
   run('INSERT INTO conversations (id, type, title, created_by, created_at) VALUES (?, ?, NULL, ?, ?)', id, type, req.user.id, ts);
@@ -342,6 +359,8 @@ router.post('/:id/members', (req, res) => {
 
   const rows = all(`SELECT * FROM users WHERE id IN (${picked.map(() => '?').join(',')})`, ...picked);
   if (rows.length !== picked.length) return res.status(400).json({ error: '成员不存在' });
+  const blocked = disabledAmong(rows);
+  if (blocked) return res.status(400).json({ error: blocked });
 
   const ts = now();
   for (const u of rows) {

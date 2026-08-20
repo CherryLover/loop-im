@@ -159,6 +159,14 @@ input, textarea { font-family: inherit; }
   border-radius: 4px; padding: 0 4px; flex: none; line-height: 16px;
 }
 
+/* 「已停用」标记。跟 .tag-ai 同一个形状，但用中性的边框灰而不是强调色：
+   它是一个状态说明，不是需要被吸引注意的东西。 */
+.tag-off {
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  border: 1px solid var(--border2); border-radius: 4px;
+  padding: 0 4px; flex: none; line-height: 14px;
+}
+
 .chip {
   background: var(--surface2); border: 1px solid var(--border);
   border-radius: 7px; padding: 2px 7px; font-size: 11.5px;

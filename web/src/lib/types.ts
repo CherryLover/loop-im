@@ -9,6 +9,11 @@ export interface User {
   avatarUrl: string | null;
   isAI: boolean;
   online: boolean;
+  /**
+   * 账号是否已停用（离职等原因）。停用不是删除：这个人照常留在名单、群成员和历史消息里，
+   * 只是不能再登录，也恒为离线。老接口没有这个字段时按未停用处理。
+   */
+  disabled?: boolean;
 }
 
 export interface GroupMember extends User {

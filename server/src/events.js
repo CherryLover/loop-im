@@ -19,6 +19,19 @@ export function subscribe(userId, res) {
   });
 }
 
+/**
+ * 掐断某个人当前所有的实时连接。
+ *
+ * authenticate 只在 SSE 建连的那一刻跑一次，之后这条连接就一直开着写事件；
+ * 停用一个正在线上的人，不主动断开的话他那边还会继续收到消息，一直到自己关页面。
+ * 所以停用时要显式调这个——挡住新连接（authenticate）+ 关掉老连接（这里），
+ * 两件事都做了，「立刻失效」才是真的立刻。
+ */
+export function disconnect(userId) {
+  for (const res of clients.get(userId) || []) res.end();
+  clients.delete(userId);
+}
+
 export function emitTo(userIds, event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const id of new Set(userIds)) {

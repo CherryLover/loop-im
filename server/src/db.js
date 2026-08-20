@@ -35,6 +35,11 @@ const MIGRATIONS = [
   // 是因为 CREATE TABLE IF NOT EXISTS 对已经建好的表什么也不做——那样老库补不上它。
   [null, null, `CREATE UNIQUE INDEX IF NOT EXISTS idx_message_reactions_unique
                 ON message_reactions(message_id, user_id, emoji)`],
+  // users.disabled_at：账号被停用的时刻，NULL 表示正常。停用不是删除，users 那一行、
+  // 他发过的消息、群成员身份全部原样留着，只是不能再登录、也不能再用旧凭据。
+  // 存时间戳而不是 0/1：出了事要能答「什么时候停的」，而这一列本来就要写一次。
+  // 历史账号一律为 NULL（正常），所以不需要回填。
+  ['users', 'disabled_at', 'ALTER TABLE users ADD COLUMN disabled_at INTEGER'],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
   // column 为 null：这条迁移不是补列（索引、新表之类），DDL 自己保证幂等，直接跑。
