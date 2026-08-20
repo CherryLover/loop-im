@@ -23,6 +23,10 @@ const group: Conversation = {
   peerId: null,
   members: [member('u_lin', '林悦'), member('u_chen', '陈子航'), member('ai', 'Aria', true)],
   lastMessage: null,
+  // 这两个字段是 #14 引入的必填项。本文件来自并行开发的 #17，写的时候 Conversation
+  // 还没有它们 —— 两个分支各自都能过，合到一起才发现类型对不上。
+  createdBy: 'u_lin',
+  unread: 0,
 };
 
 const me: User = member('u_lin', '林悦');
