@@ -5,7 +5,8 @@ import { MessageList } from '../components/MessageList';
 import { Composer } from '../components/Composer';
 import { api } from '../lib/api';
 import { listTime, unreadAriaLabel, unreadBadgeClass, unreadLabel } from '../lib/format';
-import type { Conversation, Message, MessageSearchResult, ReadState, User } from '../lib/types';
+import { replyTargetOf } from '../lib/messages';
+import type { Conversation, Message, MessageSearchResult, ReadState, ReplyTarget, User } from '../lib/types';
 
 /** 搜索框里输入多久没动就发请求：每敲一个字都打一次服务端太浪费。 */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -31,7 +32,7 @@ interface ChatPageProps {
   onLoadOlder: () => void;
   onSelect: (id: string) => void;
   onBack: () => void;
-  onSend: (body: string) => void | Promise<void>;
+  onSend: (body: string, replyTo?: string | null) => void | Promise<void>;
   onCreateGroup: () => void;
   onAddMembers: (conversationId: string) => void;
   onRemoveMember: (conversationId: string, userId: string, name: string) => void;
@@ -47,6 +48,9 @@ export function ChatPage(props: ChatPageProps) {
   const [results, setResults] = useState<MessageSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
+  // 点了气泡上的「回复」之后转交给 Composer 的引用请求。每点一次都是新对象，
+  // Composer 认对象身份来消费；引用态本身归 Composer 按会话暂存，这里不做保管。
+  const [replyRequest, setReplyRequest] = useState<ReplyTarget | null>(null);
 
   const active = conversations.find((c) => c.id === activeId) || null;
   // 建群者本人和系统管理员可以增减成员、改群名（与服务端 canManageGroup 一致）。
@@ -255,6 +259,7 @@ export function ChatPage(props: ChatPageProps) {
               hasOlder={props.hasOlder}
               loadingOlder={props.loadingOlder}
               onLoadOlder={props.onLoadOlder}
+              onReply={(m) => setReplyRequest(replyTargetOf(m))}
             />
 
             {active.type === 'group' && silentRead ? (
@@ -264,7 +269,7 @@ export function ChatPage(props: ChatPageProps) {
               </div>
             ) : null}
 
-            <Composer conversation={active} meId={me.id} onSend={props.onSend} />
+            <Composer conversation={active} meId={me.id} onSend={props.onSend} replyRequest={replyRequest} />
           </div>
 
           {active.type === 'group' ? (

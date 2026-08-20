@@ -12,7 +12,7 @@ import { ManageGroupModal, type ManageMode } from './modals/ManageGroupModal';
 import { api } from './lib/api';
 import { initialOf } from './lib/md';
 import { unreadAriaLabel, unreadBadgeClass, unreadLabel } from './lib/format';
-import { mergeMessage } from './lib/messages';
+import { mergeMessage, replyTargetOf } from './lib/messages';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
 import type { AiPublicInfo, Conversation, Message, ReadState, User } from './lib/types';
@@ -62,6 +62,9 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   // SSE 回调里要判断「消息是不是发到当前正开着的会话」，用 ref 拿最新值。
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
+  // send 里要就地查出被引用的那条消息来拼乐观气泡的引用块，同样用 ref，免得进 deps。
+  const messagesRef = useRef<Record<string, Message[]>>({});
+  messagesRef.current = messages;
 
   const isAdmin = me.role === 'admin';
 
@@ -193,9 +196,14 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     },
   });
 
-  const send = useCallback(async (body: string) => {
+  const send = useCallback(async (body: string, replyTo?: string | null) => {
     const conversationId = activeId;
     if (!conversationId) return;
+    // 乐观气泡也要带上引用块，否则从回车到服务端确认之间引用会先消失再冒出来。
+    // 摘要就地从已加载的消息里取；取不到（原消息还没翻页出来）就先不显示，
+    // 服务端确认的那条消息会带着权威摘要把它替换掉。
+    const quoted = replyTo ? (messagesRef.current[conversationId] || []).find((m) => m.id === replyTo) : undefined;
+    const quotedTarget = quoted ? replyTargetOf(quoted) : null;
     const temp: Message = {
       id: `tmp_${Date.now()}`,
       conversationId,
@@ -207,10 +215,17 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
       createdAt: Date.now(),
       isAI: false,
       pending: true,
+      replyTo: replyTo ?? null,
+      quote: quotedTarget
+        ? { senderName: quotedTarget.senderName, preview: quotedTarget.preview, available: true }
+        : null,
     };
     setMessages((all) => ({ ...all, [conversationId]: [...(all[conversationId] || []), temp] }));
     try {
-      const { message } = await api.sendMessage(conversationId, body);
+      // 不引用时不带第三个参数，请求形态和以前一致。
+      const { message } = replyTo
+        ? await api.sendMessage(conversationId, body, replyTo)
+        : await api.sendMessage(conversationId, body);
       setMessages((all) => ({
         ...all,
         [conversationId]: mergeMessage((all[conversationId] || []).filter((m) => m.id !== temp.id), message),

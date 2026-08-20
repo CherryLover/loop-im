@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ImagePlus, X } from 'lucide-react';
+import { CornerUpLeft, ImagePlus, X } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { api, MAX_UPLOAD_MB } from '../lib/api';
-import type { Conversation } from '../lib/types';
+import type { Conversation, ReplyTarget } from '../lib/types';
 
 interface MentionOption {
   key: string;
@@ -24,9 +24,14 @@ interface Attachment {
 interface DraftEntry {
   draft: string;
   attachment: Attachment | null;
+  /**
+   * 正在回复哪一条。和草稿、附件是同一类东西：属于某个会话而不是属于这个组件，
+   * 所以必须一起进暂存表 —— 否则在 A 群点了「回复」再切到 B 群，引用块会挂到 B 群头上。
+   */
+  replyTo: ReplyTarget | null;
 }
 
-const EMPTY_ENTRY: DraftEntry = { draft: '', attachment: null };
+const EMPTY_ENTRY: DraftEntry = { draft: '', attachment: null, replyTo: null };
 
 // previewUrl 是 URL.createObjectURL 造出来的，不主动释放会一直占着 blob。
 // 只在这张图确定不会再被渲染时调用：被替换、被移除、发送成功、组件卸载。
@@ -42,13 +47,21 @@ export function Composer({
   conversation,
   meId,
   onSend,
+  replyRequest = null,
 }: {
   conversation: Conversation;
   meId: string;
-  onSend: (body: string) => void | Promise<void>;
+  /** 第二个参数是被引用消息的 id；没有引用时不传，调用形态和以前完全一样。 */
+  onSend: (body: string, replyTo?: string | null) => void | Promise<void>;
+  /**
+   * 消息气泡上点「回复」发过来的引用请求。每点一次父组件给一个新对象，
+   * 这里只认对象身份的变化，所以切来切去不会把同一个请求重复消费。
+   */
+  replyRequest?: ReplyTarget | null;
 }) {
   const [draft, setDraft] = useState('');
   const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -64,19 +77,29 @@ export function Composer({
   liveId.current = conversation.id;
   // 卸载时要释放的当前附件。
   const liveEntry = useRef<DraftEntry>(EMPTY_ENTRY);
-  liveEntry.current = { draft, attachment };
+  liveEntry.current = { draft, attachment, replyTo };
 
   // 会话变了：把旧会话的输入状态存起来，换上新会话自己的那份。
   // 在渲染期同步切换，避免先渲染出上一个会话的内容再被 effect 改掉。
   if (shownId !== conversation.id) {
-    stash.current.set(shownId, { draft, attachment });
+    stash.current.set(shownId, { draft, attachment, replyTo });
     const restored = stash.current.get(conversation.id) ?? EMPTY_ENTRY;
     setShownId(conversation.id);
     setDraft(restored.draft);
     setAttachment(restored.attachment);
+    setReplyTo(restored.replyTo);
     setMentionQuery(null);
     setIndex(0);
   }
+
+  // 外面点了「回复」：把引用态记到当前这个会话上。用 ref 记住已经消费过哪一个请求，
+  // 免得切换会话导致的重渲染又把旧请求重新塞回来，把用户刚取消掉的引用态复活。
+  const consumedReply = useRef<ReplyTarget | null>(replyRequest);
+  useEffect(() => {
+    if (replyRequest === consumedReply.current) return;
+    consumedReply.current = replyRequest;
+    if (replyRequest) setReplyTo(replyRequest);
+  }, [replyRequest]);
 
   useEffect(() => () => {
     // 组件卸载（比如退出登录、没有选中会话）时，所有暂存的预览图一起释放。
@@ -102,6 +125,15 @@ export function Composer({
     }
     const entry = stash.current.get(id) ?? EMPTY_ENTRY;
     stash.current.set(id, { ...entry, attachment: update(entry.attachment) });
+  }
+
+  function writeReply(id: string, update: (prev: ReplyTarget | null) => ReplyTarget | null) {
+    if (id === liveId.current) {
+      setReplyTo(update);
+      return;
+    }
+    const entry = stash.current.get(id) ?? EMPTY_ENTRY;
+    stash.current.set(id, { ...entry, replyTo: update(entry.replyTo) });
   }
 
   const options = useMemo<MentionOption[]>(() => {
@@ -180,11 +212,15 @@ export function Composer({
     const sentId = conversation.id;
     const sentDraft = draft;
     const sentAttachment = attachment;
+    const sentReply = replyTo;
     setDraft('');
     setAttachment(null);
+    setReplyTo(null);
     setMentionQuery(null);
     try {
-      await onSend([text, image].filter(Boolean).join(text && image ? '\n\n' : ''));
+      const payload = [text, image].filter(Boolean).join(text && image ? '\n\n' : '');
+      // 不引用时不传第二个参数：既有调用方（和它们的用例）看到的调用形态一点没变。
+      await (sentReply ? onSend(payload, sentReply.id) : onSend(payload));
       revokePreview(sentAttachment);             // 发出去的是服务端 url，预览图可以释放了
     } catch {
       // 只在用户没有重新打字时还原，别覆盖掉他在等待期间输入的新内容。
@@ -194,6 +230,8 @@ export function Composer({
         revokePreview(sentAttachment);           // 已经有新附件了，旧预览留着也没人看
         return current;
       });
+      // 引用态同样还给发送时的那个会话，而且不覆盖用户等待期间新选的引用。
+      writeReply(sentId, (current) => current ?? sentReply);
     }
   }
 
@@ -219,6 +257,12 @@ export function Composer({
         setMentionQuery(null);
         return;
       }
+    }
+    // @ 气泡关着的时候，Esc 退掉引用态（气泡开着时上面那一档先吃掉 Esc）。
+    if (e.key === 'Escape' && replyTo) {
+      e.preventDefault();
+      setReplyTo(null);
+      return;
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -253,6 +297,23 @@ export function Composer({
               {o.isAI ? <span className="mention-row__must">必定回复</span> : null}
             </button>
           ))}
+        </div>
+      ) : null}
+
+      {replyTo ? (
+        <div className="reply-bar">
+          <CornerUpLeft size={13} className="reply-bar__icon" />
+          <span className="reply-bar__who">回复 {replyTo.senderName}</span>
+          <span className="reply-bar__text">{replyTo.preview}</span>
+          <button
+            type="button"
+            className="reply-bar__x"
+            onClick={() => setReplyTo(null)}
+            title="取消引用"
+            aria-label="取消引用"
+          >
+            <X size={13} />
+          </button>
         </div>
       ) : null}
 

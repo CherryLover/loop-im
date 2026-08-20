@@ -141,10 +141,11 @@ export const api = {
     if (opts.before) params.set('before', opts.before);
     return request<MessageSearchPage>(`/messages/search?${params.toString()}`);
   },
-  sendMessage: (id: string, body: string) =>
+  // replyTo 是被引用消息的 id。不引用时整个字段都不带上，请求体保持原样。
+  sendMessage: (id: string, body: string, replyTo?: string | null) =>
     request<{ message: Message }>(`/conversations/${id}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ body }),
+      body: JSON.stringify(replyTo ? { body, replyTo } : { body }),
     }),
   upload: (file: File) => {
     checkSize(file);
