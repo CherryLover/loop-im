@@ -163,6 +163,11 @@ export const api = {
   resetUserPassword: (userId: string) =>
     request<{ user: User; password: string }>(`/users/${userId}/reset-password`, { method: 'POST' }),
 
+  // 停用 / 恢复成员账号。停用同样会让该成员所有设备上的登录立刻失效（连 SSE 长连接
+  // 一起断），但聊天记录、群成员身份、名字头像一律留着——停用不是删除。
+  setUserDisabled: (userId: string, disabled: boolean) =>
+    request<{ user: User }>(`/users/${userId}/${disabled ? 'disable' : 'enable'}`, { method: 'POST' }),
+
   aiSettings: () => request<AiSettings>('/ai/settings'),
   saveAiSettings: (patch: Record<string, unknown>) =>
     request<AiSettings>('/ai/settings', { method: 'PUT', body: JSON.stringify(patch) }),

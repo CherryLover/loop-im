@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { KeyRound, Search, UserPlus, Users } from 'lucide-react';
+import { KeyRound, Search, UserMinus, UserPlus, Users } from 'lucide-react';
 import { Avatar, AiBadge } from '../components/Avatar';
 import { ResetPasswordModal } from '../modals/ResetPasswordModal';
+import { DisableUserModal } from '../modals/DisableUserModal';
 import type { User } from '../lib/types';
 
 interface ContactsPageProps {
@@ -11,12 +12,17 @@ interface ContactsPageProps {
   onChat: (userId: string) => void;
   onAddContact: () => void;
   onCreateGroup: () => void;
+  /** 停用 / 恢复之后回调，让上层刷新名单并给一条提示。 */
+  onUserChanged?: (message: string) => void;
 }
 
-export function ContactsPage({ me, users, isAdmin, onChat, onAddContact, onCreateGroup }: ContactsPageProps) {
+export function ContactsPage({ me, users, isAdmin, onChat, onAddContact, onCreateGroup, onUserChanged }: ContactsPageProps) {
   const [query, setQuery] = useState('');
   // 忘了密码的成员只能靠管理员在这里重置，所以入口就放在名单里每个人身上。
   const [resetting, setResetting] = useState<User | null>(null);
+  // 停用 / 恢复的入口同理。停用的人仍然留在这份名单里（停用不是删除），
+  // 只是标成「已停用」——管理员要能看见他、也要能把他放回来。
+  const [switching, setSwitching] = useState<User | null>(null);
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -70,24 +76,39 @@ export function ContactsPage({ me, users, isAdmin, onChat, onAddContact, onCreat
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span className="contact__name">{u.name}</span>
                   {u.isAI ? <AiBadge /> : null}
+                  {u.disabled ? <span className="tag-off">已停用</span> : null}
                 </div>
                 <div className="contact__email">{u.email}</div>
               </div>
               <div className="contact__right">
                 <span className="contact__status">
-                  <span className={`dot ${u.online ? 'dot--online' : 'dot--offline'}`} />
-                  {u.isAI ? '常驻在线' : u.online ? '在线' : '离线'}
+                  {/* 停用的人恒为离线，也不再显示「在线 / 离线」这一档——他根本连不上来 */}
+                  <span className={`dot ${!u.disabled && u.online ? 'dot--online' : 'dot--offline'}`} />
+                  {u.disabled ? '已停用' : u.isAI ? '常驻在线' : u.online ? '在线' : '离线'}
                 </span>
                 {isAdmin && !u.isAI ? (
-                  <button
-                    type="button"
-                    className="contact__chat"
-                    title={`重置 ${u.name} 的密码`}
-                    onClick={() => setResetting(u)}
-                  >
-                    <KeyRound size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />
-                    重置密码
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="contact__chat"
+                      title={`重置 ${u.name} 的密码`}
+                      onClick={() => setResetting(u)}
+                    >
+                      <KeyRound size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />
+                      重置密码
+                    </button>
+                    <button
+                      type="button"
+                      className="contact__chat"
+                      title={u.disabled ? `恢复 ${u.name} 的账号` : `停用 ${u.name} 的账号`}
+                      onClick={() => setSwitching(u)}
+                    >
+                      {u.disabled
+                        ? <UserPlus size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />
+                        : <UserMinus size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />}
+                      {u.disabled ? '恢复账号' : '停用账号'}
+                    </button>
+                  </>
                 ) : null}
                 <button type="button" className="contact__chat" onClick={() => onChat(u.id)}>去聊天</button>
               </div>
@@ -98,6 +119,17 @@ export function ContactsPage({ me, users, isAdmin, onChat, onAddContact, onCreat
       </div>
 
       {resetting ? <ResetPasswordModal user={resetting} onClose={() => setResetting(null)} /> : null}
+
+      {switching ? (
+        <DisableUserModal
+          user={switching}
+          onClose={() => setSwitching(null)}
+          onDone={(message) => {
+            setSwitching(null);
+            onUserChanged?.(message);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

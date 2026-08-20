@@ -24,6 +24,11 @@ const MIGRATIONS = [
   // 所以不需要回填。故意不加外键：原消息被删掉之后这一列要能留着，界面才能显示
   // 「消息已不可用」；加了 ON DELETE 之后要么写不进去、要么被悄悄置空，都不是想要的。
   ['messages', 'reply_to', 'ALTER TABLE messages ADD COLUMN reply_to TEXT'],
+  // users.disabled_at：账号被停用的时刻，NULL 表示正常。停用不是删除，users 那一行、
+  // 他发过的消息、群成员身份全部原样留着，只是不能再登录、也不能再用旧凭据。
+  // 存时间戳而不是 0/1：出了事要能答「什么时候停的」，而这一列本来就要写一次。
+  // 历史账号一律为 NULL（正常），所以不需要回填。
+  ['users', 'disabled_at', 'ALTER TABLE users ADD COLUMN disabled_at INTEGER'],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();

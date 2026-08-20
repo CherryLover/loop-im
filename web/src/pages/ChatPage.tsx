@@ -119,7 +119,9 @@ export function ChatPage(props: ChatPageProps) {
       ? `${active.members.length} 名成员 · Aria 常驻`
       : active.type === 'ai'
         ? `一对一 · ${aiProviderLabel}`
-        : peer?.online ? '在线' : '离线';
+        // 对方账号被停用后，这个私聊会话仍然留在列表里、历史照常可读（停用不是删除），
+        // 只是把状态如实说出来，免得有人对着一个永远不会回话的窗口干等。
+        : peer?.disabled ? '对方账号已停用' : peer?.online ? '在线' : '离线';
 
   return (
     <div className="chat">
@@ -169,6 +171,9 @@ export function ChatPage(props: ChatPageProps) {
                   <div className="convo__row">
                     <div className="convo__title">{c.title}</div>
                     {isAI ? <AiBadge /> : null}
+                    {/* 停用的人的私聊照常留在列表里，只是打个标记：会话是双方共有的历史，
+                        藏起来只会让人以为聊天记录没了。 */}
+                    {groupPeer?.disabled ? <span className="tag-off">已停用</span> : null}
                     <span className="convo__time">{c.lastMessage ? listTime(c.lastMessage.createdAt) : ''}</span>
                     {c.unread > 0 ? (
                       <span className={unreadBadgeClass(mentioned)} aria-label={unreadAriaLabel(c.unread, mentioned)}>
@@ -296,6 +301,8 @@ export function ChatPage(props: ChatPageProps) {
                       />
                       <span className="members__name">{m.name}</span>
                       {m.isAI ? <AiBadge /> : null}
+                      {/* 停用的成员不会被踢出群，名字头像照常，只是标出来 */}
+                      {m.disabled ? <span className="tag-off">已停用</span> : null}
                       <span className="members__role">{m.roleInGroup}</span>
                       {/* 群主不能被移除（他要走得自己退群），自己也不从这里移除 */}
                       {canManage && m.id !== active.createdBy && m.id !== me.id ? (

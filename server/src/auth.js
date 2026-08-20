@@ -76,13 +76,49 @@ export function resetPasswordFor(userId, plain) {
   run('DELETE FROM sessions WHERE user_id = ?', userId);
 }
 
+/** 账号被停用时，所有入口统一这么说——不要跟「密码不对」混为一谈。 */
+export const ACCOUNT_DISABLED = '账号已停用，请联系管理员';
+
+export const isDisabled = (user) => !!user?.disabled_at;
+
+/**
+ * 停用账号：复用重置密码那一套「立刻夺回控制权」的手法（见 resetPasswordFor）——
+ * auth_version +1 让此前签发的 token 全部作废，再删掉该账号的全部会话，
+ * 于是所有设备当场掉线，不用等 token 自然过期。
+ *
+ * 除此之外还多两件事：
+ * - 打上 disabled_at，让 authenticate / login 有一个独立的、跟密码无关的拒绝理由；
+ *   光靠 auth_version 只能踢掉旧凭据，用正确的密码重新登录照样能进来。
+ * - last_seen_at 归零，在线点当场灭掉，不用等 90 秒心跳窗口过期。
+ *
+ * 注意这里不动 password_hash：停用是可逆的，恢复之后原密码要照常能用。
+ */
+export function disableUser(userId) {
+  run(
+    'UPDATE users SET disabled_at = ?, auth_version = auth_version + 1, last_seen_at = 0 WHERE id = ?',
+    now(), userId,
+  );
+  run('DELETE FROM sessions WHERE user_id = ?', userId);
+}
+
+/**
+ * 恢复账号：只把 disabled_at 抹掉，其余一概不动。
+ * 不需要再动 auth_version —— 停用时那一次 +1 已经把旧凭据全作废了，
+ * 本人重新登录一次即可，密码、头像、群成员身份、聊天记录全都还是原来的。
+ */
+export function enableUser(userId) {
+  run('UPDATE users SET disabled_at = NULL WHERE id = ?', userId);
+}
+
 export function touch(userId, sessionId) {
   run('UPDATE users SET last_seen_at = ? WHERE id = ?', now(), userId);
   if (sessionId) run('UPDATE sessions SET last_seen_at = ? WHERE id = ?', now(), sessionId);
 }
 
+// 停用的账号一律显示为离线：它连不上来，last_seen_at 也已经被 disableUser 归零，
+// 这里再挡一道，免得哪天有别的路径顺手 touch 了它就又冒出一个在线点。
 export const isOnline = (user) =>
-  user.role === 'ai' || now() - (user.last_seen_at || 0) < ONLINE_WINDOW_MS;
+  !isDisabled(user) && (user.role === 'ai' || now() - (user.last_seen_at || 0) < ONLINE_WINDOW_MS);
 
 function readToken(req) {
   const header = req.headers.authorization || '';
@@ -101,6 +137,17 @@ export function authenticate(req, res, next) {
   }
   const user = get('SELECT * FROM users WHERE id = ?', payload.sub);
   if (!user) return res.status(401).json({ error: '账号不存在' });
+  // 账号停用挡在所有鉴权入口的最前面。这里是全站唯一的鉴权中间件（/api/stream 与
+  // 每个 router 都 use 它），挡在这一层等于一次挡住已登录会话、SSE、上传、改密码……
+  // 而不是只挡 /auth/login。
+  //
+  // 走到这一步说明 token 是本服务签发的（jwt.verify 已过），所以拿着它的人本来就
+  // 持有过这个账号的凭据，明说「已停用」不算泄露，反倒省得他以为是网络抖动一直重试。
+  //
+  // 用 401 而不是 403：前端 request() 只在 401 时清本地凭据并把人送回登录页
+  // （见 web/src/lib/api.ts），停用要的正是这个效果。放在 ver 校验之前，是为了让
+  // disabled_at 成为一道独立于 token 新旧的闸门——即使哪天签发逻辑变了，这一条也照样拦。
+  if (isDisabled(user)) return res.status(401).json({ error: ACCOUNT_DISABLED });
   // 版本号对不上的凭据一律失效（issue #2），但拒绝的理由要分开说（issue #16）：
   // - ver 不是整数（升级前签发的老 token 根本没有这个字段，也可能是 null / 字符串这类
   //   被篡改的值）：signToken 永远写入 users.auth_version 这个整数，所以拿不到整数就说明
@@ -142,4 +189,7 @@ export const publicUser = (u) => ({
   avatarUrl: u.avatar_url || null,
   isAI: u.role === 'ai',
   online: isOnline(u),
+  // 停用的人照常出现在名单、群成员和历史消息里（停用不是删除），只是打上这个标记，
+  // 前端据此显示「已停用」，并把他从「建群 / 加成员」的可选名单里去掉。
+  disabled: isDisabled(u),
 });

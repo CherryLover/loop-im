@@ -489,6 +489,12 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             onChat={openDirect}
             onAddContact={() => setModal('contact')}
             onCreateGroup={() => setModal('group')}
+            onUserChanged={(message) => {
+              setToast(message);
+              // 停用会改变名单上的在线状态与「已停用」标记，也会影响会话里那个人的显示。
+              background(refreshUsers(), '刷新联系人');
+              background(refreshConversations(), '刷新会话列表');
+            }}
           />
         ) : null}
 

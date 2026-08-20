@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { all, get, run, now } from '../db.js';
 import {
-  authenticate, createSession, endSession, hashPassword, isOnline, publicUser, signToken,
-  tokenDaysFor, touch, verifyPassword,
+  ACCOUNT_DISABLED, authenticate, createSession, endSession, hashPassword, isDisabled, isOnline,
+  publicUser, signToken, tokenDaysFor, touch, verifyPassword,
 } from '../auth.js';
 import { AVATAR_NOT_IMAGE, inspectUpload } from '../attachments.js';
 import { putObject } from '../storage.js';
@@ -45,6 +45,12 @@ router.post('/login', (req, res) => {
     return res.status(401).json({ error: '邮箱或密码不正确' });
   }
   clearFailures(keys);
+  // 停用的判定放在验完密码之后，两个理由：
+  // 1. 提示要准确 —— 密码明明是对的却回「邮箱或密码不正确」，本人只会一遍遍重试，
+  //    还会去找管理员重置密码，白折腾一圈。这里要明说是账号被停用了。
+  // 2. 顺序反过来就成了账号探针 —— 不知道密码的人也能靠这条错误确认某个邮箱存在、
+  //    而且已停用。放在密码之后，只有本来就持有正确凭据的人才看得到这句话。
+  if (isDisabled(user)) return res.status(403).json({ error: ACCOUNT_DISABLED });
   const sessionId = createSession(user.id);
   touch(user.id, sessionId);
   emitAll('presence', { userId: user.id, online: true });

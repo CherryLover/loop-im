@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT,                             -- NULL for the AI account
   avatar_url    TEXT,
   auth_version  INTEGER NOT NULL DEFAULT 1,       -- 改密码时递增，之前签发的 token 立即失效
+  disabled_at   INTEGER,                          -- 账号停用时刻；NULL = 正常。停用不删数据
   last_seen_at  INTEGER NOT NULL DEFAULT 0,
   created_at    INTEGER NOT NULL
 );
