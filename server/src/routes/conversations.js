@@ -4,6 +4,7 @@ import { authenticate, publicUser, requireAdmin } from '../auth.js';
 import { emitTo } from '../events.js';
 import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
 import { decrypt } from '../secret-box.js';
+import { escapeLike } from '../sql.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -41,9 +42,9 @@ const lastReadAt = (conversationId, userId) =>
  * 引号就是明确的分隔符（id 由 uid() 生成，不含引号和反斜杠，JSON 里不会被转义）。
  *
  * 另一半坑在 LIKE 自己身上：id 里的 `_` 是 LIKE 的单字符通配符，不转义的话
- * `"u_1"` 会匹配到 `"uX1"`。统一给 `\ % _` 加转义前缀，查询侧配 ESCAPE '\'。
+ * `"u_1"` 会匹配到 `"uX1"`。转义交给 escapeLike，查询侧配 ESCAPE '\'。
  */
-export const mentionLike = (value) => `%"${String(value).replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`;
+export const mentionLike = (value) => `%"${escapeLike(value)}"%`;
 
 /**
  * 一次扫描同时给出两个数：

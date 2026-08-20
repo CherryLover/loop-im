@@ -7,6 +7,7 @@ import { Router } from 'express';
 import { all, get } from '../db.js';
 import { authenticate } from '../auth.js';
 import { serializeMessage } from './conversations.js';
+import { escapeLike } from '../sql.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -17,16 +18,8 @@ export const MAX_SEARCH_PAGE_SIZE = 100;
 // 关键词长度上限。再长也不会是真的检索意图，只会让 LIKE 全表扫得更慢。
 export const MAX_QUERY_LENGTH = 100;
 
-/**
- * SQLite 的 LIKE 里 `%` 匹配任意串、`_` 匹配任意单字符。用户 id 长成 `u_1` 这样，
- * 直接把用户输入拼进 LIKE，搜 `a_b` 会连 `aXb` 一起命中——搜索结果里混进根本不含
- * 该关键词的消息。这里把 `\` `%` `_` 三个字符各自加反斜杠前缀，SQL 那边配 `ESCAPE '\'`
- * 使用。反斜杠自己必须先转义，否则用户输入的 `\%` 里那个 `%` 又变回通配符。
- */
-export function likeContains(input) {
-  const escaped = String(input).replace(/[\\%_]/g, (ch) => `\\${ch}`);
-  return `%${escaped}%`;
-}
+/** 拼「包含关键词」的 LIKE 模式。转义规则见 sql.js —— 查询侧必须配 ESCAPE '\\'。 */
+export const likeContains = (input) => `%${escapeLike(input)}%`;
 
 /** ?q=a&q=b 之类的重复参数会解析成数组，一律当没传，不要 String() 出个 "a,b" 来搜。 */
 const oneString = (value) => (typeof value === 'string' ? value : '');
