@@ -47,3 +47,13 @@ export const dayLabel = (ts: number) => {
 
 /** 未读徽标上的数字：超过 99 就用 99+，免得把图标撑变形。 */
 export const unreadLabel = (n: number) => (n > 99 ? '99+' : String(n));
+
+/**
+ * 未读徽标的无障碍名称。「有人 @ 我」只靠高亮颜色区分，读屏用户是感知不到的，
+ * 所以名称里也要把这一档说出来；没有 @ 时保持原来的说法不变。
+ */
+export const unreadAriaLabel = (unread: number, mentions = 0) =>
+  (mentions > 0 ? `${unread} 条未读，其中 ${mentions} 条 @ 我` : `${unread} 条未读`);
+
+/** 有 @ 我的未读时徽标换一套样式，视觉上从一堆普通未读里跳出来。 */
+export const unreadBadgeClass = (mentions = 0) => (mentions > 0 ? 'badge badge--mention' : 'badge');
