@@ -55,6 +55,12 @@ jobs:
 
       - name: 冒烟测试（起容器 → 建管理员 → 登录 → 前端可访问）
         run: |
+          set -euo pipefail
+          # 容器内以 node（uid 1000）运行；宿主目录若由 docker 代建会是 root 所有，
+          # 容器就写不进 SQLite，服务起不来。先建好并交给 1000，与 deploy.sh 的做法一致。
+          mkdir -p smoke-data
+          sudo chown -R 1000:1000 smoke-data
+
           docker build -t loop-im:smoke .
           docker run -d --name loop-im-smoke -p 4000:4000 \
             -e JWT_SECRET=ci-smoke-secret \
@@ -63,8 +69,13 @@ jobs:
             -v "$PWD/smoke-data:/app/data" \
             loop-im:smoke
 
+          # 任何一步失败都先把容器日志打出来，否则只看到一个 curl 的退出码。
+          trap 'echo "--- 容器日志 ---"; docker logs loop-im-smoke || true; docker rm -f loop-im-smoke >/dev/null 2>&1 || true' EXIT
+
           for i in $(seq 1 30); do
             curl -fsS http://127.0.0.1:4000/api/health >/dev/null && break
+            docker ps --filter name=loop-im-smoke --filter status=running -q | grep -q . \
+              || { echo "容器已退出"; exit 1; }
             sleep 2
           done
           curl -fsS http://127.0.0.1:4000/api/health
@@ -79,5 +90,4 @@ jobs:
           curl -fsS http://127.0.0.1:4000/ | grep -q '<div id="root">'
           test -f smoke-data/loop.db || (echo "数据没有落到挂载目录" && exit 1)
 
-          docker logs loop-im-smoke
-          docker rm -f loop-im-smoke
+          echo "冒烟测试通过"

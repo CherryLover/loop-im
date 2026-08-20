@@ -24,14 +24,26 @@ async function boxOf(locator: Locator): Promise<Rect> {
   return box as Rect;
 }
 
-/** 命中测试：按钮中心点上真正接收点击的元素，必须还是这个按钮。 */
-async function hitAtCenter(page: Page, locator: Locator) {
-  const box = await boxOf(locator);
-  return page.evaluate(([x, y]) => {
-    const el = document.elementFromPoint(x, y);
-    const btn = el?.closest('button');
-    return { tag: el?.tagName ?? 'none', cls: el?.className ?? '', btn: btn?.textContent ?? '' };
-  }, [box.x + box.width / 2, box.y + box.height / 2]);
+/**
+ * 命中测试：按钮中心点上真正接收事件的元素，必须还是这个按钮（或它的子元素）。
+ * 用元素身份比较而不是文本：runner 上缺中文字体时布局与文本量都会变，
+ * 比文本会拿到空字符串而误报；也不能用 trial 点击，因为它还要求按钮处于
+ * 可用状态，而「发送」在草稿清空后本来就是禁用的。
+ */
+async function expectNotCovered(locator: Locator, label: string) {
+  await expect(locator, `${label} 应当可见`).toBeVisible();
+  await locator.scrollIntoViewIfNeeded();
+  const blocked = await locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return '中心点落在视口之外';
+    const hit = document.elementFromPoint(x, y);
+    if (!hit) return '中心点上没有任何元素';
+    if (hit === el || el.contains(hit)) return null;
+    return `中心点被 <${hit.tagName.toLowerCase()} class="${hit.className}"> 挡住`;
+  });
+  expect(blocked, `点击应落在「${label}」上`).toBeNull();
 }
 
 test('移动端：登录提示不遮挡「建群」，也不吃掉它的点击', async ({ page }) => {
@@ -48,7 +60,7 @@ test('移动端：登录提示不遮挡「建群」，也不吃掉它的点击',
   expect(overlaps(await boxOf(toast), await boxOf(createGroup)), '提示不应覆盖「建群」按钮').toBe(false);
 
   // 2) 点击不被截获：按钮中心的命中元素仍是按钮本身
-  expect((await hitAtCenter(page, createGroup)).btn, '点击应落在按钮上，而不是提示上').toContain('建群');
+  await expectNotCovered(createGroup, '建群');
 
   // 3) 提示还在的时候一次点开建群弹窗（超时很短，避免"等提示消失再点中"的假通过）
   await expect(toast).toBeVisible();
@@ -80,7 +92,7 @@ test('移动端：联系人页的「添加联系人 / 建群」不被提示遮�
   for (const name of ['添加联系人', '建群']) {
     const btn = bar.getByRole('button', { name });
     expect(overlaps(toastBox, await boxOf(btn)), `提示不应覆盖「${name}」`).toBe(false);
-    expect((await hitAtCenter(page, btn)).btn, `点击应落在「${name}」上`).toContain(name);
+    await expectNotCovered(btn, name);
   }
 });
 
@@ -117,7 +129,7 @@ test('移动端：长提示不越界，也不压住输入框与底部导航', as
 
   expect(overlaps(toastBox, await boxOf(page.locator('.composer'))), '提示不应压住输入栏').toBe(false);
   expect(overlaps(toastBox, await boxOf(page.locator('.tabbar'))), '提示不应压住底部导航').toBe(false);
-  expect((await hitAtCenter(page, page.locator('.composer__send'))).btn, '点击应落在「发送」上').toContain('发送');
+  await expectNotCovered(page.locator('.composer__send'), '发送');
 });
 
 test('桌面端：提示仍固定在右上角', async ({ page }) => {
