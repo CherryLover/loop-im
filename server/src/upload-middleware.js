@@ -4,8 +4,14 @@ import multer from 'multer';
 export const MAX_UPLOAD_MB = 8;
 export const OVERSIZED_MESSAGE = `图片大小不能超过 ${MAX_UPLOAD_MB}MB`;
 
+// 这个 +1 不是笔误，别删：busboy 的 limits.fileSize 是「不得达到」而不是「不得超过」——
+// 写入字节数一达到该值就判超限，所以填 8*1024*1024 时实际放行的最大值只有 8MB-1 字节，
+// 正好 8MB 的图片会被拒。前端 checkSize 用的是严格大于（正好 8MB 放行），界面文案也写的
+// 「不超过 8MB」，语义上都包含 8MB 这一档；填 +1 才能让三者对齐。见 issue #15。
+export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+
 export const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
+  limits: { fileSize: MAX_UPLOAD_BYTES + 1 },
   fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
 });
