@@ -100,7 +100,8 @@ afterEach(() => {
 describe('已读上报', () => {
   it('打开会话就上报一次已读', async () => {
     await mount();
-    await waitFor(() => expect(mockApi.markRead).toHaveBeenCalledWith('c1'));
+    // 上报位置是此刻渲染出来的最后一条消息，而不是「服务端的此刻」（issue #20）。
+    await waitFor(() => expect(mockApi.markRead).toHaveBeenCalledWith('c1', 1_700_000_000_000));
     expect(mockApi.markRead).toHaveBeenCalledTimes(1);
   });
 

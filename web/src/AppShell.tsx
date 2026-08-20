@@ -19,6 +19,17 @@ import type { AiPublicInfo, Conversation, Message, ReadState, User } from './lib
 
 type Tab = 'chat' | 'contacts' | 'ai';
 
+// 与 styles.css 里 `@media (max-width: 720px)` 的断点一致：手机布局下会话列表和聊天详情
+// 是前后两屏（.chat--hidden），桌面布局下两者并排常驻。判断「详情露出来没有」得先知道是哪一种。
+const MOBILE_QUERY = '(max-width: 720px)';
+const MOBILE_MAX_WIDTH = 720;
+
+function isMobileViewport() {
+  if (typeof window === 'undefined') return false;
+  if (typeof window.matchMedia === 'function') return window.matchMedia(MOBILE_QUERY).matches;
+  return window.innerWidth > 0 && window.innerWidth <= MOBILE_MAX_WIDTH;
+}
+
 interface OlderState {
   cursor: string | null;
   hasMore: boolean;
@@ -53,17 +64,48 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   // 群管理弹窗：加人 / 改群名 / 退群，三者共用一个组件。
   const [manage, setManage] = useState<{ mode: ManageMode; conversationId: string } | null>(null);
   const [toast, setToast] = useState(justSignedIn ? '已上线 · 与服务器保持连接' : '');
+  // 浏览器标签页可不可见。存成状态而不是每次现读 document.hidden：可见性一变，
+  // 「详情是不是在眼前」要跟着重算，切回来时才能补报已读。
+  const [pageVisible, setPageVisible] = useState(() => typeof document === 'undefined' || !document.hidden);
+  const [mobileLayout, setMobileLayout] = useState(isMobileViewport);
   const loaded = useRef<Set<string>>(new Set());
   // loadOlder 要读最新的翻页状态又不想因此重建回调，用 ref 镜像一份。
   const olderRef = useRef<Record<string, OlderState>>({});
   olderRef.current = older;
-  // 上次上报已读的时间，用来节流。
-  const markedRef = useRef<Record<string, number>>({});
+  // 上次上报的已读位置：{ 上报时刻, 报到哪条消息 }。用来节流，也用来避免重复上报同一位置。
+  const markedRef = useRef<Record<string, { at: number; upTo: number }>>({});
   // SSE 回调里要判断「消息是不是发到当前正开着的会话」，用 ref 拿最新值。
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
 
   const isAdmin = me.role === 'admin';
+
+  /**
+   * 「聊天详情真的在用户眼前」——所有已读上报共用这一个判据（issue #20）。
+   * 选中了某个会话不等于用户正看着它：切到联系人 / AI 管理页、手机端从详情退回会话列表、
+   * 浏览器标签页切走，详情都不在眼前，这期间收到的新消息不能算已读。
+   */
+  const desktopDetailShown = !mobileLayout && activeId !== null;      // 桌面布局：详情与列表并排常驻
+  const mobileDetailShown = mobileLayout && mobileChatOpen && activeId !== null;
+  const chatDetailVisible = tab === 'chat' && pageVisible && (desktopDetailShown || mobileDetailShown);
+  const chatDetailVisibleRef = useRef(false);
+  chatDetailVisibleRef.current = chatDetailVisible;
+
+  /**
+   * 当前会话里「别人发的、此刻确实渲染出来了的」最后一条消息的时间——已读只能报到这里。
+   * null 表示这个会话的消息还没加载出来，此时报已读等于闭着眼睛报，先不报。
+   * 自己发的消息不算「读到了什么」，不参与计算，也就不会因为自己发言而触发上报。
+   */
+  const readTarget = useMemo(() => {
+    const list = activeId ? messages[activeId] : undefined;
+    if (!list) return null;
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i].senderId !== me.id) return list[i].createdAt;
+    }
+    return 0;                                   // 加载过了，但没有别人发的消息
+  }, [activeId, messages, me.id]);
+  const readTargetRef = useRef<number | null>(null);
+  readTargetRef.current = readTarget;
 
   const refreshConversations = useCallback(async () => {
     const { conversations: list } = await api.conversations();
@@ -93,6 +135,19 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     return () => window.clearInterval(timer);
   }, []);
 
+  // 视口在断点两侧变化时重算布局：桌面转手机后，详情是不是还露着会跟着变。
+  useEffect(() => {
+    const sync = () => setMobileLayout(isMobileViewport());
+    sync();
+    const mq = typeof window.matchMedia === 'function' ? window.matchMedia(MOBILE_QUERY) : null;
+    if (mq && typeof mq.addEventListener === 'function') mq.addEventListener('change', sync);
+    window.addEventListener('resize', sync);
+    return () => {
+      if (mq && typeof mq.removeEventListener === 'function') mq.removeEventListener('change', sync);
+      window.removeEventListener('resize', sync);
+    };
+  }, []);
+
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(''), 2600);
@@ -107,20 +162,25 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   }, []);
 
   /**
-   * 上报已读。会话打开、窗口重新聚焦、以及在当前会话里收到新消息时都会调用，
-   * 所以这里挡一道：同一会话 1 秒内不重复上报，未读本来就是 0 时也不上报。
+   * 上报已读。打开会话、回到详情、窗口重新可见、详情里渲染出别人的新消息，都调这一个。
+   * 判据只有 chatDetailVisibleRef 一个（见上），此外再挡两道：
+   * 同一位置 1 秒内不重复上报；消息还没渲染出来时不报，等这一轮渲染完 effect 会补上。
    */
   const markRead = useCallback(async (conversationId: string) => {
-    if (typeof document !== 'undefined' && document.hidden) return;
-    const last = markedRef.current[conversationId] || 0;
-    if (Date.now() - last < 1000) return;
-    markedRef.current[conversationId] = Date.now();
+    if (!chatDetailVisibleRef.current) return;
+    if (conversationId !== activeIdRef.current) return;
+    const upTo = readTargetRef.current;
+    if (upTo === null) return;
+    const last = markedRef.current[conversationId];
+    if (last && upTo <= last.upTo && Date.now() - last.at < 1000) return;
+    markedRef.current[conversationId] = { at: Date.now(), upTo };
     try {
-      await api.markRead(conversationId);
+      // 报到「此刻真的渲染出来的最后一条」，别顺手把还没进列表的新消息也标成已读。
+      await api.markRead(conversationId, upTo || undefined);
       // 未读清零的同时也清掉「@ 我」那一档，否则高亮徽标会一直挂在读过的会话上。
       setConversations((list) => list.map((c) => (c.id === conversationId ? { ...c, unread: 0, mentionsUnread: 0 } : c)));
     } catch {
-      markedRef.current[conversationId] = 0;   // 失败就允许下次重试
+      delete markedRef.current[conversationId];   // 失败就允许下次重试
     }
   }, []);
 
@@ -144,14 +204,17 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     void loadMessages(activeId);
   }, [activeId, loadMessages]);
 
-  // 打开会话即视为读到此刻。
+  // 已读上报的唯一入口：详情真的在眼前时报一次。打开会话、从联系人 / AI 页或手机会话列表
+  // 回到详情、标签页重新可见、详情里渲染出别人的新消息，都会让这里重跑一遍。
   useEffect(() => {
-    if (activeId) void markRead(activeId);
-  }, [activeId, markRead]);
+    if (!chatDetailVisible || !activeId) return;
+    void markRead(activeId);
+  }, [chatDetailVisible, activeId, readTarget, markRead]);
 
   // 从别的标签页/窗口切回来时补一次：期间收到的消息此刻才真正被看到。
   useEffect(() => {
     const onFocus = () => {
+      setPageVisible(!document.hidden);
       if (!document.hidden && activeIdRef.current) void markRead(activeIdRef.current);
     };
     window.addEventListener('focus', onFocus);
@@ -173,10 +236,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     onMessage: (message) => {
       appendMessage(message);
       void refreshConversations();
-      // 正开着这个会话就直接标已读，别让未读徽标闪一下再消失。
-      if (message.conversationId === activeIdRef.current && message.senderId !== me.id) {
-        void markRead(message.conversationId);
-      }
+      // 已读不在这里报：消息进了列表、而且详情确实在眼前时，上面那个 effect 会报。
+      // 只按会话 id 判断的话，人在联系人页 / AI 页 / 手机会话列表也会被标成已读（issue #20）。
     },
     onTyping: (conversationId, isTyping) => setTyping((t) => ({ ...t, [conversationId]: isTyping })),
     onConversationCreated: () => void refreshConversations(),
