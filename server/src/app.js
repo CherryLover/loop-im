@@ -11,6 +11,7 @@ import { router as authRoutes } from './routes/auth.js';
 import { router as userRoutes } from './routes/users.js';
 import { router as conversationRoutes } from './routes/conversations.js';
 import { router as uploadRoutes } from './routes/uploads.js';
+import { router as searchRoutes } from './routes/search.js';
 import { router as aiRoutes } from './routes/ai.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -42,6 +43,7 @@ export function createApp({ serveClient = true } = {}) {
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
   app.use('/api/conversations', conversationRoutes);
+  app.use('/api/messages', searchRoutes);
   app.use('/api/uploads', uploadRoutes);
   app.use('/api/ai', aiRoutes);
 

@@ -230,6 +230,11 @@ input, textarea { font-family: inherit; }
   overflow: hidden; text-overflow: ellipsis; margin-top: 2px;
 }
 .convos__empty { font-size: 12.5px; color: var(--faint); padding: 10px; }
+/* 搜索时把「会话」和「消息」两组结果分开，不然两串条目糊成一片分不清。 */
+.convos__section {
+  font-size: 11px; color: var(--faint); letter-spacing: .04em;
+  padding: 8px 10px 2px;
+}
 
 /* ---------- Chat ---------- */
 .chat { flex: 1; min-width: 0; display: flex; min-height: 0; }

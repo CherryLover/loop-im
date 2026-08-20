@@ -110,6 +110,23 @@ export interface AiOverview extends AiSettings {
   rows: AiTrackedPerson[];
 }
 
+/**
+ * 一条消息搜索结果：消息本身，外加它所属会话的标题与类型，
+ * 前端不必再去会话列表里回查就能渲染，也能直接跳过去。
+ */
+export interface MessageSearchResult extends Message {
+  conversationTitle: string;
+  conversationType: ConversationType;
+}
+
+/** 一页消息搜索结果，按时间倒序。nextBefore 是下一页游标（本页最早那条的 id）。 */
+export interface MessageSearchPage {
+  query: string;
+  results: MessageSearchResult[];
+  hasMore: boolean;
+  nextBefore: string | null;
+}
+
 export interface AiProfileDetail {
   profile: {
     userId: string;
