@@ -47,6 +47,9 @@ const renderChat = (showChatOnMobile: boolean, onBack = vi.fn()) => {
       activeId={group.id}
       messages={[]}
       typing={false}
+      hasOlder={false}
+      loadingOlder={false}
+      onLoadOlder={vi.fn()}
       aiProviderLabel="模拟供应商"
       silentRead={false}
       canCreateGroup

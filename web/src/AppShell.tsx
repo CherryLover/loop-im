@@ -17,6 +17,12 @@ import type { AiPublicInfo, Conversation, Message, User } from './lib/types';
 
 type Tab = 'chat' | 'contacts' | 'ai';
 
+interface OlderState {
+  cursor: string | null;
+  hasMore: boolean;
+  loading: boolean;
+}
+
 interface AppShellProps {
   me: User;
   ai: AiPublicInfo;
@@ -34,12 +40,17 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
+  // 每个会话的历史翻页状态：下一页游标、还有没有更早的、是否正在加载。
+  const [older, setOlder] = useState<Record<string, OlderState>>({});
   const [typing, setTyping] = useState<Record<string, boolean>>({});
   // 手机端「会话列表 / 会话详情」的开合状态放在这里，切换底部 tab 时不会被重置。
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [modal, setModal] = useState<'group' | 'contact' | 'profile' | null>(null);
   const [toast, setToast] = useState(justSignedIn ? '已上线 · 与服务器保持连接' : '');
   const loaded = useRef<Set<string>>(new Set());
+  // loadOlder 要读最新的翻页状态又不想因此重建回调，用 ref 镜像一份。
+  const olderRef = useRef<Record<string, OlderState>>({});
+  olderRef.current = older;
 
   const isAdmin = me.role === 'admin';
 
@@ -78,8 +89,23 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   }, [toast]);
 
   const loadMessages = useCallback(async (conversationId: string) => {
-    const { messages: list } = await api.messages(conversationId);
-    setMessages((m) => ({ ...m, [conversationId]: list }));
+    const page = await api.messages(conversationId);
+    setMessages((m) => ({ ...m, [conversationId]: page.messages }));
+    setOlder((o) => ({ ...o, [conversationId]: { cursor: page.nextBefore, hasMore: page.hasMore, loading: false } }));
+  }, []);
+
+  /** 往前翻一页历史，接在当前列表前面。重复点击靠 loading 挡住。 */
+  const loadOlder = useCallback(async (conversationId: string) => {
+    const state = olderRef.current[conversationId];
+    if (!state?.hasMore || state.loading || !state.cursor) return;
+    setOlder((o) => ({ ...o, [conversationId]: { ...state, loading: true } }));
+    try {
+      const page = await api.messages(conversationId, { before: state.cursor });
+      setMessages((all) => ({ ...all, [conversationId]: [...page.messages, ...(all[conversationId] || [])] }));
+      setOlder((o) => ({ ...o, [conversationId]: { cursor: page.nextBefore, hasMore: page.hasMore, loading: false } }));
+    } catch {
+      setOlder((o) => ({ ...o, [conversationId]: { ...state, loading: false } }));
+    }
   }, []);
 
   useEffect(() => {
@@ -208,6 +234,9 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             silentRead={ai.silentRead}
             canCreateGroup={isAdmin}
             showChatOnMobile={mobileChatOpen}
+            hasOlder={activeId ? !!older[activeId]?.hasMore : false}
+            loadingOlder={activeId ? !!older[activeId]?.loading : false}
+            onLoadOlder={() => { if (activeId) void loadOlder(activeId); }}
             onSelect={selectConversation}
             onBack={() => setMobileChatOpen(false)}
             onSend={send}

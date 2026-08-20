@@ -17,6 +17,9 @@ interface ChatPageProps {
   silentRead: boolean;
   canCreateGroup: boolean;
   showChatOnMobile: boolean;
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  onLoadOlder: () => void;
   onSelect: (id: string) => void;
   onBack: () => void;
   onSend: (body: string) => void | Promise<void>;
@@ -145,6 +148,9 @@ export function ChatPage(props: ChatPageProps) {
               showSenderName={active.type === 'group'}
               aiProviderLabel={aiProviderLabel}
               typing={typing}
+              hasOlder={props.hasOlder}
+              loadingOlder={props.loadingOlder}
+              onLoadOlder={props.onLoadOlder}
             />
 
             {active.type === 'group' && silentRead ? (

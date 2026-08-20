@@ -147,16 +147,46 @@ router.get('/:id/ai-context', (req, res) => {
   res.json({ line: [...top, `相关成员 ${ids.length} 人`].join(' · ') });
 });
 
+// 分页：默认只给最新的一页，再往前用 before 游标翻。原来是把整个会话的历史
+// 一次性返回，消息一多就是几 MB 的响应加上前端一次渲染几千个气泡。
+export const MESSAGE_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
+
 router.get('/:id/messages', (req, res) => {
   const convo = requireMembership(req, res, req.params.id);
   if (!convo) return;
-  const rows = all(
-    `SELECT m.*, u.name AS sender_name, u.avatar_url FROM messages m JOIN users u ON u.id = m.sender_id
-     WHERE m.conversation_id = ? ORDER BY m.created_at, m.rowid`,
-    convo.id,
-  );
+
+  const asked = Number(req.query.limit);
+  const limit = Math.min(Math.max(Number.isFinite(asked) && asked > 0 ? asked : MESSAGE_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+
+  // before 传的是一条消息的 id，取比它更早的那些。同一毫秒内的多条消息用 rowid
+  // 兜底定序，否则翻页会漏掉或重复。
+  const before = req.query.before ? String(req.query.before) : '';
+  const anchor = before
+    ? get('SELECT created_at, rowid FROM messages WHERE id = ? AND conversation_id = ?', before, convo.id)
+    : null;
+  if (before && !anchor) return res.status(400).json({ error: '游标无效' });
+
+  // 多取一条用来判断还有没有更早的，不用再跑一次 count。
+  const rows = anchor
+    ? all(
+      `SELECT m.*, u.name AS sender_name, u.avatar_url FROM messages m JOIN users u ON u.id = m.sender_id
+       WHERE m.conversation_id = ? AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < ?))
+       ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
+      convo.id, anchor.created_at, anchor.created_at, anchor.rowid, limit + 1,
+    )
+    : all(
+      `SELECT m.*, u.name AS sender_name, u.avatar_url FROM messages m JOIN users u ON u.id = m.sender_id
+       WHERE m.conversation_id = ? ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
+      convo.id, limit + 1,
+    );
+
+  const hasMore = rows.length > limit;
+  const page = (hasMore ? rows.slice(0, limit) : rows).reverse();   // 返回给前端仍是由早到晚
   res.json({
-    messages: rows.map((r) => serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url })),
+    messages: page.map((r) => serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url })),
+    hasMore,
+    nextBefore: hasMore && page.length ? page[0].id : null,          // 下一页从本页最早那条往前翻
   });
 });
 

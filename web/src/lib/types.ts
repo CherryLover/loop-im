@@ -28,6 +28,13 @@ export interface Message {
   pending?: boolean;
 }
 
+/** 一页消息。nextBefore 是下一页的游标（本页最早那条的 id），没有更早的就是 null。 */
+export interface MessagePage {
+  messages: Message[];
+  hasMore: boolean;
+  nextBefore: string | null;
+}
+
 export type ConversationType = 'group' | 'dm' | 'ai';
 
 export interface Conversation {

@@ -10,19 +10,62 @@ interface MessageListProps {
   showSenderName: boolean;
   aiProviderLabel: string;
   typing: boolean;
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
 }
 
-export function MessageList({ messages, meId, showSenderName, aiProviderLabel, typing }: MessageListProps) {
+export function MessageList({
+  messages, meId, showSenderName, aiProviderLabel, typing, hasOlder, loadingOlder, onLoadOlder,
+}: MessageListProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // 加载历史前记下「距底部多远」，插入后按这个距离还原，视线不会被顶走。
+  const restoreFromBottom = useRef<number | null>(null);
+  const lastId = messages.at(-1)?.id;
+  const prevLastId = useRef<string | undefined>(undefined);
+
+  function requestOlder() {
+    if (!hasOlder || loadingOlder || !onLoadOlder) return;
+    const el = scrollRef.current;
+    restoreFromBottom.current = el ? el.scrollHeight - el.scrollTop : null;
+    onLoadOlder();
+  }
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' });
-  }, [messages.length, typing]);
+    const el = scrollRef.current;
+    // 刚插入了更早的消息：还原滚动位置，别当成「来了新消息」滚到底。
+    if (restoreFromBottom.current !== null && el) {
+      el.scrollTop = el.scrollHeight - restoreFromBottom.current;
+      restoreFromBottom.current = null;
+      prevLastId.current = lastId;
+      return;
+    }
+    // 只有最后一条变了（真的来了新消息）或首次渲染时才滚到底。
+    if (lastId !== prevLastId.current) {
+      prevLastId.current = lastId;
+      endRef.current?.scrollIntoView({ block: 'end' });
+    }
+  }, [messages, typing, lastId]);
+
+  useEffect(() => {
+    if (typing) endRef.current?.scrollIntoView({ block: 'end' });
+  }, [typing]);
 
   let lastDay = '';
 
   return (
-    <div className="chat__scroll">
+    <div
+      className="chat__scroll"
+      ref={scrollRef}
+      onScroll={(e) => { if (e.currentTarget.scrollTop < 80) requestOlder(); }}
+    >
+      {hasOlder ? (
+        <button type="button" className="chat__older" onClick={requestOlder} disabled={loadingOlder}>
+          {loadingOlder ? '加载中…' : '加载更早的消息'}
+        </button>
+      ) : null}
+
       {messages.length === 0 && !typing ? <div className="chat__empty">还没有消息，说点什么吧。</div> : null}
 
       {messages.map((m) => {
