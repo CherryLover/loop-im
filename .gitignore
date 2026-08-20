@@ -1,4 +1,6 @@
-node_modules/
+# 不带尾斜杠：worktree 里常把 node_modules 软链到主检出目录，
+# 带斜杠只匹配真目录，匹配不到符号链接，git status 会一直有噪音。
+node_modules
 dist/
 server/data/*.db
 server/data/*.db-wal
