@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, Search } from 'lucide-react';
+import { ChevronLeft, LogOut, Pencil, Search, UserPlus, X } from 'lucide-react';
 import { Avatar, AiBadge } from '../components/Avatar';
 import { MessageList } from '../components/MessageList';
 import { Composer } from '../components/Composer';
@@ -25,6 +25,10 @@ interface ChatPageProps {
   onBack: () => void;
   onSend: (body: string) => void | Promise<void>;
   onCreateGroup: () => void;
+  onAddMembers: (conversationId: string) => void;
+  onRemoveMember: (conversationId: string, userId: string, name: string) => void;
+  onRenameGroup: (conversationId: string, currentTitle: string) => void;
+  onLeaveGroup: (conversationId: string, title: string) => void;
 }
 
 export function ChatPage(props: ChatPageProps) {
@@ -33,6 +37,8 @@ export function ChatPage(props: ChatPageProps) {
   const [aiContext, setAiContext] = useState('');
 
   const active = conversations.find((c) => c.id === activeId) || null;
+  // 建群者本人和系统管理员可以增减成员、改群名（与服务端 canManageGroup 一致）。
+  const canManage = !!active && active.type === 'group' && (active.createdBy === me.id || me.role === 'admin');
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -172,7 +178,14 @@ export function ChatPage(props: ChatPageProps) {
           {active.type === 'group' ? (
             <div className="members">
               <div>
-                <div className="section-label" style={{ marginBottom: 8 }}>成员 · {active.members.length}</div>
+                <div className="members__head">
+                  <div className="section-label">成员 · {active.members.length}</div>
+                  {canManage ? (
+                    <button type="button" className="btn btn--sm" onClick={() => props.onAddMembers(active.id)}>
+                      <UserPlus size={13} /> 添加
+                    </button>
+                  ) : null}
+                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {active.members.map((m) => (
                     <div key={m.id} className="members__row">
@@ -187,6 +200,18 @@ export function ChatPage(props: ChatPageProps) {
                       <span className="members__name">{m.name}</span>
                       {m.isAI ? <AiBadge /> : null}
                       <span className="members__role">{m.roleInGroup}</span>
+                      {/* 群主不能被移除（他要走得自己退群），自己也不从这里移除 */}
+                      {canManage && m.id !== active.createdBy && m.id !== me.id ? (
+                        <button
+                          type="button"
+                          className="members__remove"
+                          title={`将 ${m.name} 移出群聊`}
+                          aria-label={`将 ${m.name} 移出群聊`}
+                          onClick={() => props.onRemoveMember(active.id, m.id, m.name)}
+                        >
+                          <X size={12} />
+                        </button>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -198,6 +223,17 @@ export function ChatPage(props: ChatPageProps) {
                   <div className="ai-context__body">{aiContext}</div>
                 </div>
               ) : null}
+
+              <div className="members__actions">
+                {canManage ? (
+                  <button type="button" className="btn btn--sm" onClick={() => props.onRenameGroup(active.id, active.title)}>
+                    <Pencil size={13} /> 修改群名
+                  </button>
+                ) : null}
+                <button type="button" className="btn btn--sm" onClick={() => props.onLeaveGroup(active.id, active.title)}>
+                  <LogOut size={13} /> 退出群聊
+                </button>
+              </div>
 
               <div className="members__foot">Aria 会记录每个人的沟通习惯，下次对话时沿用。</div>
             </div>

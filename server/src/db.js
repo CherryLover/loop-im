@@ -18,6 +18,8 @@ const MIGRATIONS = [
   ['messages', 'ai_visible', 'ALTER TABLE messages ADD COLUMN ai_visible INTEGER NOT NULL DEFAULT 1'],
   // users.auth_version：改密码时 +1，让之前签发的 token 全部作废。
   ['users', 'auth_version', 'ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1'],
+  // messages.kind：系统提示（谁加入/退出群、群名改了）与普通消息分开渲染。
+  ['messages', 'kind', "ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'user'"],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();

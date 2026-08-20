@@ -64,7 +64,31 @@ export function serializeMessage(row, sender) {
     mentions: JSON.parse(row.mentions || '[]'),
     createdAt: row.created_at,
     isAI: row.sender_id === AI_ID,
+    kind: row.kind || 'user',
   };
+}
+
+/**
+ * 成员变动、改群名之类的系统提示。挂在操作者名下但标成 system：
+ * 不能借 Aria 的口说（Aria 可能已经被移出群），也不该被 AI 当成对话内容学习，
+ * 所以 ai_visible 一律为 0。
+ */
+function insertSystemMessage(conversationId, actorId, body) {
+  const id = uid('m');
+  run(
+    `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, kind, created_at)
+     VALUES (?, ?, ?, ?, '[]', 0, 'system', ?)`,
+    id, conversationId, actorId, body, now(),
+  );
+  const row = get('SELECT * FROM messages WHERE id = ?', id);
+  const actor = get('SELECT * FROM users WHERE id = ?', actorId);
+  emitTo(memberIds(conversationId), 'message', { message: serializeMessage(row, actor) });
+  return row;
+}
+
+/** 群里能改成员和群名的人：建群者本人，或系统管理员。 */
+function canManageGroup(convo, user) {
+  return convo.type === 'group' && (convo.created_by === user.id || user.role === 'admin');
 }
 
 function serializeConversation(convo, viewerId) {
@@ -83,6 +107,7 @@ function serializeConversation(convo, viewerId) {
     type: convo.type,
     title: convo.type === 'group' ? convo.title : peer?.name || '会话',
     peerId: peer?.id || null,
+    createdBy: convo.created_by || null,        // 前端据此判断谁能管理成员与群名
     members: members.map((m) => ({ ...publicUser(m), roleInGroup: m.id === convo.created_by ? '管理员' : m.role === 'ai' ? '常驻' : m.dept })),
     lastMessage: last
       ? { preview: `${last.sender_id === viewerId ? '我：' : ''}${previewOf(last.body)}`, createdAt: last.created_at }
@@ -107,11 +132,11 @@ router.get('/:id', (req, res) => {
   res.json({ conversation: serializeConversation(convo, req.user.id) });
 });
 
-// 管理员把 2–3 人拉到一起建群，AI 助手默认加入。
+// 管理员建群，AI 助手默认加入。人数只要求至少 1 人，建完还可以随时增减。
 router.post('/group', requireAdmin, (req, res) => {
   const title = String(req.body?.title || '').trim() || '新群聊';
   const picked = [...new Set((req.body?.memberIds || []).filter((id) => id !== req.user.id && id !== AI_ID))];
-  if (picked.length < 2 || picked.length > 3) return res.status(400).json({ error: '请选择 2–3 名成员' });
+  if (!picked.length) return res.status(400).json({ error: '请至少选择 1 名成员' });
   const known = all(`SELECT id FROM users WHERE id IN (${picked.map(() => '?').join(',')})`, ...picked).map((r) => r.id);
   if (known.length !== picked.length) return res.status(400).json({ error: '成员不存在' });
 
@@ -155,6 +180,76 @@ router.post('/direct', (req, res) => {
   run('INSERT INTO conversation_members (conversation_id, user_id, joined_at) VALUES (?, ?, ?)', id, peer.id, ts);
   emitTo([req.user.id, peer.id], 'conversation-created', { conversationId: id });
   res.status(201).json({ conversation: serializeConversation(get('SELECT * FROM conversations WHERE id = ?', id), req.user.id) });
+});
+
+// ---- 群成员与群名管理 ---------------------------------------------------
+// 建群者与系统管理员可以增减成员、改群名；任何成员都可以自己退群。
+
+router.post('/:id/members', (req, res) => {
+  const convo = requireMembership(req, res, req.params.id);
+  if (!convo) return;
+  if (!canManageGroup(convo, req.user)) return res.status(403).json({ error: '只有群主或管理员可以添加成员' });
+
+  const existing = new Set(memberIds(convo.id));
+  const picked = [...new Set((req.body?.userIds || []).map(String))].filter((id) => !existing.has(id));
+  if (!picked.length) return res.status(400).json({ error: '请选择要添加的成员' });
+
+  const rows = all(`SELECT * FROM users WHERE id IN (${picked.map(() => '?').join(',')})`, ...picked);
+  if (rows.length !== picked.length) return res.status(400).json({ error: '成员不存在' });
+
+  const ts = now();
+  for (const u of rows) {
+    run('INSERT INTO conversation_members (conversation_id, user_id, joined_at) VALUES (?, ?, ?)', convo.id, u.id, ts);
+  }
+  insertSystemMessage(convo.id, req.user.id, `${req.user.name} 邀请 ${rows.map((u) => u.name).join('、')} 加入了群聊`);
+  // 新成员此前不在群里，收不到上面那条广播，单独通知他们会话有变。
+  emitTo(memberIds(convo.id), 'conversation-created', { conversationId: convo.id });
+  res.json({ conversation: serializeConversation(convo, req.user.id) });
+});
+
+router.delete('/:id/members/:userId', (req, res) => {
+  const convo = requireMembership(req, res, req.params.id);
+  if (!convo) return;
+  if (!canManageGroup(convo, req.user)) return res.status(403).json({ error: '只有群主或管理员可以移除成员' });
+
+  const target = req.params.userId;
+  if (target === convo.created_by) return res.status(400).json({ error: '不能移除群主，群主请使用退出群聊' });
+  if (!memberIds(convo.id).includes(target)) return res.status(404).json({ error: '该成员不在群里' });
+
+  const user = get('SELECT * FROM users WHERE id = ?', target);
+  const audience = memberIds(convo.id);          // 先取，被移除的人也应收到这条提示
+  run('DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?', convo.id, target);
+  insertSystemMessage(convo.id, req.user.id, `${req.user.name} 将 ${user.name} 移出了群聊`);
+  emitTo(audience, 'conversation-created', { conversationId: convo.id });
+  res.json({ conversation: serializeConversation(convo, req.user.id) });
+});
+
+router.patch('/:id', (req, res) => {
+  const convo = requireMembership(req, res, req.params.id);
+  if (!convo) return;
+  if (!canManageGroup(convo, req.user)) return res.status(403).json({ error: '只有群主或管理员可以改群名' });
+
+  const title = String(req.body?.title || '').trim();
+  if (!title) return res.status(400).json({ error: '群名称不能为空' });
+  if (title === convo.title) return res.json({ conversation: serializeConversation(convo, req.user.id) });
+
+  run('UPDATE conversations SET title = ? WHERE id = ?', title, convo.id);
+  insertSystemMessage(convo.id, req.user.id, `${req.user.name} 把群名改为「${title}」`);
+  const updated = get('SELECT * FROM conversations WHERE id = ?', convo.id);
+  res.json({ conversation: serializeConversation(updated, req.user.id) });
+});
+
+/** 自己退群。群主退群后群仍然存在，剩下的成员由管理员接手管理。 */
+router.post('/:id/leave', (req, res) => {
+  const convo = requireMembership(req, res, req.params.id);
+  if (!convo) return;
+  if (convo.type !== 'group') return res.status(400).json({ error: '只有群聊可以退出' });
+
+  const audience = memberIds(convo.id);
+  run('DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?', convo.id, req.user.id);
+  insertSystemMessage(convo.id, req.user.id, `${req.user.name} 退出了群聊`);
+  emitTo(audience, 'conversation-created', { conversationId: convo.id });
+  res.json({ ok: true });
 });
 
 // 成员可见的一行摘要：AI 目前从这个群里掌握到什么。

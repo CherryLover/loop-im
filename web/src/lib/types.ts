@@ -26,6 +26,8 @@ export interface Message {
   createdAt: number;
   isAI: boolean;
   pending?: boolean;
+  /** user = 普通消息；system = 成员变动、改群名之类的提示。 */
+  kind?: 'user' | 'system';
 }
 
 /** 某人在某个会话里读到了哪一刻。 */
@@ -49,6 +51,8 @@ export interface Conversation {
   type: ConversationType;
   title: string;
   peerId: string | null;
+  /** 建群者。他和系统管理员可以管理成员与群名。 */
+  createdBy: string | null;
   members: GroupMember[];
   lastMessage: { preview: string; createdAt: number } | null;
   /** 我在这个会话里的未读条数（不含自己发的）。 */

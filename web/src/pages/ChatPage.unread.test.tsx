@@ -10,7 +10,7 @@ const me: User = {
 };
 
 const convo = (id: string, title: string, unread: number): Conversation => ({
-  id, type: 'dm', title, peerId: 'u_chen',
+  id, type: 'dm', title, peerId: 'u_chen', createdBy: null,
   members: [
     { ...me, roleInGroup: '产品' },
     { id: 'u_chen', name: '陈子航', email: 'c@loop.dev', dept: '后端', role: 'member',
@@ -40,6 +40,10 @@ const view = (conversations: Conversation[]) =>
       onBack={vi.fn()}
       onSend={vi.fn()}
       onCreateGroup={vi.fn()}
+      onAddMembers={vi.fn()}
+      onRemoveMember={vi.fn()}
+      onRenameGroup={vi.fn()}
+      onLeaveGroup={vi.fn()}
     />,
   );
 

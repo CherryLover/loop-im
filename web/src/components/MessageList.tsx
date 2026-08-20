@@ -93,7 +93,10 @@ export function MessageList({
           <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {chip ? <div className="chat__daychip">{chip}</div> : null}
 
-            {mine ? (
+            {m.kind === 'system' ? (
+              // 成员变动、改群名之类的提示：居中一行灰字，不占气泡、也不算某个人「说的话」
+              <div className="chat__notice">{m.body}</div>
+            ) : mine ? (
               <div className="msg--me">
                 <div className="msg__col msg__col--me">
                   <div

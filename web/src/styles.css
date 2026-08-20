@@ -232,6 +232,11 @@ input, textarea { font-family: inherit; }
 .chat__sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; display: flex; align-items: center; gap: 5px; }
 .chat__back { display: none; }
 .chat__scroll { flex: 1; overflow-y: auto; padding: 16px 14px 8px; display: flex; flex-direction: column; gap: 14px; }
+/* 成员变动、改群名的系统提示：居中一行灰字，不做成气泡。 */
+.chat__notice {
+  align-self: center; max-width: 80%; text-align: center;
+  font-size: 11.5px; color: var(--faint); line-height: 1.6;
+}
 .chat__older {
   flex: none; align-self: center; border: 1px solid var(--border); background: var(--surface);
   color: var(--muted); border-radius: 99px; padding: 5px 14px; font-size: 12px; cursor: pointer;

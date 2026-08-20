@@ -36,6 +36,7 @@ const group: Conversation = {
   members: [member('u_lin', '林悦'), member('u_chen', '陈子航'), member('ai', 'Aria', true)],
   lastMessage: null,
   unread: 0,
+  createdBy: 'u_lin',
 };
 
 // 建群成功后 AppShell 会走 selectConversation（选中会话 + 手机端展开详情），
@@ -60,6 +61,10 @@ const renderChat = (showChatOnMobile: boolean, onBack = vi.fn()) => {
       onBack={onBack}
       onSend={vi.fn()}
       onCreateGroup={vi.fn()}
+      onAddMembers={vi.fn()}
+      onRemoveMember={vi.fn()}
+      onRenameGroup={vi.fn()}
+      onLeaveGroup={vi.fn()}
     />,
   );
   return { ...view, onBack };

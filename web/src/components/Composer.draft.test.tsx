@@ -20,6 +20,7 @@ const group: Conversation = {
   members: [member('u_lin', '林悦'), member('u_chen', '陈子航'), member('ai', 'Aria', true)],
   lastMessage: null,
   unread: 0,
+  createdBy: 'u_lin',
 };
 
 const setup = (onSend: (body: string) => void | Promise<void>) => {

@@ -8,6 +8,7 @@ import { AiPage } from './pages/AiPage';
 import { CreateGroupModal } from './modals/CreateGroupModal';
 import { AddContactModal } from './modals/AddContactModal';
 import { ProfileModal } from './modals/ProfileModal';
+import { ManageGroupModal, type ManageMode } from './modals/ManageGroupModal';
 import { api } from './lib/api';
 import { initialOf } from './lib/md';
 import { unreadLabel } from './lib/format';
@@ -49,6 +50,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   // 手机端「会话列表 / 会话详情」的开合状态放在这里，切换底部 tab 时不会被重置。
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [modal, setModal] = useState<'group' | 'contact' | 'profile' | null>(null);
+  // 群管理弹窗：加人 / 改群名 / 退群，三者共用一个组件。
+  const [manage, setManage] = useState<{ mode: ManageMode; conversationId: string } | null>(null);
   const [toast, setToast] = useState(justSignedIn ? '已上线 · 与服务器保持连接' : '');
   const loaded = useRef<Set<string>>(new Set());
   // loadOlder 要读最新的翻页状态又不想因此重建回调，用 ref 镜像一份。
@@ -223,6 +226,28 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     }
   }, [activeId, me, refreshConversations]);
 
+  /** 移除成员：可逆操作（还能再加回来），所以不额外弹确认，用提示条回执。 */
+  const removeMember = useCallback(async (conversationId: string, userId: string, name: string) => {
+    try {
+      await api.removeMember(conversationId, userId);
+      await refreshConversations();
+      setToast(`已将 ${name} 移出群聊`);
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : '移除失败');
+    }
+  }, [refreshConversations]);
+
+  /** 群管理弹窗完成后：刷新会话；如果是退群，还要把选中项切走。 */
+  const onManageDone = useCallback(async (message: string, left?: boolean) => {
+    setManage(null);
+    setToast(message);
+    if (left) {
+      setActiveId(null);
+      setMobileChatOpen(false);
+    }
+    await refreshConversations();
+  }, [refreshConversations]);
+
   // 主动选中某个会话：手机端同时展开会话详情。自动选中（如登录后的首个会话）不走这里。
   const selectConversation = useCallback((id: string) => {
     setActiveId(id);
@@ -306,6 +331,10 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             onBack={() => setMobileChatOpen(false)}
             onSend={send}
             onCreateGroup={() => setModal('group')}
+            onAddMembers={(id) => setManage({ mode: 'add', conversationId: id })}
+            onRemoveMember={(id, userId, name) => void removeMember(id, userId, name)}
+            onRenameGroup={(id) => setManage({ mode: 'rename', conversationId: id })}
+            onLeaveGroup={(id) => setManage({ mode: 'leave', conversationId: id })}
           />
         ) : null}
 
@@ -350,6 +379,19 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
           我
         </button>
       </nav>
+
+      {manage ? (() => {
+        const target = conversations.find((c) => c.id === manage.conversationId);
+        return target ? (
+          <ManageGroupModal
+            mode={manage.mode}
+            conversation={target}
+            users={users}
+            onClose={() => setManage(null)}
+            onDone={(message, left) => void onManageDone(message, left)}
+          />
+        ) : null;
+      })() : null}
 
       {modal === 'group' ? (
         <CreateGroupModal

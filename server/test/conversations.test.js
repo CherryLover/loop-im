@@ -73,14 +73,19 @@ describe('建群', () => {
     assert.equal(messages[0].isAI, true);
   });
 
-  it('人数不在 2–3 之间会被拒绝', async () => {
-    const one = await api.post('/api/conversations/group', { title: '太少', memberIds: [su.id] }, adminToken);
+  // 建群的人数硬限制已经放开（建完还能随时增减成员），现在只要求至少 1 人。
+  it('一个成员都不选会被拒绝，1 人和 4 人都可以', async () => {
+    const none = await api.post('/api/conversations/group', { title: '空群', memberIds: [] }, adminToken);
+    assert.equal(none.status, 400);
+
+    const one = await api.post('/api/conversations/group', { title: '两人组', memberIds: [su.id] }, adminToken);
+    assert.equal(one.status, 201);
+
     const gao = await member('高远', { dept: '测试' });
     const four = await api.post('/api/conversations/group', {
-      title: '太多', memberIds: [su.id, zhou.id, chen.id, gao.id],
+      title: '五人组', memberIds: [su.id, zhou.id, chen.id, gao.id],
     }, adminToken);
-    assert.equal(one.status, 400);
-    assert.equal(four.status, 400);
+    assert.equal(four.status, 201);
   });
 
   it('不存在的成员会被拒绝', async () => {

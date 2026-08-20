@@ -96,6 +96,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ userId }),
     }),
+  addMembers: (id: string, userIds: string[]) =>
+    request<{ conversation: Conversation }>(`/conversations/${id}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ userIds }),
+    }),
+  removeMember: (id: string, userId: string) =>
+    request<{ conversation: Conversation }>(`/conversations/${id}/members/${userId}`, { method: 'DELETE' }),
+  renameConversation: (id: string, title: string) =>
+    request<{ conversation: Conversation }>(`/conversations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  leaveConversation: (id: string) =>
+    request<{ ok: true }>(`/conversations/${id}/leave`, { method: 'POST' }),
   aiContext: (id: string) => request<{ line: string }>(`/conversations/${id}/ai-context`),
   // 默认只取最新一页；翻历史时把上一页最早那条的 id 作为 before 传回来。
   messages: (id: string, opts: { before?: string; limit?: number } = {}) => {
