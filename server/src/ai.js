@@ -2,6 +2,7 @@
 // a per-person profile of communication habits it reuses on the next conversation.
 import { all, get, run, now, uid } from './db.js';
 import { decrypt, encrypt, isEncrypted, isEncryptionConfigured } from './secret-box.js';
+import { graphemeLength, truncate } from './text.js';
 
 export const AI_ID = 'ai';
 export const AI_NAME = 'Aria';
@@ -169,7 +170,8 @@ async function callProvider(messages, s) {
 /** Offline fallback so the product works end-to-end without any API key. */
 function stubReply(conversation, lines, askedBy) {
   const others = lines.filter((l) => l.sender_id !== AI_ID).slice(-3);
-  const points = others.map((l) => `- ${l.name}：${stripMd(l.body).slice(0, 42)}`).join('\n');
+  // 截断按字素簇（见 text.js）：slice 会把 emoji 劈成半个代理对，喂给模型的上下文里就是乱码。
+  const points = others.map((l) => `- ${l.name}：${truncate(stripMd(l.body), 42)}`).join('\n');
   const hint = askedBy ? profileHint([askedBy]) : '';
   const tail = hint ? '\n\n（已按你以往的沟通偏好精简表达）' : '';
   if (conversation.type === 'ai') {
@@ -235,7 +237,7 @@ export async function learnAbout(userId, conversation) {
   const existing = get('SELECT * FROM ai_profiles WHERE user_id = ?', userId);
   let next = {
     scene,
-    summary: stripMd(mine[0].body).slice(0, 60) || existing?.summary || '',
+    summary: truncate(stripMd(mine[0].body), 60) || existing?.summary || '',
     note: existing?.note || '',
     habits: JSON.parse(existing?.habits || '[]'),
     keys: JSON.parse(existing?.keys || '[]'),
@@ -266,7 +268,8 @@ export async function learnAbout(userId, conversation) {
       .map((c) => c.replace(/\[[^\]]*\]/g, '').replace(/^[-*\s]+/, '').replace(/[：:\s]+$/, '').trim())
       .filter((c) => !c.includes('@'))
       .filter((c) => !/^(我|我们|你|你们|他|她|大家)/.test(c))   // sentences, not information points
-      .filter((c) => c.length >= 4 && c.length <= 16 && KEY_HINT.test(c));
+      // 长度按「用户眼里的字数」算：c.length 数的是码元，一句带 emoji 的话会被虚高成超长而丢掉。
+      .filter((c) => { const n = graphemeLength(c); return n >= 4 && n <= 16 && KEY_HINT.test(c); });
     next.keys = [...new Set([...next.keys, ...clauses])].slice(0, 8);
   }
 

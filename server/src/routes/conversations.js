@@ -6,6 +6,7 @@ import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parse
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
 import { addReaction, groupReactions, normalizeEmoji, reactionRows, reactionsOf, removeReaction } from '../reactions.js';
+import { truncate } from '../text.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -111,12 +112,17 @@ const readsOf = (conversationId, viewerId) => all(
   conversationId, viewerId,
 ).map((r) => ({ userId: r.user_id, lastReadAt: r.last_read_at }));
 
+// 截断走 text.js 的 truncate（按字素簇），不能用 slice —— slice 按 UTF-16 码元切，
+// 正好切在 emoji 中间就留下半个代理对，预览里是个 �。理由与样例见 text.js。
 const previewOf = (body, limit = 26) =>
-  body
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
-    // 非图片附件是普通链接，会话列表里只显示「[文件] 名字」，不把 /uploads/ 路径抖出来。
-    .replace(/\[([^\]]*)\]\(\/uploads\/[^)]*\)/g, '[文件] $1')
-    .replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit);
+  truncate(
+    body
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
+      // 非图片附件是普通链接，会话列表里只显示「[文件] 名字」，不把 /uploads/ 路径抖出来。
+      .replace(/\[([^\]]*)\]\(\/uploads\/[^)]*\)/g, '[文件] $1')
+      .replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim(),
+    limit,
+  );
 
 // 引用块比会话列表那一行宽，可以多给几个字，但也只是一眼扫过去认出「回的是哪条」。
 const QUOTE_PREVIEW_LIMIT = 48;
