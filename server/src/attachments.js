@@ -125,6 +125,26 @@ const INLINE_EXTENSIONS = new Map([
 ]);
 
 /**
+ * 站内附件地址长这样：`/uploads/<key>`，key 由服务端生成（randomUUID + 服务端定的扩展名）。
+ * 消息正文里它以 Markdown 链接/图片的形式出现，所以「这条消息引用了哪些附件」就是在正文里
+ * 扫这个模式。字符集刻意收紧到 key 真实可能出现的范围，别把后面的 `)` 或中文一起吃进来。
+ */
+const ATTACHMENT_URL_RE = /\/uploads\/([A-Za-z0-9][A-Za-z0-9._-]*)/g;
+
+/** 从一段正文里抽出它引用到的全部附件 key，去重。 */
+export function attachmentKeysIn(body) {
+  const keys = new Set();
+  for (const m of String(body || '').matchAll(ATTACHMENT_URL_RE)) keys.add(m[1]);
+  return [...keys];
+}
+
+/** `/uploads/9f3a.png` → `9f3a.png`；不是站内附件地址就返回 null。 */
+export function keyFromUrl(url) {
+  const m = /^\/uploads\/([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(String(url || ''));
+  return m ? m[1] : null;
+}
+
+/**
  * `/uploads` 的回源响应头。按扩展名白名单决定：
  *
  *   白名单内 —— 钉死成对应的 `image/*`，可以内联；

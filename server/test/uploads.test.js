@@ -29,7 +29,9 @@ describe('图片附件', () => {
     assert.equal(res.body.kind, 'image');
     assert.equal(res.body.storage, 'local');
 
-    const served = await fetch(`${api.baseUrl}${res.body.url}`);
+    // 附件回源现在要凭据了（只有该附件所在会话的成员能下载，见 attachment-access.js）；
+    // 刚上传还没发出去的对象，上传者本人取得回来。
+    const served = await fetch(`${api.baseUrl}${res.body.url}?token=${encodeURIComponent(token)}`);
     assert.equal(served.status, 200);
     assert.equal(served.headers.get('content-type'), 'image/png');
     assert.equal(Buffer.from(await served.arrayBuffer()).length, PNG.length);

@@ -112,6 +112,10 @@ router.post('/me/avatar', authenticate, limitUsage('upload'), upload.single('fil
   }
   const { url } = await putObject({ buffer: req.file.buffer, ext: verdict.ext, mime: verdict.mime });
   run('UPDATE users SET avatar_url = ? WHERE id = ?', url, req.user.id);
+  // 头像和聊天附件走同一个 putObject，但**可见性规则不同**：头像是全员可见的
+  // （成员列表、@候选、历史消息里到处都是），所以它不进 attachments / attachment_refs，
+  // 回源时按 users.avatar_url 单独放行一档，见 attachment-access.js 的 isAvatar。
+  logEvent('avatar.updated', { userId: req.user.id, bytes: req.file.size, mime: verdict.mime });
   const user = get('SELECT * FROM users WHERE id = ?', req.user.id);
   emitAll('user-updated', { user: publicUser(user) });
   res.json({ user: publicUser(user) });

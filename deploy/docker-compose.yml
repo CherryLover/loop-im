@@ -1,6 +1,47 @@
 # Loop IM 部署编排。所有数据都落在与本文件同级的 ./data 目录里，
 # 备份 = 打包这个目录；迁移 = 复制这个目录 + .env。
+#
+# 附件对象存储（MinIO）是**可选**的：.env 里不填 S3_BUCKET 就还是走本地磁盘，
+# 和加这个服务之前一模一样。填了才切过去。见 README 的「附件存到 MinIO」。
 services:
+  # 附件对象存储。⚠️ 故意**不**映射任何端口到宿主机 —— 它只在 compose 的内部网络里
+  # 被 loop-im 容器访问。浏览器绝不直连它：附件的全部安全头（强制下载、nosniff、CSP，
+  # 见 server/src/attachments.js）都是 Express 回源时加的，让浏览器直连对象存储
+  # 会把这些头全部丢掉，一份 HTML 附件当场变回存储型 XSS。
+  #
+  # 想临时开控制台排查问题，就在本机开一条 SSH 隧道，不要在这里加 ports：
+  #   ssh -L 9001:127.0.0.1:9001 user@server
+  #   docker compose exec minio true   # 确认容器在跑
+  # 再临时 `docker compose run --rm -p 127.0.0.1:9001:9001 minio ...`，用完即弃。
+  minio:
+    image: ${MINIO_IMAGE:-quay.io/minio/minio}:${MINIO_TAG:-latest}
+    container_name: loop-im-minio
+    restart: unless-stopped
+    # 放进 profile：不加 `--profile minio` 就压根不会被启动，
+    # 已有的、不打算用对象存储的部署执行 `docker compose up -d` 时行为完全不变。
+    profiles: ["minio"]
+    command: server /data --console-address ":9001"
+    environment:
+      # 凭据只从 .env 读，仓库里一个字符都不写。.env 不进 git（见 .gitignore）。
+      # 这里不用 ${VAR:?} 的必填写法：compose 会对整个文件做插值，哪怕 profile 没启用
+      # 也会报错，那样就把不用 MinIO 的部署一起卡死了。没填时由 MinIO 自己启动失败并报错。
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY}
+    volumes:
+      # 对象也落在 ./data 底下，备份口径不变：打包 data/ 就是全量备份。
+      - ./data/minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   loop-im:
     image: ${LOOP_IM_IMAGE:-ghcr.io/cherrylover/loop-im}:${LOOP_IM_TAG:-latest}
     container_name: loop-im

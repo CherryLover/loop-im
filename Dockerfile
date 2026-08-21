@@ -24,6 +24,9 @@ WORKDIR /app
 COPY --from=server-deps /build/server/node_modules ./server/node_modules
 COPY server/package.json ./server/package.json
 COPY server/src ./server/src
+# 运维脚本（把本地附件搬进 MinIO、清点历史上传）要能在容器里跑：
+#   docker compose run --rm loop-im node scripts/migrate-uploads-to-minio.mjs
+COPY scripts ./scripts
 COPY --from=web-build /build/web/dist ./web/dist
 
 # 以非 root 运行，数据目录交给挂载卷

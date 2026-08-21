@@ -106,6 +106,13 @@ DEMO_PASSWORD=只在本地用的密码
 - 头像只走图片这一档 —— 它一定会被渲染成 `<img>`。
 - 回源响应头按扩展名白名单发，白名单之外一律强制下载，所以**修复之前**遗留在磁盘上的
   `.html` / `.svg` 从升级那一刻起也已经跑不起来了。
+- 对象可以存进 MinIO，但**浏览器永远不直连对象存储**：上面这组头全部是 Express 回源时加的，
+  让浏览器直连（预签名 URL、公开桶、CDN）会把它们一并丢掉，存储型 XSS 当场复活。
+  所以 MinIO 只在 Docker 内网监听，回源走 `server/src/routes/upload-files.js` 这个代理，
+  安全策略仍然只有 `attachments.js` 一处。详见 `deploy/README.md`。
+- 附件下载要鉴权：只有**该附件所在会话的成员**能下载（未登录 401，非成员和查无此附件
+  给逐字相同的 404，不做存在性探针）。头像是全员可见的，单独一档。归属关系记在
+  `attachment_refs` 表里，升级时会扫历史消息正文自动回填。
 
 历史文件的清点/清理是**手动**的，不在启动时自动删用户数据：
 
@@ -177,9 +184,12 @@ server/                Express + node:sqlite 后端
   src/auth.js           bcrypt + JWT（15 天）、在线判定
   src/ai.js             供应商调用、@ 解析、回复策略、画像学习
   src/attachments.js    附件类型判定（magic number 嗅探）与 /uploads 回源响应头策略
-  src/storage.js        附件存储（默认本地磁盘，S3 driver 留了接入点）
+  src/storage.js        附件存储（默认本地磁盘，配了 S3_BUCKET 就走 MinIO；切换期双读）
+  src/object-store.js   对象存储的可替换接口：local / s3 / memory（测试用内存实现）
+  src/s3-sign.js        AWS SigV4 签名（只够 PUT/GET/DELETE 单个对象，不引第三方 SDK）
+  src/attachment-access.js  附件下载鉴权（按会话成员判定）与孤儿对象定期清理
   src/events.js         SSE 推送
-  src/routes/           auth / users / conversations / uploads / ai
+  src/routes/           auth / users / conversations / uploads / upload-files / ai
 web/                   Vite + React + TypeScript 前端
   src/styles.css        设计 token（浅色/深色）与全部组件样式
   src/lib/              api 客户端、Markdown 渲染、时间格式、主题、SSE hook
@@ -241,7 +251,10 @@ chats/                 设计过程的对话记录
 | `RATE_AI_WINDOW_MS` / `RATE_AI_MAX` | @Aria 限流，默认 5 分钟 10 次。这一档单独且更严：每次都真实调用大模型 |
 | `RATE_UPLOAD_WINDOW_MS` / `RATE_UPLOAD_MAX` | 上传限流（聊天附件与头像共用），默认 1 分钟 20 次 |
 | `RATE_WRITE_WINDOW_MS` / `RATE_WRITE_MAX` | 建群 / 加成员等写接口限流，默认 1 分钟 30 次 |
-| `S3_BUCKET` / `S3_REGION` | 配置后附件走 S3（需在 `src/storage.js` 的 s3 分支接入客户端），留空用本地磁盘 |
+| `S3_BUCKET` / `S3_ENDPOINT` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` / `S3_REGION` | 配置后附件走 MinIO / S3 兼容存储，留空用本地磁盘。切换步骤见 `deploy/README.md` |
+| `UPLOADS_LOCAL_FALLBACK` | 切换期双读：对象存储里没有的附件回落到本地磁盘。老文件搬完后设 `0` 关掉 |
+| `UPLOADS_LEGACY_ACCESS` | 历史附件（库里查不到归属的老对象）的降级策略：`authenticated`（默认）/ `deny` |
+| `UPLOAD_ORPHAN_TTL_HOURS` / `UPLOAD_SWEEP_INTERVAL_MINUTES` | 孤儿对象清理的保留时长与扫描间隔，默认 24 小时 / 60 分钟 |
 | `CODEX_ENDPOINT` | Codex 本地 Agent 的调用地址（可选） |
 
 AI 供应商与 API Key 存在数据库里，通过「AI 配置」页面维护，接口不会把 Key 回传给前端。

@@ -5,6 +5,7 @@ import { emitTo } from '../events.js';
 import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
+import { linkAttachmentsToMessage } from '../attachment-access.js';
 import { addReaction, groupReactions, normalizeEmoji, reactionRows, reactionsOf, removeReaction } from '../reactions.js';
 import { truncate } from '../text.js';
 import { consumeQuota, limitUsage, quotaState, rejectOverQuota } from '../usage-limit.js';
@@ -621,6 +622,8 @@ router.post('/:id/messages', (req, res) => {
     id, convo.id, req.user.id, body, JSON.stringify(mentions), aiVisible ? 1 : 0, replyTo, now());
   consumeQuota('message', req.user.id);
   if (willCallModel) consumeQuota('ai', req.user.id);
+  // 正文里引用到的附件挂到这个会话上：附件的下载鉴权就是查这张关联表（见 attachment-access.js）。
+  linkAttachmentsToMessage({ body, conversationId: convo.id, messageId: id, senderId: req.user.id });
   const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), req.user);
   emitTo(audience, 'message', { message });
   res.status(201).json({ message });

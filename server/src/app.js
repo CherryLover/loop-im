@@ -4,15 +4,14 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UPLOAD_DIR } from './db.js';
 import { authenticate } from './auth.js';
 import { subscribe } from './events.js';
-import { setUploadHeaders } from './attachments.js';
 import { OVERSIZED_MESSAGE } from './upload-middleware.js';
 import { router as authRoutes } from './routes/auth.js';
 import { router as userRoutes } from './routes/users.js';
 import { router as conversationRoutes } from './routes/conversations.js';
 import { router as uploadRoutes } from './routes/uploads.js';
+import { router as uploadFileRoutes } from './routes/upload-files.js';
 import { router as searchRoutes } from './routes/search.js';
 import { router as aiRoutes } from './routes/ai.js';
 import { logError } from './log.js';
@@ -56,7 +55,11 @@ export function createApp({ serveClient = true } = {}) {
   app.use(express.json({ limit: '1mb' }));
   // 上传目录和聊天系统同源，回源头必须自己钉死：图片按 image/* 内联，其余强制下载。
   // 少了这一步，一份 .html 附件就是一个同源、能读 localStorage 里 token 的页面（issue #22）。
-  app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1h', setHeaders: setUploadHeaders }));
+  //
+  // 这里不再是 express.static：对象可能在本地磁盘，也可能在只对内网开放的 MinIO 里，
+  // 而且现在要先过一道「你是不是该附件所在会话的成员」。两件事都收在这个 router 里，
+  // 安全头仍然是同一个 setUploadHeaders（见 routes/upload-files.js 顶部那段说明）。
+  app.use('/uploads', uploadFileRoutes);
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/stream', authenticate, (req, res) => subscribe(req.user.id, res));

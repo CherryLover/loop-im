@@ -4,6 +4,8 @@ import { truncate } from './text';
  * The prototype's Markdown subset: paragraphs, bullet lists, bold, inline code,
  * links, images and @mentions. Escapes first, so the result is safe to inject.
  */
+import { attachmentUrl } from './api';
+
 const escapeHtml = (raw: string) =>
   raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -29,9 +31,9 @@ export function renderMarkdown(source: string): string {
   const hold = (value: string) => `\u0000${slots.push(value) - 1}\u0000`;
 
   s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt: string, url: string) =>
-    `<img alt="${hold(alt)}" src="${hold(safeUrl(url))}">`);
+    `<img alt="${hold(alt)}" src="${hold(attachmentUrl(safeUrl(url)))}">`);
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) => {
-    const href = safeUrl(url);
+    const href = attachmentUrl(safeUrl(url));
     // 指向 /uploads/ 的链接一律渲染成「文件卡片 + 下载」，永远不内联。
     // 真正拦住脚本执行的是服务端的响应头（Content-Disposition: attachment +
     // application/octet-stream + nosniff，见 server/src/attachments.js）——
