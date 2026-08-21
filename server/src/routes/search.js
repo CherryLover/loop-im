@@ -9,6 +9,7 @@ import { authenticate } from '../auth.js';
 import { serializeMessage } from './conversations.js';
 import { escapeLike } from '../sql.js';
 import { reactionsOf } from '../reactions.js';
+import { graphemeLength } from '../text.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -17,6 +18,10 @@ router.use(authenticate);
 export const SEARCH_PAGE_SIZE = 30;
 export const MAX_SEARCH_PAGE_SIZE = 100;
 // 关键词长度上限。再长也不会是真的检索意图，只会让 LIKE 全表扫得更慢。
+// 按字素簇数算，不按 .length —— 报错文案说的是「100 个字符」，而 .length 数的是
+// UTF-16 码元：一个 emoji 算 2 个、一家三口 👨‍👩‍👧 算 8 个，纯 emoji 关键词会在
+// 远不到 100「个字」的时候就被拒，与文案对不上。上限本身仍然是常数级，
+// 最坏情况也就几百个码元，对 LIKE 的扫描成本没有影响。
 export const MAX_QUERY_LENGTH = 100;
 
 /** 拼「包含关键词」的 LIKE 模式。转义规则见 sql.js —— 查询侧必须配 ESCAPE '\\'。 */
@@ -58,7 +63,7 @@ function titleResolver(viewerId) {
 router.get('/search', (req, res) => {
   const q = oneString(req.query.q).trim();
   if (!q) return res.status(400).json({ error: '请输入搜索关键词' });
-  if (q.length > MAX_QUERY_LENGTH) {
+  if (graphemeLength(q) > MAX_QUERY_LENGTH) {
     return res.status(400).json({ error: `搜索关键词不能超过 ${MAX_QUERY_LENGTH} 个字符` });
   }
 

@@ -17,6 +17,7 @@
  * 原始文件名只作为**显示名**存在数据库和消息里，绝不参与磁盘路径和 URL。
  */
 import { extname } from 'node:path';
+import { truncate } from './text.js';
 
 /** 允许内联渲染的图片格式：扩展名和 Content-Type 都由这张表说了算。 */
 const IMAGE_SIGNATURES = [
@@ -104,7 +105,9 @@ export function displayName(raw, fallback = '附件') {
     .filter((ch) => ch >= ' ' && ch !== '\u007f')
     .join('')
     .trim();
-  return clean.slice(0, 120) || fallback;
+  // 限长按字素簇（见 text.js）：文件名里带 emoji 时 slice 会切出半个代理对，
+  // 而这个显示名会拼进消息正文，一路乱码到聊天记录里。
+  return truncate(clean, 120) || fallback;
 }
 
 /**

@@ -15,15 +15,40 @@ import { all, now, run } from './db.js';
 export const REACTION_EMOJIS = ['👍', '❤️', '😄', '🎉', '😮', '🙏'];
 
 /**
- * 变体选择符（U+FE0F）在不同客户端/输入法下可有可无：❤ 和 ❤️ 肉眼一样，字节不一样。
- * 不归一的话同一个表情会在库里分成两行、界面上排成两个计数。这里按「去掉 U+FE0F」
- * 做索引，落库一律用白名单里的写法。
+ * 归一：同一个表情的不同写法要落到同一个 key 上，否则库里分成两行、界面上排成两个计数。
+ *
+ * 要抹掉的有两类，都是**纯表现、无语义**的东西：
+ *
+ * 1. 变体选择符 U+FE0F / U+FE0E。❤ 和 ❤️ 肉眼一样，字节不一样；不同客户端和输入法
+ *    加不加全看心情。FE0E（要求按文字渲染）是同一类，一起抹掉。
+ * 2. **悬空的零宽连接符 U+200D**。ZWJ 只有夹在两个字符中间才有意义；出现在开头、
+ *    结尾，或者连着好几个，都是无意义的残留 —— 而按码元/码点截断出来的碎片正好长
+ *    这样（'👨‍👩‍👧' 切到一半就是 '👨‍'）。不归一的话，同一个 👍 只因为尾巴上多个 ZWJ 就被拒。
+ *
+ * **中间的 ZWJ 必须留着**：它是有语义的。👨‍👩‍👧（一家三口，两个 ZWJ 连起来）和
+ * 👨👩👧（三个各自独立的人）是两个不同的东西，无脑把 ZWJ 全删掉会把它们合并成一行。
+ * 所以这里只折叠悬空的那些，不碰夹在中间的。
+ *
+ * 白名单 key 也走同一个函数生成，将来往 REACTION_EMOJIS 里加 ZWJ 表情（比如 👩‍❤️‍👨）
+ * 不用改这里 —— 它内部的 FE0F 会被抹掉，两侧的 ZWJ 会原样保留，正好对得上。
  */
-const VARIATION_SELECTOR = /\uFE0F/g;
-const CANONICAL = new Map(REACTION_EMOJIS.map((e) => [e.replace(VARIATION_SELECTOR, ''), e]));
+const PRESENTATION_SELECTOR = /[\uFE0E\uFE0F]/g;
+export function canonicalEmojiKey(raw) {
+  return String(raw)
+    .replace(PRESENTATION_SELECTOR, '')
+    .replace(/\u200D{2,}/g, '\u200D')   // 连着好几个连接符，折成一个
+    .replace(/^\u200D+/, '')            // 开头的连接符没有左操作数
+    .replace(/\u200D+$/, '');           // 结尾的连接符没有右操作数（截断残留就长这样）
+}
 
-/** 白名单里最长的表情也就三个 UTF-16 码元，超出这个数的一律不必再看。 */
-const MAX_EMOJI_LENGTH = 8;
+const CANONICAL = new Map(REACTION_EMOJIS.map((e) => [canonicalEmojiKey(e), e]));
+
+/**
+ * 长度上限，只用来在做任何字符串处理之前挡掉超大 payload，不承担白名单校验
+ * ——真正说了算的是 CANONICAL。给得宽松一点：ZWJ 表情本来就长（👨‍👩‍👧‍👦 是 11 个
+ * 码元），再算上可有可无的变体选择符，几十个码元都属于正常范围。
+ */
+const MAX_EMOJI_LENGTH = 64;
 
 /**
  * 把客户端传来的值收敛成白名单里的写法；不在白名单里就返回 null，调用方据此拒绝。
@@ -31,7 +56,7 @@ const MAX_EMOJI_LENGTH = 8;
  */
 export function normalizeEmoji(input) {
   if (typeof input !== 'string' || input.length > MAX_EMOJI_LENGTH) return null;
-  return CANONICAL.get(input.replace(VARIATION_SELECTOR, '')) ?? null;
+  return CANONICAL.get(canonicalEmojiKey(input)) ?? null;
 }
 
 /**

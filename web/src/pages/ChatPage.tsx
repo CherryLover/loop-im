@@ -5,16 +5,18 @@ import { MessageList } from '../components/MessageList';
 import { Composer } from '../components/Composer';
 import { api } from '../lib/api';
 import { listTime, unreadAriaLabel, unreadBadgeClass, unreadLabel } from '../lib/format';
-import { replyTargetOf } from '../lib/messages';
+import { plainTextOf, replyTargetOf } from '../lib/messages';
 import type { Conversation, Message, MessageSearchResult, ReadState, ReplyTarget, User } from '../lib/types';
 
 /** 搜索框里输入多久没动就发请求：每敲一个字都打一次服务端太浪费。 */
 const SEARCH_DEBOUNCE_MS = 250;
 const SEARCH_LIMIT = 20;
 
-/** 结果行只放一行摘要，把 Markdown 记号和图片压成纯文本（与服务端 previewOf 同一思路）。 */
-const plainPreview = (body: string) =>
-  body.replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]').replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim();
+/**
+ * 结果行只放一行摘要，把 Markdown 记号和图片压成纯文本。清洗口径收敛到 messages.ts
+ * 那一份（原来这里是它的第三份拷贝），长度仍然交给 CSS 省略号，不在代码里截断。
+ */
+const plainPreview = plainTextOf;
 
 interface ChatPageProps {
   me: User;
