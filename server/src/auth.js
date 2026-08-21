@@ -2,6 +2,7 @@ import { randomInt } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { get, run, now, uid } from './db.js';
+import { logWarn } from './log.js';
 
 // 代码是公开的，所以开发用的默认密钥只能在非生产环境使用：
 // 生产环境必须显式提供 JWT_SECRET，否则任何人都能用已知的默认值伪造 token。
@@ -126,6 +127,18 @@ function readToken(req) {
   return req.query.token || null;
 }
 
+/**
+ * 凭据被拒时记一行，reason 说明是哪一道闸门拦的。
+ *
+ * 唯独不记「压根没带 token」：那是匿名请求，前端没登录时每次刷新都来一发，
+ * 量大且什么也说明不了。这里要的是「拿着一张凭据却被拒」——过期、被改密码顶掉、
+ * 会话已退出、账号被停用，这几种才是用户会来报障、而我们需要能解释的情况。
+ */
+const rejectAuth = (req, res, reason, message, userId = null) => {
+  logWarn('auth.credential.rejected', { reqId: req.id, ip: req.ip, userId, reason, path: req.path });
+  return res.status(401).json({ error: message });
+};
+
 export function authenticate(req, res, next) {
   const token = readToken(req);
   if (!token) return res.status(401).json({ error: '未登录' });
@@ -133,10 +146,10 @@ export function authenticate(req, res, next) {
   try {
     payload = jwt.verify(token, SECRET);
   } catch {
-    return res.status(401).json({ error: '登录已过期，请重新登录' });
+    return rejectAuth(req, res, 'token_invalid', '登录已过期，请重新登录');
   }
   const user = get('SELECT * FROM users WHERE id = ?', payload.sub);
-  if (!user) return res.status(401).json({ error: '账号不存在' });
+  if (!user) return rejectAuth(req, res, 'user_gone', '账号不存在', payload.sub);
   // 账号停用挡在所有鉴权入口的最前面。这里是全站唯一的鉴权中间件（/api/stream 与
   // 每个 router 都 use 它），挡在这一层等于一次挡住已登录会话、SSE、上传、改密码……
   // 而不是只挡 /auth/login。
@@ -147,7 +160,7 @@ export function authenticate(req, res, next) {
   // 用 401 而不是 403：前端 request() 只在 401 时清本地凭据并把人送回登录页
   // （见 web/src/lib/api.ts），停用要的正是这个效果。放在 ver 校验之前，是为了让
   // disabled_at 成为一道独立于 token 新旧的闸门——即使哪天签发逻辑变了，这一条也照样拦。
-  if (isDisabled(user)) return res.status(401).json({ error: ACCOUNT_DISABLED });
+  if (isDisabled(user)) return rejectAuth(req, res, 'account_disabled', ACCOUNT_DISABLED, user.id);
   // 版本号对不上的凭据一律失效（issue #2），但拒绝的理由要分开说（issue #16）：
   // - ver 不是整数（升级前签发的老 token 根本没有这个字段，也可能是 null / 字符串这类
   //   被篡改的值）：signToken 永远写入 users.auth_version 这个整数，所以拿不到整数就说明
@@ -156,16 +169,16 @@ export function authenticate(req, res, next) {
   //   说「密码已修改」才是准确归因（比当前版本更高的整数只可能来自篡改，同样归到这一档，
   //   反正两条分支都是 401，不会因此放行）。
   if (!Number.isInteger(payload.ver)) {
-    return res.status(401).json({ error: '登录已过期，请重新登录' });
+    return rejectAuth(req, res, 'token_version_missing', '登录已过期，请重新登录', user.id);
   }
   if (payload.ver !== user.auth_version) {
-    return res.status(401).json({ error: '密码已修改，请重新登录' });
+    return rejectAuth(req, res, 'password_changed', '密码已修改，请重新登录', user.id);
   }
   // sid 指向本次登录的会话，主动退出后会话已删除，旧 token 不能再用。
   // 注意：升级前签发的 token 既没有 sid 也没有 ver，上面那道 ver 校验已经把它们挡掉了，
   // 也就是这次升级后所有人需要重新登录一次。
   if (payload.sid && !get('SELECT id FROM sessions WHERE id = ? AND user_id = ?', payload.sid, user.id)) {
-    return res.status(401).json({ error: '登录已过期，请重新登录' });
+    return rejectAuth(req, res, 'session_ended', '登录已过期，请重新登录', user.id);
   }
   req.user = user;
   req.sessionId = payload.sid || null;

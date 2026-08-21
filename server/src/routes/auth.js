@@ -10,6 +10,7 @@ import { AI_NAME, providerOf, settings } from '../ai.js';
 import { upload } from '../upload-middleware.js';
 import { emitAll } from '../events.js';
 import { clearFailures, recordFailure, retryAfterMs } from '../rate-limit.js';
+import { logEvent, logWarn } from '../log.js';
 
 export const router = Router();
 
@@ -35,6 +36,7 @@ router.post('/login', (req, res) => {
   const keys = [`email:${email}`, `ip:${req.ip}`];
   const wait = retryAfterMs(keys);
   if (wait > 0) {
+    logWarn('auth.login.throttled', { reqId: req.id, ip: req.ip, waitMs: wait });
     res.set('Retry-After', String(Math.ceil(wait / 1000)));
     return res.status(429).json({ error: `登录尝试过于频繁，请 ${Math.ceil(wait / 60000)} 分钟后再试` });
   }
@@ -42,6 +44,9 @@ router.post('/login', (req, res) => {
   const user = get('SELECT * FROM users WHERE lower(email) = ? AND role != ?', email, 'ai');
   if (!user || !verifyPassword(password, user.password_hash)) {
     recordFailure(keys);
+    // 只记 userId 和来源 IP，不记邮箱：日志的留存和访问范围比库宽松，
+    // 每失败一次就抄一个邮箱进去，攒久了就是一份账号清单。账号存在时 userId 已经够定位了。
+    logWarn('auth.login.failed', { reqId: req.id, ip: req.ip, userId: user?.id || null, reason: user ? 'bad_password' : 'no_such_account' });
     return res.status(401).json({ error: '邮箱或密码不正确' });
   }
   clearFailures(keys);
@@ -50,8 +55,12 @@ router.post('/login', (req, res) => {
   //    还会去找管理员重置密码，白折腾一圈。这里要明说是账号被停用了。
   // 2. 顺序反过来就成了账号探针 —— 不知道密码的人也能靠这条错误确认某个邮箱存在、
   //    而且已停用。放在密码之后，只有本来就持有正确凭据的人才看得到这句话。
-  if (isDisabled(user)) return res.status(403).json({ error: ACCOUNT_DISABLED });
+  if (isDisabled(user)) {
+    logWarn('auth.login.failed', { reqId: req.id, ip: req.ip, userId: user.id, reason: 'account_disabled' });
+    return res.status(403).json({ error: ACCOUNT_DISABLED });
+  }
   const sessionId = createSession(user.id);
+  logEvent('auth.login.ok', { reqId: req.id, ip: req.ip, userId: user.id, role: user.role, sessionId, remember });
   touch(user.id, sessionId);
   emitAll('presence', { userId: user.id, online: true });
   res.json({
@@ -66,6 +75,7 @@ router.post('/login', (req, res) => {
 // 不用再等 90 秒的心跳窗口过期（关掉页面、断网、休眠仍然走那个兜底）。
 router.post('/logout', authenticate, (req, res) => {
   const stillOnline = endSession(req.user.id, req.sessionId);
+  logEvent('auth.logout', { reqId: req.id, userId: req.user.id, sessionId: req.sessionId, stillOnline });
   if (!stillOnline) {
     run('UPDATE users SET last_seen_at = 0 WHERE id = ?', req.user.id);
     emitAll('presence', { userId: req.user.id, online: false });
@@ -116,6 +126,7 @@ router.post('/me/password', authenticate, (req, res) => {
     'UPDATE users SET password_hash = ?, auth_version = auth_version + 1 WHERE id = ?',
     hashPassword(next), req.user.id,
   );
+  logEvent('auth.password.changed', { reqId: req.id, userId: req.user.id, by: 'self' });
   const user = get('SELECT * FROM users WHERE id = ?', req.user.id);
   // 换发时沿用这台设备原本的有效期档位（保持登录 15 天 / 仅本次会话 1 天）。
   const remember = req.tokenRemember !== false;

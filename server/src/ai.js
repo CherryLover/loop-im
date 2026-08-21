@@ -2,6 +2,7 @@
 // a per-person profile of communication habits it reuses on the next conversation.
 import { all, get, run, now, uid } from './db.js';
 import { decrypt, encrypt, isEncrypted, isEncryptionConfigured } from './secret-box.js';
+import { logEvent, logWarn } from './log.js';
 
 export const AI_ID = 'ai';
 export const AI_NAME = 'Aria';
@@ -151,19 +152,42 @@ function transcript(conversationId, limit = 30) {
   ).reverse();
 }
 
+/**
+ * 全站唯一一处真正往外部供应商发请求的地方（generateReply / learnAbout / testConnectivity
+ * 都收敛到这里），所以埋点也只埋这一处：这是唯一直接花钱的路径，没有日志就完全不知道
+ * 钱花在哪、慢在哪、失败在哪。
+ *
+ * 记的是「这次调用长什么样」：供应商、模型、耗时、送进去几条消息、回来多少字。
+ * 一条 messages 的内容都不许进日志 —— 那整个就是聊天记录的副本。
+ */
 async function callProvider(messages, s) {
   const p = providerOf(s.provider);
   if (!p.endpoint) throw new Error(`${p.name} 未配置调用地址`);
-  const res = await fetch(p.endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.api_key}` },
-    body: JSON.stringify({ model: p.model, messages, temperature: 0.4 }),
-  });
-  if (!res.ok) throw new Error(`${p.name} 返回 ${res.status}`);
-  const json = await res.json();
-  const text = json.choices?.[0]?.message?.content;
-  if (!text) throw new Error(`${p.name} 未返回内容`);
-  return text.trim();
+  const started = Date.now();
+  try {
+    const res = await fetch(p.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.api_key}` },
+      body: JSON.stringify({ model: p.model, messages, temperature: 0.4 }),
+    });
+    if (!res.ok) throw new Error(`${p.name} 返回 ${res.status}`);
+    const json = await res.json();
+    const text = json.choices?.[0]?.message?.content;
+    if (!text) throw new Error(`${p.name} 未返回内容`);
+    logEvent('ai.call.ok', {
+      provider: s.provider, model: p.model, ms: Date.now() - started,
+      sentMessages: messages.length, replyChars: text.trim().length,
+    });
+    return text.trim();
+  } catch (err) {
+    // 失败不是致命的：上游会退回本地模拟回复，所以是 warn 不是 error。
+    // reason 用的是上面几句自己造的错误文案（含 HTTP 状态码），不含任何正文。
+    logWarn('ai.call.failed', {
+      provider: s.provider, model: p.model, ms: Date.now() - started,
+      sentMessages: messages.length, reason: err.message,
+    });
+    throw err;
+  }
 }
 
 /** Offline fallback so the product works end-to-end without any API key. */
