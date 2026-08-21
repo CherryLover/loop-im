@@ -6,6 +6,7 @@ import {
 } from '../auth.js';
 import { disconnect, emitAll } from '../events.js';
 import { uid } from '../db.js';
+import { logEvent } from '../log.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -33,6 +34,7 @@ router.post('/', requireAdmin, (req, res) => {
     id, name, email, dept, hashPassword(initialPassword), now(),
   );
   const user = publicUser(get('SELECT * FROM users WHERE id = ?', id));
+  logEvent('admin.user.created', { reqId: req.id, actorId: req.user.id, targetId: id, dept });
   emitAll('user-created', { user });
   res.status(201).json({ user, initialPassword });
 });
@@ -52,6 +54,8 @@ router.post('/:id/reset-password', requireAdmin, (req, res) => {
 
   const password = generatePassword();
   resetPasswordFor(target.id, password);
+  // 只记「谁把谁重置了」。生成的那串明文密码绝不进日志——它此刻就是那个账号的全部凭据。
+  logEvent('admin.user.password_reset', { reqId: req.id, actorId: req.user.id, targetId: target.id });
   // 所有设备已被踢下线，在线点也跟着灭掉，不用等 90 秒心跳窗口过期。
   run('UPDATE users SET last_seen_at = 0 WHERE id = ?', target.id);
   emitAll('presence', { userId: target.id, online: false });
@@ -91,6 +95,7 @@ router.post('/:id/disable', requireAdmin, (req, res) => {
   if (!target) return;
 
   disableUser(target.id);
+  logEvent('admin.user.disabled', { reqId: req.id, actorId: req.user.id, targetId: target.id });
   // 已经建好的 SSE 连接不会再过一次 authenticate，得显式掐掉（见 events.js 的 disconnect）。
   disconnect(target.id);
   const user = publicUser(get('SELECT * FROM users WHERE id = ?', target.id));
@@ -106,6 +111,7 @@ router.post('/:id/enable', requireAdmin, (req, res) => {
   if (!target) return;
 
   enableUser(target.id);
+  logEvent('admin.user.enabled', { reqId: req.id, actorId: req.user.id, targetId: target.id });
   const user = publicUser(get('SELECT * FROM users WHERE id = ?', target.id));
   emitAll('user-updated', { user });
   res.json({ user });

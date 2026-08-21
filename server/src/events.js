@@ -1,4 +1,6 @@
 // Minimal SSE hub: one connection per client, fan-out by user id.
+import { logEvent } from './log.js';
+
 const clients = new Map(); // userId -> Set<res>
 
 export function subscribe(userId, res) {
@@ -10,11 +12,13 @@ export function subscribe(userId, res) {
   res.write(': connected\n\n');
   if (!clients.has(userId)) clients.set(userId, new Set());
   clients.get(userId).add(res);
+  logEvent('sse.connected', { userId, connections: clients.get(userId).size });
 
   const ping = setInterval(() => res.write(': ping\n\n'), 25000);
   res.on('close', () => {
     clearInterval(ping);
     clients.get(userId)?.delete(res);
+    logEvent('sse.disconnected', { userId, connections: clients.get(userId)?.size ?? 0 });
     if (clients.get(userId)?.size === 0) clients.delete(userId);
   });
 }
@@ -28,6 +32,10 @@ export function subscribe(userId, res) {
  * 两件事都做了，「立刻失效」才是真的立刻。
  */
 export function disconnect(userId) {
+  const open = clients.get(userId)?.size || 0;
+  // 停用一个人时被动断开的连接数：跟 admin.user.disabled 对着看，
+  // 就知道「立刻掉线」到底有没有真的生效、当时他开着几个页面。
+  if (open) logEvent('sse.force_disconnected', { userId, connections: open });
   for (const res of clients.get(userId) || []) res.end();
   clients.delete(userId);
 }

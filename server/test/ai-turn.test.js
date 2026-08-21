@@ -196,8 +196,8 @@ describe('POST /:id/messages 的响应不受后台 AI 流程影响', () => {
     const witness = fakeClient(zhou.id);
     const chenToken = await api.login(chen.email);
 
-    // app.js 的错误中间件在 NODE_ENV=test 时是哑的，这里临时摘掉这层静音，
-    // 好看清「响应之后的错误有没有被交给错误中间件」——交给了就会打出一条裸的 Error，
+    // 日志在 NODE_ENV=test 时是哑的（见 log.js），这里临时摘掉这层静音，
+    // 好看清「响应之后的错误有没有被交给错误中间件」——交给了就会多打一条 http.error，
     // 那条路径的下一步正是 res.status().json() 撞上 ERR_HTTP_HEADERS_SENT。
     const originalEnv = process.env.NODE_ENV;
     const originalError = console.error;
@@ -222,13 +222,15 @@ describe('POST /:id/messages 的响应不受后台 AI 流程影响', () => {
     assert.deepEqual(res.body.message.mentions, ['ai']);
     assert.deepEqual(witness.typings(), [true, false], 'ai-typing 仍要成对发出，前端不会卡在「正在输入」');
 
-    const reports = printed.filter(([first]) => typeof first === 'string' && first.startsWith('[ai-turn]'));
+    // 现在这条痕迹是一行结构化日志（event: ai.turn.failed），不再是裸的 console.error。
+    const rows = printed.map(([line]) => { try { return JSON.parse(line); } catch { return { raw: String(line) }; } });
+    const reports = rows.filter((r) => r.event === 'ai.turn.failed');
     assert.deepEqual(
-      printed.filter((args) => !reports.includes(args)).map(([e]) => e?.message || String(e)), [],
+      rows.filter((r) => !reports.includes(r)).map((r) => r.event || r.raw), [],
       '响应之后的错误不该再走到 Express 的错误中间件（那一步会撞出 ERR_HTTP_HEADERS_SENT）',
     );
     assert.equal(reports.length, 1, '出错应当在服务端留下一条 ai-turn 的痕迹');
-    assert.match(reports[0][1].message, /SSE 写入失败/);
+    assert.match(reports[0].err.message, /SSE 写入失败/);
     assert.deepEqual(
       watch.seen.map((e) => e?.code || e?.message), [],
       '也不该冒出进程级的 unhandledRejection / uncaughtException',

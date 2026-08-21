@@ -75,9 +75,12 @@ export const logEvent = (event, fields = {}) => write('info', event, fields);
 export const logWarn = (event, fields = {}) => write('warn', event, fields);
 
 /** 出错了。err 会被压成 { name, message }，堆栈另外单独给。 */
+// 注意这里传的是 Error 本身，不是 { name, message } —— clean() 有一条专门的 Error 分支，
+// 会原样压成 { name, message }。摊平成普通对象反而会被 redact 当成普通字段处理，
+// message 命中 SECRET_KEYS 变成「[已隐去]」，错误日志就只剩一个类型名，等于白记。
 export const logError = (event, err, fields = {}) => write('error', event, {
   ...fields,
-  err: err instanceof Error ? { name: err.name, message: err.message } : String(err),
+  err: err instanceof Error ? err : String(err),
   stack: err instanceof Error && process.env.LOG_STACK !== '0' ? err.stack : undefined,
 });
 

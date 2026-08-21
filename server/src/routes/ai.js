@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { all, get } from '../db.js';
 import { authenticate, requireAdmin } from '../auth.js';
 import { AI_ID, PROVIDERS, isConfigured, providerOf, saveSettings, settings, testConnectivity } from '../ai.js';
+import { logEvent } from '../log.js';
 
 export const router = Router();
 router.use(authenticate, requireAdmin);
@@ -35,6 +36,13 @@ router.put('/settings', (req, res) => {
     silentRead: typeof body.silentRead === 'boolean' ? body.silentRead : undefined,
     replyAtAll: typeof body.replyAtAll === 'boolean' ? body.replyAtAll : undefined,
     allowDm: typeof body.allowDm === 'boolean' ? body.allowDm : undefined,
+  });
+  // 改的是花钱的那条路径的开关，属于要留痕的管理动作。
+  // 只记「密钥换没换」这个布尔，绝不记密钥本身，也不记它的前缀或长度。
+  logEvent('admin.ai.settings_changed', {
+    reqId: req.id, actorId: req.user.id, provider: settings().provider,
+    apiKeyChanged: typeof body.apiKey === 'string',
+    silentRead: body.silentRead, replyAtAll: body.replyAtAll, allowDm: body.allowDm,
   });
   res.json(settingsPayload());
 });

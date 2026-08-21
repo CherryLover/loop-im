@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,8 +15,23 @@ import { router as conversationRoutes } from './routes/conversations.js';
 import { router as uploadRoutes } from './routes/uploads.js';
 import { router as searchRoutes } from './routes/search.js';
 import { router as aiRoutes } from './routes/ai.js';
+import { logError } from './log.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * 请求关联 id：一次请求里各处埋点都带上它，日志里才能把「这一次调用」串成一串。
+ * 没有它的话，一条 auth.login.failed 和随后的 http.error 只能靠时间戳猜是不是同一件事，
+ * 并发一高就彻底对不上了。
+ *
+ * 8 个十六进制字符：够一段时间内不撞车，又短到能让人从终端里一眼抄下来。
+ * 同时回写到响应头 X-Request-Id —— 用户报障时把这一串念出来，就能直接定位到那几行日志。
+ */
+function requestId(req, res, next) {
+  req.id = randomBytes(4).toString('hex');
+  res.set('X-Request-Id', req.id);
+  next();
+}
 
 /** Builds the Express app. Seeding and listening are the caller's job (see index.js). */
 /**
@@ -35,6 +51,7 @@ export function createApp({ serveClient = true } = {}) {
   // 生产环境通常在 Nginx/Caddy 后面，要拿到真实来源 IP 才能按 IP 限流。
   // 默认关闭：开着而前面没有反代时，X-Forwarded-For 可以被随意伪造。
   if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY);
+  app.use(requestId);
   app.use(corsPolicy());
   app.use(express.json({ limit: '1mb' }));
   // 上传目录和聊天系统同源，回源头必须自己钉死：图片按 image/* 内联，其余强制下载。
@@ -57,11 +74,13 @@ export function createApp({ serveClient = true } = {}) {
     app.get(/^(?!\/api|\/uploads).*/, (_req, res) => res.sendFile(join(dist, 'index.html')));
   }
 
-  app.use((err, _req, res, _next) => {
-    if (process.env.NODE_ENV !== 'test') console.error(err);
+  app.use((err, req, res, _next) => {
     // multer 超限只给英文的 File too large，这里统一翻成中文并按 413 返回。
     if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: OVERSIZED_MESSAGE });
-    res.status(err.status || 500).json({ error: err.message || '服务器内部错误' });
+    const status = err.status || 500;
+    // 只记 5xx：4xx 是调用方自己传错了参数，量大且没有排查价值，全记下来只会淹掉真正的故障。
+    if (status >= 500) logError('http.error', err, { reqId: req.id, method: req.method, path: req.path, status });
+    res.status(status).json({ error: err.message || '服务器内部错误' });
   });
 
   return app;

@@ -61,6 +61,27 @@ describe('结构化日志', () => {
     assert.equal(lines.length, 0, `测试环境不该打印，却打了 ${lines.length} 行`);
   });
 
+  it('logError 记得住错误信息 —— message 命中了 SECRET_KEYS，别把自己的错误也隐去了', () => {
+    // 这里踩过一次坑：logError 原先把 Error 摊平成 { name, message } 再交给 redact，
+    // 而 'message' 正在 SECRET_KEYS 里（拦的是聊天正文那个 message），于是错误信息
+    // 变成「[已隐去]」，错误日志只剩一个类型名。改成把 Error 本身传下去，
+    // clean() 那条 instanceof Error 分支会原样保留 name 和 message。
+    const lines = [];
+    const orig = console.error;
+    console.error = (l) => lines.push(l);
+    process.env.LOG_IN_TEST = '1';
+    try {
+      logError('db.write.failed', new TypeError('数据库连接已关闭'), { userId: 'u_1' });
+    } finally {
+      console.error = orig;
+      delete process.env.LOG_IN_TEST;
+    }
+    const row = JSON.parse(lines[0]);
+    assert.equal(row.err.name, 'TypeError');
+    assert.equal(row.err.message, '数据库连接已关闭', '错误信息被当成敏感字段隐去了，这样的错误日志等于没记');
+    assert.equal(row.userId, 'u_1');
+  });
+
   it('打开 LOG_IN_TEST 后是一行合法 JSON，字段齐全', () => {
     const lines = [];
     const orig = console.log;
