@@ -19,6 +19,25 @@ export const setToken = (token: string, remember = true) => {
   (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
 };
 
+/**
+ * 站内附件地址补上凭据。
+ *
+ * /uploads 从「谁都能下载」改成了「该附件所在会话的成员才能下载」，可是 <img src> 和
+ * <a href> 都没法带 Authorization 头 —— 只能把 token 放进查询串，和 /api/stream 的
+ * EventSource 一个路子（服务端 auth.js 的 readToken 两种都认）。
+ *
+ * 代价说清楚：token 会因此出现在浏览器历史和服务端访问日志里。同源请求所以不会外泄给
+ * 第三方，但这确实比放在头里弱。彻底的解法是发一张只对单个对象、只活几分钟的下载票据，
+ * 那是另一件事，这里没做。
+ *
+ * 没登录时原样返回，不拼一个空 token 上去（测试环境和登录页都会走到这条分支）。
+ */
+export const attachmentUrl = (url: string) => {
+  if (!/^\/uploads\//i.test(url)) return url;
+  const token = getToken();
+  return token ? `${url}?token=${encodeURIComponent(token)}` : url;
+};
+
 // 附件体积上限，和服务端 upload-middleware.js 保持一致（图片和普通文件共用同一档）。
 export const MAX_UPLOAD_MB = 8;
 export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
