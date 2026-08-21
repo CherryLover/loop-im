@@ -26,9 +26,19 @@ export const OVERSIZED_MESSAGE = `文件大小不能超过 ${MAX_UPLOAD_MB}MB`;
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /**
+   * 服务端限流（429）时才有：**相对**毫秒，表示还要等多久。
+   * 界面上的「几点几分可以再发」必须用它在本地换算（`Date.now() + retryAfterMs`），
+   * 不能显示服务端算好的绝对时刻——客户端的钟可能偏几分钟，照搬过来就是错的。
+   * serverNow 是服务端此刻的时间戳，只用来排查时差，不要拿去显示。
+   */
+  retryAfterMs?: number;
+  serverNow?: number;
+  constructor(status: number, message: string, extra: { retryAfterMs?: number; serverNow?: number } = {}) {
     super(message);
     this.status = status;
+    this.retryAfterMs = extra.retryAfterMs;
+    this.serverNow = extra.serverNow;
   }
 }
 
@@ -55,7 +65,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new ApiError(res.status, data.error || `请求失败（${res.status}）`);
+  if (!res.ok) {
+    throw new ApiError(res.status, data.error || `请求失败（${res.status}）`, {
+      retryAfterMs: typeof data.retryAfterMs === 'number' ? data.retryAfterMs : undefined,
+      serverNow: typeof data.serverNow === 'number' ? data.serverNow : undefined,
+    });
+  }
   return data as T;
 }
 

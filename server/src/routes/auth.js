@@ -10,6 +10,7 @@ import { AI_NAME, providerOf, settings } from '../ai.js';
 import { upload } from '../upload-middleware.js';
 import { emitAll } from '../events.js';
 import { clearFailures, recordFailure, retryAfterMs } from '../rate-limit.js';
+import { limitUsage } from '../usage-limit.js';
 
 export const router = Router();
 
@@ -92,7 +93,8 @@ router.patch('/me', authenticate, (req, res) => {
 });
 
 // 头像只走图片通道：它会被渲染成 <img>，必须是按真实字节确认过的图片（见 issue #22）。
-router.post('/me/avatar', authenticate, upload.single('file'), async (req, res) => {
+// 限流同样挂在 multer 前面，超额时不必把图片字节收进内存。
+router.post('/me/avatar', authenticate, limitUsage('upload'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: '请选择图片' });
   const verdict = inspectUpload(req.file.buffer, req.file.mimetype);
   if (verdict.kind !== 'image') {

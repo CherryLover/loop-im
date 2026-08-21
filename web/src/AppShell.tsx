@@ -11,7 +11,7 @@ import { ProfileModal } from './modals/ProfileModal';
 import { ManageGroupModal, type ManageMode } from './modals/ManageGroupModal';
 import { ApiError, api } from './lib/api';
 import { initialOf } from './lib/md';
-import { unreadAriaLabel, unreadBadgeClass, unreadLabel } from './lib/format';
+import { unreadAriaLabel, unreadBadgeClass, unreadLabel, withRetryHint } from './lib/format';
 import { mergeMessage, replyTargetOf } from './lib/messages';
 import { sortConversations } from './lib/conversations';
 import { notifyMessage, useDesktopNotify } from './lib/notify';
@@ -410,8 +410,14 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
         ...all,
         [conversationId]: (all[conversationId] || []).filter((m) => m.id !== temp.id),
       }));
-      setToast(err instanceof Error ? err.message : '发送失败');
+      // 被限流（429）时服务端会给出还要等多久，提示里补上「几点几分可以再发」。
+      // 换算在本地做，见 withRetryHint —— 不能显示服务端算好的绝对时刻。
+      setToast(withRetryHint(
+        err instanceof Error ? err.message : '发送失败',
+        err instanceof ApiError ? err.retryAfterMs : undefined,
+      ));
       // 抛回给 Composer：它据此把用户打的字还原到输入框，不能在这里吞掉。
+      // 429 走的也是这条路，所以被限流之后用户打的字同样留在输入框里。
       throw err;
     }
   }, [activeId, me, refreshConversations, background]);

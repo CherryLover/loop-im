@@ -237,6 +237,10 @@ chats/                 设计过程的对话记录
 | `CORS_ORIGIN` | 跨域白名单，逗号分隔。默认同源部署不需要填；留空时生产环境不发跨域头 |
 | `TRUST_PROXY` | 部署在反向代理后面时填，否则按 IP 限流会把所有请求算成反代的 IP |
 | `LOGIN_WINDOW_MS` / `LOGIN_MAX_FAILURES` | 登录失败限流的窗口与上限，默认 15 分钟 10 次 |
+| `RATE_MESSAGE_WINDOW_MS` / `RATE_MESSAGE_MAX` | 发消息限流，默认 1 分钟 60 条（按用户，数成功次数） |
+| `RATE_AI_WINDOW_MS` / `RATE_AI_MAX` | @Aria 限流，默认 5 分钟 10 次。这一档单独且更严：每次都真实调用大模型 |
+| `RATE_UPLOAD_WINDOW_MS` / `RATE_UPLOAD_MAX` | 上传限流（聊天附件与头像共用），默认 1 分钟 20 次 |
+| `RATE_WRITE_WINDOW_MS` / `RATE_WRITE_MAX` | 建群 / 加成员等写接口限流，默认 1 分钟 30 次 |
 | `S3_BUCKET` / `S3_REGION` | 配置后附件走 S3（需在 `src/storage.js` 的 s3 分支接入客户端），留空用本地磁盘 |
 | `CODEX_ENDPOINT` | Codex 本地 Agent 的调用地址（可选） |
 
