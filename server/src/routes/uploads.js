@@ -4,6 +4,7 @@ import { run, now, uid } from '../db.js';
 import { decodeUploadName, displayName, inspectUpload } from '../attachments.js';
 import { driver, putObject } from '../storage.js';
 import { upload } from '../upload-middleware.js';
+import { limitUsage } from '../usage-limit.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -14,7 +15,8 @@ router.use(authenticate);
  *   kind=file  —— 其余任意文件，落成 .bin，前端拼成普通链接，只能下载。
  * 客户端自报的 Content-Type 和文件名都不参与安全判定，文件名只当显示名。
  */
-router.post('/', upload.single('file'), async (req, res) => {
+// 限流挂在 multer 前面：超额时连这 8MB 都不必收进内存。
+router.post('/', limitUsage('upload'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: '请选择要发送的文件' });
 
   const verdict = inspectUpload(req.file.buffer, req.file.mimetype);

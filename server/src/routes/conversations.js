@@ -6,6 +6,7 @@ import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parse
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
 import { addReaction, groupReactions, normalizeEmoji, reactionRows, reactionsOf, removeReaction } from '../reactions.js';
+import { consumeQuota, limitUsage, quotaState, rejectOverQuota } from '../usage-limit.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -290,7 +291,7 @@ router.patch('/:id/prefs', (req, res) => {
 });
 
 // 管理员建群，AI 助手默认加入。人数只要求至少 1 人，建完还可以随时增减。
-router.post('/group', requireAdmin, (req, res) => {
+router.post('/group', requireAdmin, limitUsage('write'), (req, res) => {
   const title = String(req.body?.title || '').trim() || '新群聊';
   const picked = [...new Set((req.body?.memberIds || []).filter((id) => id !== req.user.id && id !== AI_ID))];
   if (!picked.length) return res.status(400).json({ error: '请至少选择 1 名成员' });
@@ -348,7 +349,7 @@ router.post('/direct', (req, res) => {
 // ---- 群成员与群名管理 ---------------------------------------------------
 // 建群者与系统管理员可以增减成员、改群名；任何成员都可以自己退群。
 
-router.post('/:id/members', (req, res) => {
+router.post('/:id/members', limitUsage('write'), (req, res) => {
   const convo = requireMembership(req, res, req.params.id);
   if (!convo) return;
   if (!canManageGroup(convo, req.user)) return res.status(403).json({ error: '只有群主或管理员可以添加成员' });
@@ -588,9 +589,27 @@ router.post('/:id/messages', (req, res) => {
   const s = settings();
   const aiInRoom = audience.includes(AI_ID);
   const aiVisible = isVisibleToAi(convo, mentions, aiInRoom, s);
+
+  // ---- 限流 -------------------------------------------------------------
+  // 两档：所有消息都走 message 档；真会触发一次大模型调用的（@Aria、AI 私聊）
+  // 再额外走更严的 ai 档 —— 那一档每次都要真花钱，和多写几行 SQLite 不是一回事。
+  // 判定要和下面「发不发起 AI 流程」完全一致：aiVisible 为假时 runAiTurn 根本不跑，
+  // 不会有模型调用，就不该占 ai 档的额度（例如群里没有 Aria 却 @全员 的情形）。
+  //
+  // 检查放在参数校验之后、写库之前：空消息、非法引用这类 400 不该白吃掉额度。
+  // 计数放在写库成功之后，所以这一档数的是「成功发出去几条」——语义上和登录那套
+  // 「只数失败、成功清零」正相反，两者各用各的模块，见 usage-limit.js 开头。
+  const willCallModel = aiVisible && shouldReply(convo, mentions, s);
+  for (const action of willCallModel ? ['message', 'ai'] : ['message']) {
+    const state = quotaState(action, req.user.id);
+    if (!state.allowed) return rejectOverQuota(res, action, state, { userId: req.user.id, route: req.originalUrl });
+  }
+
   const id = uid('m');
   run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     id, convo.id, req.user.id, body, JSON.stringify(mentions), aiVisible ? 1 : 0, replyTo, now());
+  consumeQuota('message', req.user.id);
+  if (willCallModel) consumeQuota('ai', req.user.id);
   const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), req.user);
   emitTo(audience, 'message', { message });
   res.status(201).json({ message });
