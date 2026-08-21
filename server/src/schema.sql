@@ -93,6 +93,31 @@ CREATE TABLE IF NOT EXISTS message_reactions (
   created_at INTEGER NOT NULL
 );
 
+-- 「这个附件出现在哪个会话里」。附件的下载鉴权全靠它。
+--
+-- 为什么要单独一张表而不是往 attachments 上加一列 conversation_id：
+-- 上传和发送是两步（Composer 选中文件的那一刻就传了），一个对象**可能**最终没被发送、
+-- 也可能被同一个人转发进多个会话。一对多只能用关联表表达；加一列的话，
+-- 转发到第二个会话时要么覆盖掉第一个（第一个群的人当场看不到图了），要么写不进去。
+--
+-- key 是对象 key（`/uploads/<key>` 里的那一段），不存完整 url：url 只是 key 的一层包装。
+-- message_id 带 ON DELETE CASCADE，消息没了引用跟着走，孤儿清理才能真的把对象回收掉。
+-- 唯一索引与回填见 db.js 的 MIGRATIONS。
+CREATE TABLE IF NOT EXISTS attachment_refs (
+  key             TEXT NOT NULL,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id      TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  created_at      INTEGER NOT NULL
+);
+
+-- 迁移的一次性标记位。CREATE TABLE IF NOT EXISTS 挡不住「数据回填」这类迁移重复执行
+-- （它不是加列，没有 PRAGMA table_info 可查），所以用这张表记「跑过了」。
+CREATE TABLE IF NOT EXISTS schema_meta (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 -- Single-row table holding the system AI configuration.
 CREATE TABLE IF NOT EXISTS ai_settings (
   id            INTEGER PRIMARY KEY CHECK (id = 1),

@@ -5,7 +5,11 @@ import { emitTo } from '../events.js';
 import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
+import { linkAttachmentsToMessage } from '../attachment-access.js';
 import { addReaction, groupReactions, normalizeEmoji, reactionRows, reactionsOf, removeReaction } from '../reactions.js';
+import { truncate } from '../text.js';
+import { consumeQuota, limitUsage, quotaState, rejectOverQuota } from '../usage-limit.js';
+import { logError, logEvent } from '../log.js';
 
 export const router = Router();
 router.use(authenticate);
@@ -111,12 +115,17 @@ const readsOf = (conversationId, viewerId) => all(
   conversationId, viewerId,
 ).map((r) => ({ userId: r.user_id, lastReadAt: r.last_read_at }));
 
+// 截断走 text.js 的 truncate（按字素簇），不能用 slice —— slice 按 UTF-16 码元切，
+// 正好切在 emoji 中间就留下半个代理对，预览里是个 �。理由与样例见 text.js。
 const previewOf = (body, limit = 26) =>
-  body
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
-    // 非图片附件是普通链接，会话列表里只显示「[文件] 名字」，不把 /uploads/ 路径抖出来。
-    .replace(/\[([^\]]*)\]\(\/uploads\/[^)]*\)/g, '[文件] $1')
-    .replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit);
+  truncate(
+    body
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
+      // 非图片附件是普通链接，会话列表里只显示「[文件] 名字」，不把 /uploads/ 路径抖出来。
+      .replace(/\[([^\]]*)\]\(\/uploads\/[^)]*\)/g, '[文件] $1')
+      .replace(/[#*`\-\n]/g, ' ').replace(/\s+/g, ' ').trim(),
+    limit,
+  );
 
 // 引用块比会话列表那一行宽，可以多给几个字，但也只是一眼扫过去认出「回的是哪条」。
 const QUOTE_PREVIEW_LIMIT = 48;
@@ -290,7 +299,7 @@ router.patch('/:id/prefs', (req, res) => {
 });
 
 // 管理员建群，AI 助手默认加入。人数只要求至少 1 人，建完还可以随时增减。
-router.post('/group', requireAdmin, (req, res) => {
+router.post('/group', requireAdmin, limitUsage('write'), (req, res) => {
   const title = String(req.body?.title || '').trim() || '新群聊';
   const picked = [...new Set((req.body?.memberIds || []).filter((id) => id !== req.user.id && id !== AI_ID))];
   if (!picked.length) return res.status(400).json({ error: '请至少选择 1 名成员' });
@@ -307,6 +316,7 @@ router.post('/group', requireAdmin, (req, res) => {
     run('INSERT INTO conversation_members (conversation_id, user_id, joined_at) VALUES (?, ?, ?)', id, m, ts);
   }
   const convo = get('SELECT * FROM conversations WHERE id = ?', id);
+  logEvent('group.created', { reqId: req.id, actorId: req.user.id, conversationId: id, memberCount: picked.length + 2 });
   const hello = insertAiMessage(id, '群聊已创建，我已加入并开始记录上下文。需要我做什么时 **@Aria**。');
   const serialized = serializeConversation(convo, req.user.id);
   emitTo([req.user.id, ...picked], 'conversation-created', { conversationId: id });
@@ -348,7 +358,7 @@ router.post('/direct', (req, res) => {
 // ---- 群成员与群名管理 ---------------------------------------------------
 // 建群者与系统管理员可以增减成员、改群名；任何成员都可以自己退群。
 
-router.post('/:id/members', (req, res) => {
+router.post('/:id/members', limitUsage('write'), (req, res) => {
   const convo = requireMembership(req, res, req.params.id);
   if (!convo) return;
   if (!canManageGroup(convo, req.user)) return res.status(403).json({ error: '只有群主或管理员可以添加成员' });
@@ -366,6 +376,8 @@ router.post('/:id/members', (req, res) => {
   for (const u of rows) {
     run('INSERT INTO conversation_members (conversation_id, user_id, joined_at) VALUES (?, ?, ?)', convo.id, u.id, ts);
   }
+  // 只记 id，不记群名和成员名字：谁把谁加进了哪个群，靠 id 就能查清楚。
+  logEvent('group.members_added', { reqId: req.id, actorId: req.user.id, conversationId: convo.id, targetIds: rows.map((u) => u.id) });
   insertSystemMessage(convo.id, req.user.id, `${req.user.name} 邀请 ${rows.map((u) => u.name).join('、')} 加入了群聊`);
   // 新成员此前不在群里，收不到上面那条广播，单独通知他们会话有变。
   emitTo(memberIds(convo.id), 'conversation-created', { conversationId: convo.id });
@@ -384,6 +396,7 @@ router.delete('/:id/members/:userId', (req, res) => {
   const user = get('SELECT * FROM users WHERE id = ?', target);
   const audience = memberIds(convo.id);          // 先取，被移除的人也应收到这条提示
   run('DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?', convo.id, target);
+  logEvent('group.member_removed', { reqId: req.id, actorId: req.user.id, conversationId: convo.id, targetId: target });
   insertSystemMessage(convo.id, req.user.id, `${req.user.name} 将 ${user.name} 移出了群聊`);
   emitTo(audience, 'conversation-created', { conversationId: convo.id });
   res.json({ conversation: serializeConversation(convo, req.user.id) });
@@ -507,10 +520,10 @@ router.post('/:id/read', (req, res) => {
 
 /**
  * 响应发出之后才跑的那一步失败了，只能记在服务端日志里——响应已经走了，没别的地方可说。
- * 测试环境下不打印，免得污染测试输出（与 app.js 的错误中间件同一处理）。
+ * 测试环境下不打印，免得污染测试输出 —— 这一条现在由 log.js 统一兜着，不用各处自己判断。
  */
 function reportAiTurnFailure(err) {
-  if (process.env.NODE_ENV !== 'test') console.error('[ai-turn] AI 后台流程出错：', err);
+  logError('ai.turn.failed', err);
 }
 
 /**
@@ -588,9 +601,29 @@ router.post('/:id/messages', (req, res) => {
   const s = settings();
   const aiInRoom = audience.includes(AI_ID);
   const aiVisible = isVisibleToAi(convo, mentions, aiInRoom, s);
+
+  // ---- 限流 -------------------------------------------------------------
+  // 两档：所有消息都走 message 档；真会触发一次大模型调用的（@Aria、AI 私聊）
+  // 再额外走更严的 ai 档 —— 那一档每次都要真花钱，和多写几行 SQLite 不是一回事。
+  // 判定要和下面「发不发起 AI 流程」完全一致：aiVisible 为假时 runAiTurn 根本不跑，
+  // 不会有模型调用，就不该占 ai 档的额度（例如群里没有 Aria 却 @全员 的情形）。
+  //
+  // 检查放在参数校验之后、写库之前：空消息、非法引用这类 400 不该白吃掉额度。
+  // 计数放在写库成功之后，所以这一档数的是「成功发出去几条」——语义上和登录那套
+  // 「只数失败、成功清零」正相反，两者各用各的模块，见 usage-limit.js 开头。
+  const willCallModel = aiVisible && shouldReply(convo, mentions, s);
+  for (const action of willCallModel ? ['message', 'ai'] : ['message']) {
+    const state = quotaState(action, req.user.id);
+    if (!state.allowed) return rejectOverQuota(res, action, state, { userId: req.user.id, route: req.originalUrl });
+  }
+
   const id = uid('m');
   run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     id, convo.id, req.user.id, body, JSON.stringify(mentions), aiVisible ? 1 : 0, replyTo, now());
+  consumeQuota('message', req.user.id);
+  if (willCallModel) consumeQuota('ai', req.user.id);
+  // 正文里引用到的附件挂到这个会话上：附件的下载鉴权就是查这张关联表（见 attachment-access.js）。
+  linkAttachmentsToMessage({ body, conversationId: convo.id, messageId: id, senderId: req.user.id });
   const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), req.user);
   emitTo(audience, 'message', { message });
   res.status(201).json({ message });

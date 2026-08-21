@@ -2,6 +2,8 @@
 // a per-person profile of communication habits it reuses on the next conversation.
 import { all, get, run, now, uid } from './db.js';
 import { decrypt, encrypt, isEncrypted, isEncryptionConfigured } from './secret-box.js';
+import { graphemeLength, truncate } from './text.js';
+import { logEvent, logWarn } from './log.js';
 
 export const AI_ID = 'ai';
 export const AI_NAME = 'Aria';
@@ -151,25 +153,49 @@ function transcript(conversationId, limit = 30) {
   ).reverse();
 }
 
+/**
+ * 全站唯一一处真正往外部供应商发请求的地方（generateReply / learnAbout / testConnectivity
+ * 都收敛到这里），所以埋点也只埋这一处：这是唯一直接花钱的路径，没有日志就完全不知道
+ * 钱花在哪、慢在哪、失败在哪。
+ *
+ * 记的是「这次调用长什么样」：供应商、模型、耗时、送进去几条消息、回来多少字。
+ * 一条 messages 的内容都不许进日志 —— 那整个就是聊天记录的副本。
+ */
 async function callProvider(messages, s) {
   const p = providerOf(s.provider);
   if (!p.endpoint) throw new Error(`${p.name} 未配置调用地址`);
-  const res = await fetch(p.endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.api_key}` },
-    body: JSON.stringify({ model: p.model, messages, temperature: 0.4 }),
-  });
-  if (!res.ok) throw new Error(`${p.name} 返回 ${res.status}`);
-  const json = await res.json();
-  const text = json.choices?.[0]?.message?.content;
-  if (!text) throw new Error(`${p.name} 未返回内容`);
-  return text.trim();
+  const started = Date.now();
+  try {
+    const res = await fetch(p.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.api_key}` },
+      body: JSON.stringify({ model: p.model, messages, temperature: 0.4 }),
+    });
+    if (!res.ok) throw new Error(`${p.name} 返回 ${res.status}`);
+    const json = await res.json();
+    const text = json.choices?.[0]?.message?.content;
+    if (!text) throw new Error(`${p.name} 未返回内容`);
+    logEvent('ai.call.ok', {
+      provider: s.provider, model: p.model, ms: Date.now() - started,
+      sentMessages: messages.length, replyChars: text.trim().length,
+    });
+    return text.trim();
+  } catch (err) {
+    // 失败不是致命的：上游会退回本地模拟回复，所以是 warn 不是 error。
+    // reason 用的是上面几句自己造的错误文案（含 HTTP 状态码），不含任何正文。
+    logWarn('ai.call.failed', {
+      provider: s.provider, model: p.model, ms: Date.now() - started,
+      sentMessages: messages.length, reason: err.message,
+    });
+    throw err;
+  }
 }
 
 /** Offline fallback so the product works end-to-end without any API key. */
 function stubReply(conversation, lines, askedBy) {
   const others = lines.filter((l) => l.sender_id !== AI_ID).slice(-3);
-  const points = others.map((l) => `- ${l.name}：${stripMd(l.body).slice(0, 42)}`).join('\n');
+  // 截断按字素簇（见 text.js）：slice 会把 emoji 劈成半个代理对，喂给模型的上下文里就是乱码。
+  const points = others.map((l) => `- ${l.name}：${truncate(stripMd(l.body), 42)}`).join('\n');
   const hint = askedBy ? profileHint([askedBy]) : '';
   const tail = hint ? '\n\n（已按你以往的沟通偏好精简表达）' : '';
   if (conversation.type === 'ai') {
@@ -235,7 +261,7 @@ export async function learnAbout(userId, conversation) {
   const existing = get('SELECT * FROM ai_profiles WHERE user_id = ?', userId);
   let next = {
     scene,
-    summary: stripMd(mine[0].body).slice(0, 60) || existing?.summary || '',
+    summary: truncate(stripMd(mine[0].body), 60) || existing?.summary || '',
     note: existing?.note || '',
     habits: JSON.parse(existing?.habits || '[]'),
     keys: JSON.parse(existing?.keys || '[]'),
@@ -266,7 +292,8 @@ export async function learnAbout(userId, conversation) {
       .map((c) => c.replace(/\[[^\]]*\]/g, '').replace(/^[-*\s]+/, '').replace(/[：:\s]+$/, '').trim())
       .filter((c) => !c.includes('@'))
       .filter((c) => !/^(我|我们|你|你们|他|她|大家)/.test(c))   // sentences, not information points
-      .filter((c) => c.length >= 4 && c.length <= 16 && KEY_HINT.test(c));
+      // 长度按「用户眼里的字数」算：c.length 数的是码元，一句带 emoji 的话会被虚高成超长而丢掉。
+      .filter((c) => { const n = graphemeLength(c); return n >= 4 && n <= 16 && KEY_HINT.test(c); });
     next.keys = [...new Set([...next.keys, ...clauses])].slice(0, 8);
   }
 

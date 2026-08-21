@@ -5,6 +5,28 @@ export const clock = (ts: number) => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
+/**
+ * 被限流之后「几点几分可以再发」。
+ *
+ * 参数是服务端给的**相对**毫秒，换算成钟点这一步必须在本地做：客户端的钟和
+ * 服务端可能差几分钟，直接显示服务端算好的绝对时刻，用户对着自己的表看就是错的。
+ * 用 `Date.now() + retryAfterMs`，显示出来的钟点和用户自己的表永远对得上。
+ *
+ * 不足一分钟也照样进位到下一分钟：说「14:30 可以再发」而实际 14:30:40 才放行，
+ * 用户会以为界面骗人；宁可多等几十秒，也不要给一个到点还发不出去的时间。
+ */
+export const retryAtClock = (retryAfterMs: number, now = Date.now()) =>
+  clock(Math.ceil((now + Math.max(0, retryAfterMs)) / 60000) * 60000);
+
+/**
+ * 给失败提示补上「几点几分可以再发」。不是限流（没有 retryAfterMs）时原样返回，
+ * 所以调用方不用自己分支判断。
+ */
+export const withRetryHint = (text: string, retryAfterMs?: number, now = Date.now()) =>
+  (typeof retryAfterMs === 'number' && retryAfterMs > 0
+    ? `${text}，${retryAtClock(retryAfterMs, now)} 后可以再发`
+    : text);
+
 const sameDay = (a: Date, b: Date) =>
   a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 

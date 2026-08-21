@@ -15,6 +15,15 @@ process.env.ADMIN_EMAIL = 'admin@test.local';
 process.env.ADMIN_PASSWORD = 'test-admin-password';
 process.env.DEMO_USERS = '';
 process.env.DEMO_PASSWORD = '';
+// 用量限流（src/usage-limit.js）在测试进程里整体抬高。用例做数据准备时会一口气灌
+// 一两百条消息、传几十个附件，那是真人不会有的节奏，正好会撞上生产默认值；
+// 限流本身不能因此调松，所以调的是测试环境这一侧。
+// 真要验限流行为的用例请用 configureUsageLimit() 把某一档临时压低（见 usage-limit.test.js），
+// 生产默认值则由 DEFAULT_LIMITS 单独钉住，不受这里影响。
+process.env.RATE_MESSAGE_MAX = '100000';
+process.env.RATE_AI_MAX = '100000';
+process.env.RATE_UPLOAD_MAX = '100000';
+process.env.RATE_WRITE_MAX = '100000';
 
 export const ADMIN = process.env.ADMIN_EMAIL;
 export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;

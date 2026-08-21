@@ -25,7 +25,12 @@ const post = (path, buffer, { filename = 'x.bin', type = 'application/octet-stre
 };
 
 const upload = (buffer, opts) => post('/api/uploads', buffer, opts);
-const fetchUpload = (url) => fetch(`${api.baseUrl}${url}`);
+// 回源现在带鉴权（见 attachment-access.js）。issue #22 关心的是**响应头**，
+// 所以这里一律用管理员自己的凭据去取：他是这些对象的上传者，取得回来，
+// 于是下面每一条断言检验的仍然是「拿到内容时头对不对」这件事，不会被 404 掩盖过去。
+// 凭据走查询串，和 /api/stream 一样（auth.js 的 readToken 两种都认）——
+// <img src> 没法带 Authorization 头，前端也只能这么取。
+const fetchUpload = (url) => fetch(`${api.baseUrl}${url}?token=${encodeURIComponent(token)}`);
 
 before(async () => {
   api = await startServer();

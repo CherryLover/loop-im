@@ -19,6 +19,25 @@ export const setToken = (token: string, remember = true) => {
   (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
 };
 
+/**
+ * 站内附件地址补上凭据。
+ *
+ * /uploads 从「谁都能下载」改成了「该附件所在会话的成员才能下载」，可是 <img src> 和
+ * <a href> 都没法带 Authorization 头 —— 只能把 token 放进查询串，和 /api/stream 的
+ * EventSource 一个路子（服务端 auth.js 的 readToken 两种都认）。
+ *
+ * 代价说清楚：token 会因此出现在浏览器历史和服务端访问日志里。同源请求所以不会外泄给
+ * 第三方，但这确实比放在头里弱。彻底的解法是发一张只对单个对象、只活几分钟的下载票据，
+ * 那是另一件事，这里没做。
+ *
+ * 没登录时原样返回，不拼一个空 token 上去（测试环境和登录页都会走到这条分支）。
+ */
+export const attachmentUrl = (url: string) => {
+  if (!/^\/uploads\//i.test(url)) return url;
+  const token = getToken();
+  return token ? `${url}?token=${encodeURIComponent(token)}` : url;
+};
+
 // 附件体积上限，和服务端 upload-middleware.js 保持一致（图片和普通文件共用同一档）。
 export const MAX_UPLOAD_MB = 8;
 export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
@@ -26,9 +45,19 @@ export const OVERSIZED_MESSAGE = `文件大小不能超过 ${MAX_UPLOAD_MB}MB`;
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /**
+   * 服务端限流（429）时才有：**相对**毫秒，表示还要等多久。
+   * 界面上的「几点几分可以再发」必须用它在本地换算（`Date.now() + retryAfterMs`），
+   * 不能显示服务端算好的绝对时刻——客户端的钟可能偏几分钟，照搬过来就是错的。
+   * serverNow 是服务端此刻的时间戳，只用来排查时差，不要拿去显示。
+   */
+  retryAfterMs?: number;
+  serverNow?: number;
+  constructor(status: number, message: string, extra: { retryAfterMs?: number; serverNow?: number } = {}) {
     super(message);
     this.status = status;
+    this.retryAfterMs = extra.retryAfterMs;
+    this.serverNow = extra.serverNow;
   }
 }
 
@@ -55,7 +84,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new ApiError(res.status, data.error || `请求失败（${res.status}）`);
+  if (!res.ok) {
+    throw new ApiError(res.status, data.error || `请求失败（${res.status}）`, {
+      retryAfterMs: typeof data.retryAfterMs === 'number' ? data.retryAfterMs : undefined,
+      serverNow: typeof data.serverNow === 'number' ? data.serverNow : undefined,
+    });
+  }
   return data as T;
 }
 
