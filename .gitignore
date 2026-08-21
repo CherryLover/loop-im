@@ -14,3 +14,7 @@ coverage/
 
 # agent 工作用的临时 worktree
 .claude/worktrees/
+
+# 针对已部署环境的浏览器验证产物（截图与 trace）
+e2e/deployed/.artifacts/
+e2e/.tmp-data/
