@@ -34,6 +34,10 @@ const DATA_DIR = dataDir;
 
 export default defineConfig({
   testDir: '.',
+  // deployed/ 那一套是打到「已经部署好的实例」上的，有自己的 config 和
+  // `npm run test:deployed`，而且 import 时就要求 ADMIN_EMAIL / ADMIN_PASSWORD。
+  // testDir: '.' 会递归扫到它，于是普通 CI 一跑就在收集阶段炸掉 —— 必须排除。
+  testIgnore: '**/deployed/**',
   timeout: 30_000,
   fullyParallel: false,
   workers: 1,

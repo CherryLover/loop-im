@@ -1,18 +1,25 @@
 # 部署
 
 服务器上只需要这个目录里的三个文件：`docker-compose.yml`、`deploy.sh`、`.env`。
-所有数据（SQLite 库与图片附件）都落在与它们同级的 `data/` 目录里 —— 备份就是打包这个目录。
+数据都落在与它们同级的目录里，**主程序和对象存储各一个**：
 
 ```
 你的服务器上任意路径，例如 /opt/loop-im/
 ├── docker-compose.yml
 ├── deploy.sh
-├── .env            ← 自己填，不进 git
-└── data/           ← 自动创建，SQLite + 上传的图片
-    ├── loop.db
-    ├── uploads/
-    └── minio/      ← 只有启用了 MinIO 才有（见「附件存到 MinIO」）
+├── .env             ← 自己填，不进 git
+├── data/            ← 自动创建。主程序：SQLite 库、迁移前的本地附件
+│   ├── loop.db
+│   └── uploads/
+└── minio-data/      ← 自动创建。MinIO：附件对象
 ```
+
+两个数据目录**刻意分开**：库和对象的生命周期不一样，分开之后能单独备份、单独搬迁，
+出问题时也能只清其中一个而不误伤另一个。整个目录打包走就是完整迁移。
+
+`loop-im` 和 `minio` 两个容器随 compose 一起启停，没有可选项、没有额外开关。
+**桶不需要手工建** —— 主程序启动时会自己检查并创建，还会跑一个写入 → 读回 → 删除的
+来回自检，通过了才开始对外服务（见 `server/src/index.js`）。
 
 ## 首次部署
 
@@ -45,8 +52,10 @@ vi .env                       # 再填 ADMIN_EMAIL / ADMIN_PASSWORD
 ./deploy.sh --logs       # 跟日志
 ```
 
-`deploy.sh` 做的事：检查 docker 与配置 → 准备 `data/` → 拉镜像 → 停旧起新 →
-轮询 `/api/health` 最多 90 秒 → 成功则记录版本并清理悬空镜像，失败则打印日志并提示回滚。
+`deploy.sh` 做的事：检查 docker 与配置 → 缺对象存储凭据就生成 → 准备 `data/` 与
+`minio-data/` → 拉镜像 → 停旧起新 → 轮询 `/api/health` 最多 120 秒 →
+成功则记录版本并清理悬空镜像，失败则打印日志并提示回滚。
+（超时给到 120 秒是因为现在要多等 MinIO 健康检查加主程序自检那几秒。）
 它是幂等的，重复执行没有副作用；健康检查不过时不会把失败当成功。
 
 ## 从远端一条命令部署
@@ -211,10 +220,10 @@ docker compose logs --since 1h loop-im | jq -R -c 'fromjson? | select(.level == 
 > 需要长期留存或跨机器检索时，这些行是标准 JSON，直接喂给 Loki / Vector / ELK 即可，
 > 不用改代码。日志量的大头是 SSE 连接事件，按 `event` 过滤就能压下来。
 
-## 附件存到 MinIO（可选）
+## 附件对象存储（MinIO）
 
-默认附件就落在 `data/uploads/`，不用 MinIO 也完全能跑 —— 下面这一节只在你想把附件
-挪到对象存储时才需要。**不填 `S3_BUCKET` 就什么都不会变。**
+MinIO 随 compose 一起启停，数据在与 compose 文件同级的 `minio-data/`。
+**不需要任何手工步骤**：凭据由 `deploy.sh` 首次运行时生成，桶由主程序启动时创建。
 
 ### 架构：浏览器永远不直连 MinIO
 
@@ -239,36 +248,45 @@ Content-Type 返回，一份存进去的 HTML 会被当网页渲染 —— 存�
 > 想看 MinIO 控制台就开 SSH 隧道（`ssh -L 9001:127.0.0.1:9001 user@server`）临时映射，
 > 不要在 `docker-compose.yml` 里长期加 `ports:`。
 
-### 切换步骤
+### 启动时都发生了什么
 
-附件下载现在还要求「你是该附件所在会话的成员」，所以顺序别搞反。
+`./deploy.sh` 之后不需要你做任何事，顺序是这样的：
 
-```bash
-# 1. 填凭据（.env 不进 git，仓库里没有也不该有任何密钥）
-openssl rand -hex 24                # 分别填进 S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY
-vi .env                             # 打开 S3_BUCKET / S3_ENDPOINT / S3_* 那几行
-
-# 2. 起 MinIO（注意 --profile，不加的话这个服务根本不会被启动）
-docker compose --profile minio up -d minio
-
-# 3. 建桶（MinIO 不会自动建）。用一次性的 mc 容器，跟 minio 在同一个网络里：
-docker compose --profile minio run --rm --entrypoint sh minio -c \
-  'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc mb -p local/loop-im'
-
-# 4. 重启应用，让它读到新的 S3_* 变量
-./deploy.sh
+```
+deploy.sh      → .env 里 S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY 为空就生成写回
+                 建好 data/ 与 minio-data/ 两个目录
+compose up     → minio 起来，healthcheck（mc ready local）通过
+                 loop-im 靠 depends_on: service_healthy 等到这一刻才启动
+loop-im 启动   → HEAD /loop-im          桶在不在
+                 PUT  /loop-im          不在就建（已存在返回 409 也算成功）
+                 PUT/GET/DELETE probe   写一个探针对象、读回来比对、删掉
+                 ↑ 全过了才 listen 端口对外服务
 ```
 
-这一刻起**新**附件直接进桶，**老**附件继续从本地磁盘回落（双读，见下），
-所以中间没有任何一刻是坏的。
+**为什么要跑读写来回，光看桶在不在不够**：桶在、但凭据只读，或者策略不让写，
+要拖到用户第一次发图才暴露。跑完整一个来回才算真的准备就绪。
+
+**自检不通过会怎样**：重试 20 次（每次隔 1 秒），仍然失败就打一条 `store.unavailable`
+错误日志并退出，交给 `restart: unless-stopped` 重来。这是刻意的 —— 容器显示 Up、
+聊天能用、只有发图坏，这种半开状态往往要等用户来报才被发现；
+`docker compose ps` 里明明白白一个 Restarting 好查得多。
 
 ```bash
-# 5. 从容地把老文件搬进桶。默认是预演，什么都不改。
+docker compose logs loop-im | grep -E 'store\.(ready|unavailable|not-ready)'
+```
+
+### 从旧版本升级：老附件怎么办
+
+如果你的 `data/uploads/` 里还有切换前的本地附件，它们**不会自动消失也不会 404**：
+新附件直接进桶，老附件继续从本地磁盘回落（双读），中间没有任何一刻是坏的。
+
+```bash
+# 从容地把老文件搬进桶。默认是预演，什么都不改。
 docker compose run --rm loop-im node scripts/migrate-uploads-to-minio.mjs
 docker compose run --rm loop-im node scripts/migrate-uploads-to-minio.mjs --apply
 
-# 6. 数目核对无误、并且备份过 data/ 之后，才关掉本地回落
-#    在 .env 里设 UPLOADS_LOCAL_FALLBACK=0，再 ./deploy.sh
+# 数目核对无误、并且备份过 data/ 之后，才关掉本地回落
+# 在 .env 里设 UPLOADS_LOCAL_FALLBACK=0，再 ./deploy.sh
 ```
 
 **双读**（`server/src/storage.js` 的 `getObject`）：主存储里没有的对象自动回落到本地磁盘。
@@ -322,6 +340,12 @@ docker compose run --rm loop-im node scripts/migrate-uploads-to-minio.mjs --appl
 ## 备份与迁移
 
 ```bash
-tar czf loop-im-backup-$(date +%F).tar.gz data .env     # 备份
+# 备份：两个数据目录 + 配置。少打 minio-data 就等于把所有附件丢了。
+tar czf loop-im-backup-$(date +%F).tar.gz data minio-data .env
+
 # 迁移：把这个包解到新机器的同一个目录，再跑 ./deploy.sh
 ```
+
+两个目录分开，所以也可以只备份其中一个：`data/` 是库（丢了聊天记录就没了），
+`minio-data/` 是附件对象（丢了消息还在，图片变裂图）。**不要只备份 `data/`** ——
+切到对象存储之后，附件已经不在那里面了。
