@@ -503,41 +503,72 @@ export function Composer({
       {notice ? <div className="attach-note">{notice}</div> : null}
 
       {attachments.length ? (
-        <div className="attach-list">
+        <>
           {/* 只有一个时不啰嗦，多选了才提示总数和「各占一个气泡」这件事。 */}
           {attachments.length > 1 ? (
             <div className="attach-list__count">
               已选 {attachments.length}/{MAX_ATTACHMENTS} 个附件，将按顺序各发一条
             </div>
           ) : null}
-          {attachments.map((attachment) => (
-            <div className="attach" key={attachment.id}>
-              <span className={`attach__thumb${attachment.kind === 'image' ? '' : ' attach__thumb--file'}`}>
-                {/* 只有确认过是图片的那一档才内联显示缩略图，视频给胶片图标，其余给文件图标。
-                    这里刻意不为待发的视频做一个 <video> 预览：会白白解一遍码，而这条附件条
-                    本来就只是「选了什么」的提示。 */}
-                {attachment.kind === 'image'
-                  ? <img src={attachment.previewUrl} alt={attachment.filename} />
-                  : attachment.kind === 'video' ? <Film size={16} />
-                    : <FileText size={16} />}
-              </span>
-              <span className="attach__name">{attachment.filename}</span>
-              <span className="attach__state">
-                {attachment.error ? attachment.error
-                  : attachment.uploading ? '上传中…'
-                    : KIND_HINT[attachment.kind]}
-              </span>
-              <button
-                type="button"
-                className="attach__x"
-                onClick={() => removeAttachment(attachment.id)}
-                title="移除附件"
+          {/* 横向一排 1:1 方块，放不下就横向滚（见 styles.css 的说明）。
+              竖排时 9 个附件 = 9 行，手机上直接把输入框顶出可视区；横排之后
+              不管选几个，占的垂直空间都是固定的一格。 */}
+          <div className="attach-list">
+            {attachments.map((attachment) => (
+              <div
+                className="attach"
+                key={attachment.id}
+                /* 方块只有 72px 宽，文件名一定会被截断；完整名字挂在 title 上，
+                   鼠标悬停能看全，读屏则读下面的 .attach__name。 */
+                title={attachment.filename}
+                data-state={attachment.error ? 'error' : attachment.uploading ? 'uploading' : 'ready'}
               >
-                <X size={13} />
-              </button>
+                <span className={`attach__thumb${attachment.kind === 'image' ? '' : ' attach__thumb--file'}`}>
+                  {/* 只有确认过是图片的那一档才内联显示缩略图，视频给胶片图标，其余给文件图标。
+                      这里刻意不为待发的视频做一个 <video> 预览：会白白解一遍码，而这个方块
+                      本来就只是「选了什么」的提示。 */}
+                  {/* alt 留空是**故意**的：文件名就在下面那条 .attach__name 上，
+                      再给缩略图配一遍 alt，读屏会把同一个名字连读两次。 */}
+                  {attachment.kind === 'image'
+                    ? <img src={attachment.previewUrl} alt="" />
+                    : attachment.kind === 'video' ? <Film size={22} />
+                      : <FileText size={22} />}
+                </span>
+                <span className="attach__name">{attachment.filename}</span>
+                {/* 失败的那一档不在方块里写原因：服务端的报错可能很长，72px 的格子里
+                    只能截断，而「为什么失败」恰恰是用户必须读全的一句。所以方块上只留
+                    虚线边 + ⚠ 两个**非颜色**的标记，完整原因放到下面的 .attach-alert，
+                    并且全篇只出现这一处，不重复。 */}
+                {attachment.error ? null : (
+                  <span className="attach__state">
+                    {attachment.uploading ? '上传中…' : KIND_HINT[attachment.kind]}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="attach__x"
+                  onClick={() => removeAttachment(attachment.id)}
+                  title="移除附件"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+          {/* 上传失败的完整原因。role="alert" 让读屏在失败发生时立刻播报；
+              视觉上它是一条独立的文字行，不依赖悬停，手机上也读得到。 */}
+          {attachments.some((a) => a.error) ? (
+            <div className="attach-alerts" role="alert">
+              {attachments.filter((a) => a.error).map((a) => (
+                /* 文件名故意**不**包在自己的元素里：包起来的话它和方块里的
+                   .attach__name 就是两个内容相同的节点，getByText(文件名) 会撞车。 */
+                <p className="attach-alert" key={a.id}>
+                  {a.filename}：<span className="attach__state">{a.error}</span>
+                </p>
+              ))}
             </div>
-          ))}
-        </div>
+          ) : null}
+        </>
       ) : null}
 
       <div className="composer__row">

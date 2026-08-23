@@ -3,6 +3,7 @@ import { CornerUpLeft, SmilePlus } from 'lucide-react';
 import { Avatar, AiBadge } from './Avatar';
 import { MarkdownBody } from './MarkdownBody';
 import { ImageViewer } from './ImageViewer';
+import type { GalleryImage } from './ImageViewer';
 import { clock, dayLabel } from '../lib/format';
 import { REACTION_EMOJIS } from '../lib/reactions';
 import type { Message, ReadState } from '../lib/types';
@@ -107,8 +108,57 @@ export function MessageList({
    * 正在看的大图。气泡里的图是 1:1 切过的缩略图，看原图这条路由它兜住。
    * 状态放在列表这一层而不是每个气泡里：同一时刻只该有一层，
    * 放在气泡里的话点第二张就会叠出两层。
+   *
+   * 存的不只是被点的那一张，而是**打开那一刻整条会话里的全部图片 + 落在第几张**，
+   * 这样蒙版里才能前后翻。
    */
-  const [viewing, setViewing] = useState<{ src: string; alt: string } | null>(null);
+  const [viewing, setViewing] = useState<{ images: GalleryImage[]; index: number } | null>(null);
+
+  /**
+   * 点开某张缩略图，顺手把整条会话的图片收成一个画廊。
+   *
+   * ## 为什么是查 DOM，不是解析消息的 body
+   *
+   * 备选方案是遍历 `messages`、用正则从每条 Markdown 源码里抠 `![](…)`。不走那条，
+   * 因为「一段 Markdown 会渲染出哪些图」这件事的唯一权威是 md.ts，而它做的事
+   * 远不止一条正则：
+   *
+   *   - 反引号里的 `![图](x)` 是**字面量**，不是图（行内代码先被抽进槽位了）；
+   *   - `.mp4` / `.webm` 的站内附件会走 `<video>`，不是图；
+   *   - `safeUrl()` 会把 `javascript:` 之类挡成 `#`；
+   *   - `displaySrc()` 会把服务端 URL 换成本地 blob:（自己刚发的那张），
+   *     没命中才拼上 `?token=`。
+   *
+   * 在这里再实现一遍，等于把这四条规则抄成第二份，两份迟早会分叉 ——
+   * 到那时画廊里会多出根本不存在的图，或者点开的是另一张。
+   * 查 DOM 拿到的是 md.ts **已经算完**的结果：`.mdimg__img` 只会是图片，
+   * src 已经是最终地址（blob: 或带 token 的都原样能用），顺序就是消息顺序。
+   *
+   * 代价是「看得见才收得到」：还没翻页加载出来的更早消息不在 DOM 里，也就不在画廊里。
+   * 这正是 hasOlder 要在蒙版上说明的那件事 —— 与其偷偷少几张，不如把范围讲清楚。
+   *
+   * 加载失败的那些排除掉：它们的按钮已经是 disabled，没有原图可看，
+   * 放进画廊只会让人翻到一张坏图，还把「共 n 张」这个数撑大。
+   */
+  function openImage(src: string, alt: string, clicked: HTMLImageElement) {
+    const root = scrollRef.current;
+    const all = Array.from(root?.querySelectorAll<HTMLImageElement>('img.mdimg__img') ?? [])
+      .filter((img) => img.closest('button.mdimg')?.getAttribute('data-state') !== 'error');
+    const at = all.indexOf(clicked);
+    // 收不到（理论上不会：能点开就说明它在列表里）就退回「只看这一张」，
+    // 总比开出一个空画廊强。
+    if (at < 0) {
+      setViewing({ images: [{ src, alt }], index: 0 });
+      return;
+    }
+    setViewing({
+      images: all.map((img) => ({
+        src: img.getAttribute('src') || '',
+        alt: img.getAttribute('alt') || '',
+      })),
+      index: at,
+    });
+  }
 
   /**
    * 气泡下方那一行已有回应：一个表情一个按钮，显示计数，指上去能看到都有谁。
@@ -242,7 +292,7 @@ export function MessageList({
                   <MarkdownBody
                     className={`md bubble bubble--me${m.pending ? ' bubble--sending' : ''}`}
                     body={m.body}
-                    onOpenImage={(src, alt) => setViewing({ src, alt })}
+                    onOpenImage={openImage}
                   />
                   {reactionRow(m)}
                   {/* 「已读」只依据对方真实上报的已读位置，不拿在线状态或送达去推断。 */}
@@ -268,7 +318,7 @@ export function MessageList({
                   <MarkdownBody
                     className={`md bubble ${m.isAI ? 'bubble--ai' : 'bubble--other'}`}
                     body={m.body}
-                    onOpenImage={(src, alt) => setViewing({ src, alt })}
+                    onOpenImage={openImage}
                   />
                   {reactionRow(m)}
                   <div className="msg__meta">
@@ -296,8 +346,19 @@ export function MessageList({
 
       <div ref={endRef} />
 
+      {/*
+        写在这里只是为了「同一时刻只开一层」这件事跟状态待在一起 ——
+        ImageViewer 内部用 createPortal 挂到 document.body，实际渲染位置和这里无关，
+        所以它不会再被 .chat__scroll 的 overflow 和层叠上下文夹住。
+      */}
       {viewing ? (
-        <ImageViewer src={viewing.src} alt={viewing.alt} onClose={() => setViewing(null)} />
+        <ImageViewer
+          images={viewing.images}
+          index={viewing.index}
+          onIndex={(index) => setViewing((v) => (v ? { ...v, index } : v))}
+          onClose={() => setViewing(null)}
+          hasOlder={hasOlder}
+        />
       ) : null}
     </div>
   );
