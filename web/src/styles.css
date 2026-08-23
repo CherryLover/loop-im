@@ -413,6 +413,12 @@ input, textarea { font-family: inherit; }
 .attach__name { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; }
 .attach__state { color: var(--muted); }
 .attach__x { margin-left: auto; border: none; background: transparent; color: var(--muted); cursor: pointer; display: flex; }
+/* 多选之后附件是一列。最多 9 条，超过一屏就自己滚，别把输入框挤出可视区。 */
+.attach-list { display: flex; flex-direction: column; max-height: 208px; overflow-y: auto; }
+.attach-list .attach { margin-bottom: 6px; }
+.attach-list__count { color: var(--muted); font-size: 11.5px; margin-bottom: 6px; }
+/* 「超出上限」这类一次性提示，和附件条区分开。 */
+.attach-note { color: var(--anx); font-size: 11.5px; margin-bottom: 8px; }
 
 /* ---- 引用回复 -------------------------------------------------------- */
 /* 输入框上方的引用态：正在回复谁、回复的是哪一句，右边一个叉可以取消。 */
