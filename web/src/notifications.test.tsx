@@ -286,8 +286,107 @@ describe('浏览器不支持 Notification（降级）', () => {
     await mount();
 
     await openProfile();
-    expect(await screen.findByText('当前浏览器不支持桌面通知。')).toBeInTheDocument();
+    const hint = await screen.findByText(/当前浏览器不支持桌面通知/);
+    // 这句话对**桌面**老浏览器成立，对 iOS 只在「装到主屏之后仍然没有」时才成立，
+    // 所以补一句版本门槛，否则 iOS 16.4 以下的用户装完主屏还是不知道自己卡在哪。
+    expect(hint).toHaveTextContent('iOS 16.4');
     expect(screen.getByRole('button', { name: /已关闭/ })).toBeDisabled();
+    // jsdom 的 UA 里没有 iPhone / iPad，绝不能报成「去添加到主屏幕」
+    expect(screen.queryByText(/添加到主屏幕/)).not.toBeInTheDocument();
+  });
+});
+
+// iOS Safari 标签页里 Notification 就是 undefined，老代码把它判成「当前浏览器不支持
+// 桌面通知」——而这句话是错的：iOS 上所有浏览器都是同一个 WebKit，用户照着提示换个
+// 浏览器只会更困惑。唯一的出路是「添加到主屏幕」。
+describe('iOS 标签页：说「加到主屏幕」，不说「浏览器不支持」', () => {
+  const IOS_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+
+  /**
+   * iOS Safari 标签页：iOS 的 UA、没有 Notification、不是独立模式、HTTPS。
+   *
+   * `matchMedia: false` 表示连 matchMedia 都不装（jsdom 的原样）。真机 iOS 当然有
+   * 这个 API，但只有让它缺席，才能顺带压住「探测函数在最恶劣的环境下也不能把
+   * SSE 回调带崩」这条——判定结果两种情况下都是 needs-install，走的路不一样。
+   */
+  const stubIosTab = (opts: { matchMedia?: boolean } = {}) => {
+    vi.stubGlobal('navigator', { userAgent: IOS_UA, standalone: false });
+    if (opts.matchMedia !== false) {
+      vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q }));
+    }
+    vi.stubGlobal('isSecureContext', true);
+    vi.stubGlobal('Notification', undefined);
+  };
+
+  it('开关置灰，提示里给出「分享 → 添加到主屏幕」这条具体可执行的路', async () => {
+    stubIosTab();
+    await mount();
+
+    await openProfile();
+    const hint = await screen.findByText(/添加到主屏幕/);
+    expect(hint).toHaveTextContent('分享');
+    expect(hint).toHaveTextContent('从主屏图标打开');
+    // 主屏 App 是独立的存储沙箱，进去要重新登录一次——不写清楚，用户会以为装坏了
+    expect(hint).toHaveTextContent('重新登录');
+    expect(hint).toHaveTextContent('保持登录');
+    expect(screen.getByRole('button', { name: /已关闭/ })).toBeDisabled();
+  });
+
+  it('不再出现「当前浏览器不支持桌面通知」这句误导的话', async () => {
+    stubIosTab();
+    await mount();
+
+    await openProfile();
+    await screen.findByText(/添加到主屏幕/);
+    expect(screen.queryByText(/当前浏览器不支持桌面通知/)).not.toBeInTheDocument();
+  });
+
+  it('按钮置灰，硬点也不会假装打开', async () => {
+    stubIosTab();
+    await mount();
+
+    await openProfile();
+    const toggle = await screen.findByRole('button', { name: /已关闭/ });
+    expect(toggle).toBeDisabled();
+    await userEvent.click(toggle, { pointerEventsCheck: 0 });
+    // 开关不能翻成「已开启」——这一档 Notification 根本不存在，翻上去就是骗人
+    expect(await screen.findByRole('button', { name: /已关闭/ })).toBeInTheDocument();
+    expect(requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('装到主屏之后（有 Notification）就走回原来的三档，提示里不再提安装', async () => {
+    vi.stubGlobal('navigator', { userAgent: IOS_UA, standalone: true });
+    vi.stubGlobal('isSecureContext', true);
+    stubNotification('default');
+    await mount();
+
+    await openProfile();
+    expect(await screen.findByText(/打开后会向浏览器申请一次通知权限/)).toBeInTheDocument();
+    expect(screen.queryByText(/添加到主屏幕/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /已关闭/ })).not.toBeDisabled();
+  });
+
+  it('非 HTTPS 的 iOS 标签页说的是 HTTPS，不是安装——装了也一样没有', async () => {
+    stubIosTab();
+    vi.stubGlobal('isSecureContext', false);
+    await mount();
+
+    await openProfile();
+    expect(await screen.findByText(/当前不是 HTTPS/)).toBeInTheDocument();
+    expect(screen.queryByText(/添加到主屏幕/)).not.toBeInTheDocument();
+  });
+
+  it('收到消息照样不抛异常，消息本身进列表（连 matchMedia 都没有时也一样）', async () => {
+    vi.spyOn(Object.getPrototypeOf(document), 'hidden' as never, 'get').mockReturnValue(true);
+    prefOn();
+    stubIosTab({ matchMedia: false });
+    expect(window.matchMedia).toBeUndefined();
+    await mount();
+
+    await incoming();
+
+    expect(shown).toHaveLength(0);
+    expect(await screen.findByText('内容 m2')).toBeInTheDocument();
   });
 });
 
@@ -456,7 +555,7 @@ describe('非 HTTPS 访问（非安全上下文）', () => {
     const hint = await screen.findByText(/当前不是 HTTPS/);
     expect(hint).toHaveTextContent('浏览器禁用了桌面通知');
     expect(hint).toHaveTextContent('https://');
-    expect(screen.queryByText('当前浏览器不支持桌面通知。')).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前浏览器不支持桌面通知/)).not.toBeInTheDocument();
   });
 
   it('开关置灰，点不出一次注定失败的权限申请', async () => {
