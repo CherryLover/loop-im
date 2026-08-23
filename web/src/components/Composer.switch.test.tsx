@@ -7,6 +7,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { Composer } from './Composer';
+import { clearPreviewCache, localPreviewFor } from '../lib/upload-cache';
 import type { Conversation } from '../lib/types';
 
 const upload = vi.fn(async (file: File) => ({ url: `/uploads/${file.name}`, filename: file.name, storage: 'local' }));
@@ -74,6 +75,9 @@ const attachFile = async (container: HTMLElement, name: string) => {
 
 beforeEach(() => {
   upload.mockClear();
+  // 预览缓存是模块级的，用例之间必须互相隔离，否则上一条留下的 blob 会串进来。
+  // 要在换掉 revokeObjectURL 的桩**之前**清，免得清理动作被算到新桩头上。
+  clearPreviewCache();
   URL.createObjectURL = vi.fn((f: Blob) => `blob:${(f as File).name}`);
   URL.revokeObjectURL = vi.fn();
 });
@@ -217,20 +221,38 @@ describe('预览图 blob 的释放', () => {
     expect(URL.revokeObjectURL).not.toHaveBeenCalled();
   });
 
-  it('发送成功、手动移除、换图都会释放预览图', async () => {
+  it('图片发送成功后**不释放** blob：它交给 upload-cache 接管了', async () => {
+    // 以前这里是「发送成功立刻 revoke」，结果发送方看自己刚发的图还要回源下一遍，
+    // 比接收端还慢。现在原图留给 lib/upload-cache.ts，释放改由它的 LRU 负责。
     const onSend = vi.fn().mockResolvedValue(undefined);
     const { user, container } = setup(onSend);
 
     await attachFile(container, 'a.png');
     await user.click(screen.getByRole('button', { name: '发送' }));
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:a.png');
+
+    expect(onSend).toHaveBeenCalledWith('![a.png](/uploads/a.png)');
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:a.png');
+    expect(localPreviewFor('/uploads/a.png')).toBe('blob:a.png');
+  });
+
+  it('手动移除会释放预览图', async () => {
+    const { user, container } = setup(vi.fn());
+
+    await attachFile(container, 'c.png');
+    await user.click(screen.getByRole('button', { name: '移除附件' }));
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:c.png');
+  });
+
+  it('再选一个不再算「换图」：两个附件并存，谁的预览图都不释放', async () => {
+    const { container } = setup();
 
     await attachFile(container, 'b.png');
-    await attachFile(container, 'c.png');                  // 换图，b 作废
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:b.png');
+    await attachFile(container, 'c.png');
 
-    await user.click(screen.getByRole('button', { name: '移除附件' }));
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:c.png');
+    expect(screen.getByText('b.png')).toBeInTheDocument();
+    expect(screen.getByText('c.png')).toBeInTheDocument();
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
   });
 
   it('组件卸载时，所有会话暂存的预览图一起释放', async () => {

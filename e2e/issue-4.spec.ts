@@ -7,7 +7,7 @@ const MOBILE = { width: 390, height: 812 };
 async function signIn(page: Page, who: { email: string; password: string }) {
   await page.goto('/');
   await page.getByLabel('邮箱').fill(who.email);
-  await page.getByLabel('密码').fill(who.password);
+  await page.getByLabel('密码', { exact: true }).fill(who.password);
   await page.getByRole('button', { name: '登录' }).click();
 }
 

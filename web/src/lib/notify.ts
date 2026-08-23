@@ -12,12 +12,29 @@ import type { Conversation, Message } from './types';
  *    （issue #20 的 chatDetailVisible），同一条消息不会既被标成已读又弹通知。
  * 3. 没有 Notification 就安静降级。jsdom、老浏览器、iOS 上的非 PWA Safari 都没有它，
  *    任何一处都不能因此抛异常把页面搞挂。
+ * 4. 环境问题要说人话。Notification 是 [SecureContext] 接口：通过 http://内网IP 访问时
+ *    浏览器直接不给，权限申请连弹都不弹。这一档单独报成 'insecure'，不能和「浏览器太老」
+ *    混成同一句「不支持」——那是把 URL 的问题赖给浏览器，用户换个浏览器还是不行。
  */
 
-/** 'unsupported' 是本模块加的一档：浏览器压根没有 Notification。 */
-export type NotifyPermission = 'unsupported' | 'default' | 'granted' | 'denied';
+/**
+ * 前两档是本模块加的，浏览器自己只有后三档：
+ * - 'insecure'：当前页面不是安全上下文（非 HTTPS 且非 localhost），浏览器禁用了通知；
+ * - 'unsupported'：浏览器压根没有 Notification。
+ */
+export type NotifyPermission = 'insecure' | 'unsupported' | 'default' | 'granted' | 'denied';
 
 const KEY = 'loop-im-notify';
+
+/**
+ * 当前页面是不是**确定**不在安全上下文里。
+ *
+ * 只认 `=== false` 这一种情况：真实浏览器从 2016 年起都有 isSecureContext，读出 undefined
+ * 说明是 jsdom 或古董环境，那属于「不知道」，不能据此把功能判死。
+ */
+export function notifyInsecureContext(): boolean {
+  return typeof window !== 'undefined' && window.isSecureContext === false;
+}
 
 /** 浏览器有没有 Notification。typeof 对未声明的全局也安全，不会抛。 */
 export function notifySupported(): boolean {
@@ -25,6 +42,9 @@ export function notifySupported(): boolean {
 }
 
 export function notifyPermission(): NotifyPermission {
+  // 安全上下文排在最前：非 HTTPS 时 Notification 往往干脆是 undefined，
+  // 先判它才能给出「换 HTTPS」这句真正有用的话，而不是「浏览器不支持」。
+  if (notifyInsecureContext()) return 'insecure';
   if (!notifySupported()) return 'unsupported';
   return Notification.permission as NotifyPermission;
 }
@@ -52,6 +72,7 @@ export function saveNotifyEnabled(on: boolean): void {
  * 反复调只会让人以为出了故障。
  */
 export async function requestNotifyPermission(): Promise<NotifyPermission> {
+  if (notifyInsecureContext()) return 'insecure';
   if (!notifySupported()) return 'unsupported';
   if (Notification.permission !== 'default') return Notification.permission as NotifyPermission;
   try {
@@ -125,6 +146,36 @@ export function notifyMessage(input: IncomingNotice): boolean {
   }
 }
 
+export const NOTIFY_ENABLED_TITLE = '桌面通知已开启';
+export const NOTIFY_ENABLED_BODY = '切到别的标签页或别的应用时，新消息会像这样弹出来。';
+
+/**
+ * 开关刚拨到「开」的那一刻，立刻弹一条确认。
+ *
+ * 这是标准做法，不是锦上添花：本产品**只在用户看不见消息时**才弹通知（见
+ * shouldNotifyMessage），用户开完开关往往还停在聊天页，于是接下来很久都不会弹任何东西，
+ * 看上去和「点了没反应 / 坏了」一模一样。先弹一条确认，用户就知道通道是通的。
+ *
+ * 和 notifyMessage 一样，任何异常都就地咽掉：拨开关不该把页面搞挂。
+ */
+export function notifyEnabledConfirmation(): boolean {
+  if (notifyPermission() !== 'granted') return false;
+  try {
+    const notice = new Notification(NOTIFY_ENABLED_TITLE, {
+      body: NOTIFY_ENABLED_BODY,
+      tag: 'loop-im:enabled',
+    });
+    notice.onclick = () => {
+      try { window.focus(); } catch { /* 忽略 */ }
+      notice.close();
+    };
+    return true;
+  } catch (err) {
+    console.warn('[loop-im] 确认通知弹出失败', err);
+    return false;
+  }
+}
+
 export interface DesktopNotify {
   enabled: boolean;
   permission: NotifyPermission;
@@ -148,6 +199,8 @@ export function useDesktopNotify(): DesktopNotify {
     const on = next === 'granted';
     setEnabled(on);
     saveNotifyEnabled(on);
+    // 开成功了就立刻弹一条确认，别让用户对着一个「已开启」的开关猜它到底通没通。
+    if (on) notifyEnabledConfirmation();
   }, [enabled]);
 
   return { enabled, permission, toggle };

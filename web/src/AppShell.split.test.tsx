@@ -124,9 +124,16 @@ describe('一次发送产生两条消息', () => {
     await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
     await waitFor(() => expect(screen.getByText('这是今天的构建结果')).toBeInTheDocument());
+    // 不再按服务端 URL 去找这张图：发送方现在优先渲染本地那份 blob（自己刚传上去的图
+    // 不必再从服务端下回来一趟，见 lib/upload-cache.ts），所以 src 是 blob: 开头的。
+    let image: HTMLImageElement | null = null;
     await waitFor(() => {
-      expect(document.querySelector('.bubble img[src="/uploads/9f3a.png"]')).not.toBeNull();
+      image = document.querySelector('.bubble img');
+      expect(image).not.toBeNull();
     });
+    // 顺便把「发送方用的是本地副本」这条钉住——它正是这次要解决的体验问题。
+    expect(image!.getAttribute('src')).toMatch(/^blob:/);
+
     // 图片没有和文字挤在同一个气泡里。
     const textBubble = screen.getByText('这是今天的构建结果').closest('.bubble');
     expect(textBubble?.querySelector('img')).toBeNull();
