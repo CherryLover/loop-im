@@ -13,6 +13,7 @@ const upload = vi.fn(async (file: File) => ({ url: `/uploads/${file.name}`, file
 
 vi.mock('../lib/api', () => ({
   MAX_UPLOAD_MB: 8,
+  MAX_VIDEO_UPLOAD_MB: 100,
   api: { upload: (file: File) => upload(file) },
 }));
 

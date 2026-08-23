@@ -43,23 +43,30 @@ export const MAX_UPLOAD_MB = 8;
 export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 export const OVERSIZED_MESSAGE = `文件大小不能超过 ${MAX_UPLOAD_MB}MB`;
 
-// 视频单独一档：100MB。上面那三个常量的含义**一个字没变**（仍然是图片/普通文件那一档），
-// 新增的是下面这三个，别把两档混用。服务端的对应物见 upload-middleware.js 的 MAX_VIDEO_*。
-export const MAX_VIDEO_MB = 100;
-export const MAX_VIDEO_BYTES = MAX_VIDEO_MB * 1024 * 1024;
-export const VIDEO_OVERSIZED_MESSAGE = `视频大小不能超过 ${MAX_VIDEO_MB}MB`;
+// 视频单独一档：一段能看的录屏动辄几十 MB，8MB 这一档根本发不出去。
+// 图片和普通文件仍然是上面那一档，语义没有变。
+export const MAX_VIDEO_UPLOAD_MB = 100;
+export const MAX_VIDEO_UPLOAD_BYTES = MAX_VIDEO_UPLOAD_MB * 1024 * 1024;
+export const VIDEO_OVERSIZED_MESSAGE = `视频大小不能超过 ${MAX_VIDEO_UPLOAD_MB}MB`;
+
+/** 本地预检该按哪一档卡体积。 */
+export interface UploadLimit {
+  bytes: number;
+  message: string;
+}
 
 /**
- * 本地这一侧只能按浏览器给的 File.type 猜档位 —— 真实类型要服务端按字节嗅探才知道。
+ * 上传前的体积分档。
  *
- * 这不构成任何安全问题：谎报类型最多让一份 100MB 的非视频白跑一趟服务端，
- * 到那边嗅探不通过照样被拒（400），落盘扩展名、能不能内联全都只看嗅探结果。
- * 本地这道拦截的唯一目的一直都是「明显超限就不必白跑一趟」，见 issue #9。
+ * 这里只能看浏览器给的 MIME —— 它是可以谎报的，所以这个判断**不是**安全边界，
+ * 只是「别让用户白等一趟」的预检。真正算数的仍然是服务端：它按真实字节判定通道，
+ * 谎称 video/mp4 的大文件到了服务端照样会被拒。
  */
-export const isVideoFile = (file: File) => /^video\//i.test(file.type || '');
-export const maxBytesForFile = (file: File) => (isVideoFile(file) ? MAX_VIDEO_BYTES : MAX_UPLOAD_BYTES);
-export const oversizedMessageForFile = (file: File) =>
-  (isVideoFile(file) ? VIDEO_OVERSIZED_MESSAGE : OVERSIZED_MESSAGE);
+export const uploadLimitFor = (file: File): UploadLimit => (
+  /^video\//i.test(file.type)
+    ? { bytes: MAX_VIDEO_UPLOAD_BYTES, message: VIDEO_OVERSIZED_MESSAGE }
+    : { bytes: MAX_UPLOAD_BYTES, message: OVERSIZED_MESSAGE }
+);
 
 export class ApiError extends Error {
   status: number;
@@ -87,8 +94,8 @@ export class ApiError extends Error {
  *
  * 按档位卡（见 maxBytesForFile）：视频 100MB，其余仍然是 8MB。
  */
-function checkSize(file: File, max = maxBytesForFile(file), message = oversizedMessageForFile(file)) {
-  if (file.size > max) throw new ApiError(413, message);
+function checkSize(file: File, limit: UploadLimit = { bytes: MAX_UPLOAD_BYTES, message: OVERSIZED_MESSAGE }) {
+  if (file.size > limit.bytes) throw new ApiError(413, limit.message);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -126,7 +133,8 @@ export const api = {
     request<{ user: User }>('/auth/me', { method: 'PATCH', body: JSON.stringify({ name }) }),
   uploadAvatar: (file: File) => {
     // 头像永远是 8MB 那一档：它只收图片，视频那档 100MB 的放宽和它无关。
-    checkSize(file, MAX_UPLOAD_BYTES, OVERSIZED_MESSAGE);
+    // 不传 limit，用的就是默认那一档（服务端的头像口也单独锁死在 8MB）。
+    checkSize(file);
     const form = new FormData();
     form.append('file', file);
     return request<{ user: User }>('/auth/me/avatar', { method: 'POST', body: form });
@@ -226,9 +234,9 @@ export const api = {
       { method: 'DELETE' },
     ),
   // 图片、视频和普通文件走同一个入口，由服务端按真实字节判定 kind
-  //（image 可内联、video 可内联播放、file 只能下载）。
+  //（image 可内联、video 可内联播放、file 只能下载）。体积上限按类型分档，见 uploadLimitFor。
   upload: (file: File) => {
-    checkSize(file);
+    checkSize(file, uploadLimitFor(file));
     const form = new FormData();
     form.append('file', file);
     return request<UploadResult>('/uploads', { method: 'POST', body: form });
