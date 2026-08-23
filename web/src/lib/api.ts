@@ -43,6 +43,24 @@ export const MAX_UPLOAD_MB = 8;
 export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 export const OVERSIZED_MESSAGE = `文件大小不能超过 ${MAX_UPLOAD_MB}MB`;
 
+// 视频单独一档：100MB。上面那三个常量的含义**一个字没变**（仍然是图片/普通文件那一档），
+// 新增的是下面这三个，别把两档混用。服务端的对应物见 upload-middleware.js 的 MAX_VIDEO_*。
+export const MAX_VIDEO_MB = 100;
+export const MAX_VIDEO_BYTES = MAX_VIDEO_MB * 1024 * 1024;
+export const VIDEO_OVERSIZED_MESSAGE = `视频大小不能超过 ${MAX_VIDEO_MB}MB`;
+
+/**
+ * 本地这一侧只能按浏览器给的 File.type 猜档位 —— 真实类型要服务端按字节嗅探才知道。
+ *
+ * 这不构成任何安全问题：谎报类型最多让一份 100MB 的非视频白跑一趟服务端，
+ * 到那边嗅探不通过照样被拒（400），落盘扩展名、能不能内联全都只看嗅探结果。
+ * 本地这道拦截的唯一目的一直都是「明显超限就不必白跑一趟」，见 issue #9。
+ */
+export const isVideoFile = (file: File) => /^video\//i.test(file.type || '');
+export const maxBytesForFile = (file: File) => (isVideoFile(file) ? MAX_VIDEO_BYTES : MAX_UPLOAD_BYTES);
+export const oversizedMessageForFile = (file: File) =>
+  (isVideoFile(file) ? VIDEO_OVERSIZED_MESSAGE : OVERSIZED_MESSAGE);
+
 export class ApiError extends Error {
   status: number;
   /**
@@ -64,11 +82,13 @@ export class ApiError extends Error {
 /**
  * 上传前先在本地卡一道体积，超限就不必白跑一趟服务端。
  * 严格大于：界面文案是「不超过 8MB」，正好 8MB 属于合法范围，要放行。
- * 服务端 multer 的 limits.fileSize 因此写成 MAX_UPLOAD_BYTES + 1（busboy 是「不得达到」语义），
+ * 服务端 multer 的 limits.fileSize 因此写成 上限 + 1（busboy 是「不得达到」语义），
  * 否则这一档会前端放行、服务端 413，白跑一趟——正是本地拦截要避免的。见 issue #15。
+ *
+ * 按档位卡（见 maxBytesForFile）：视频 100MB，其余仍然是 8MB。
  */
-function checkSize(file: File) {
-  if (file.size > MAX_UPLOAD_BYTES) throw new ApiError(413, OVERSIZED_MESSAGE);
+function checkSize(file: File, max = maxBytesForFile(file), message = oversizedMessageForFile(file)) {
+  if (file.size > max) throw new ApiError(413, message);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -105,7 +125,8 @@ export const api = {
   updateName: (name: string) =>
     request<{ user: User }>('/auth/me', { method: 'PATCH', body: JSON.stringify({ name }) }),
   uploadAvatar: (file: File) => {
-    checkSize(file);
+    // 头像永远是 8MB 那一档：它只收图片，视频那档 100MB 的放宽和它无关。
+    checkSize(file, MAX_UPLOAD_BYTES, OVERSIZED_MESSAGE);
     const form = new FormData();
     form.append('file', file);
     return request<{ user: User }>('/auth/me/avatar', { method: 'POST', body: form });
@@ -204,7 +225,8 @@ export const api = {
       `/conversations/${conversationId}/messages/${messageId}/reactions?emoji=${encodeURIComponent(emoji)}`,
       { method: 'DELETE' },
     ),
-  // 图片和普通文件走同一个入口，由服务端按真实字节判定 kind（image 可内联、file 只能下载）。
+  // 图片、视频和普通文件走同一个入口，由服务端按真实字节判定 kind
+  //（image 可内联、video 可内联播放、file 只能下载）。
   upload: (file: File) => {
     checkSize(file);
     const form = new FormData();

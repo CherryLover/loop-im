@@ -3,6 +3,7 @@ import { bootstrap } from './bootstrap.js';
 import { logError, logEvent, logWarn } from './log.js';
 import { startOrphanSweeper } from './attachment-access.js';
 import { ensureStoreReady, getDriver } from './storage.js';
+import { sweepStaleTemp } from './upload-temp.js';
 
 const PORT = Number(process.env.PORT || 4000);
 
@@ -37,6 +38,11 @@ if (store.created) console.log(`已自动创建对象存储桶：${store.detail}
 // UPLOAD_ORPHAN_SWEEP=on，开了之后每小时扫一次，删「超过 24 小时且没有任何消息引用」的对象。
 // 挂在这里而不是 createApp 里：测试会起几百个 app 实例，不该每个都多一个定时器。
 startOrphanSweeper();
+
+// 上传中转目录的兜底清理：正常路径上（成功 / 失败 / 客户端断线）临时文件都已经被删了，
+// 这一下只为进程被 kill -9 在上传半路时留下的残骸。删的是我们自己的中间产物，
+// 不是用户的附件，所以不像孤儿清理那样需要开关；只删超过 6 小时没动过的，宁可漏删。
+sweepStaleTemp().catch((err) => logWarn('upload.temp_sweep_failed', { message: err.message }));
 
 createApp().listen(PORT, () => {
   logEvent('server.started', { port: PORT, env: process.env.NODE_ENV || 'development' });

@@ -7,8 +7,18 @@ import { attachmentKeysIn } from './attachments.js';
 const here = dirname(fileURLToPath(import.meta.url));
 export const DATA_DIR = process.env.DATA_DIR || join(here, '..', 'data');
 export const UPLOAD_DIR = join(DATA_DIR, 'uploads');
+/**
+ * 上传中转目录。multer 先把请求体落到这里，路由嗅探完、算完 sha256、推给对象存储之后
+ * 立刻删掉（三条路径都要删，见 routes/uploads.js 的 discardTemp）。
+ *
+ * 放在 DATA_DIR 下面而不是 os.tmpdir()，为的是和 UPLOAD_DIR 同一个文件系统：
+ * local 驱动可以直接 rename 过去，100MB 的视频省掉一次整份拷贝。
+ * 同时它**不在** UPLOAD_DIR 里面 —— 那个目录会被清理脚本按 key 逐个扫描。
+ */
+export const UPLOAD_TMP_DIR = join(DATA_DIR, 'tmp');
 
 mkdirSync(UPLOAD_DIR, { recursive: true });
+mkdirSync(UPLOAD_TMP_DIR, { recursive: true });
 
 export const db = new DatabaseSync(join(DATA_DIR, 'loop.db'));
 db.exec(readFileSync(join(here, 'schema.sql'), 'utf8'));

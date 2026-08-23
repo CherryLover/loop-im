@@ -91,6 +91,83 @@ im.example.com {
 需要直接对外时，把 `.env` 里的 `BIND_ADDRESS` 改成 `0.0.0.0`。
 注意 SSE 走的是长连接，Nginx 需要 `proxy_buffering off;` 与足够长的 `proxy_read_timeout`。
 
+### ⚠️ 反代必须放行 100MB 的请求体，否则视频根本传不上去
+
+视频附件上限是 **100MB**（图片和普通文件仍然是 8MB）。反向代理默认的请求体上限比这
+小得多，**不改配置的话请求连 Node 都到不了**，用户看到的是反代自己吐的一个英文
+`413 Request Entity Too Large`，而不是我们的中文提示 —— 服务端日志里一行都没有，
+排查起来很费劲。
+
+Nginx 的 `client_max_body_size` 默认只有 **1MB**，这一条一定要改：
+
+```nginx
+server {
+    server_name im.example.com;
+
+    # ★ 必改：默认 1MB，不改的话 100MB 的视频到不了 Node。
+    #   留一点余量给 multipart 的边界和表单字段，别正好写 100m。
+    client_max_body_size 105m;
+
+    # 100MB 的上传别落到 Nginx 的磁盘缓冲里再转发：直接边收边转，省一次整份磁盘往返。
+    proxy_request_buffering off;
+
+    location / {
+        proxy_pass http://127.0.0.1:4000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # 慢网络传 100MB 要不少时间，默认 60s 会在半路掐断。
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
+    }
+
+    # SSE 是长连接，必须关掉缓冲，否则消息会被攒着不发。
+    location /api/stream {
+        proxy_pass http://127.0.0.1:4000;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 24h;
+    }
+
+    # 视频回源走 Range（206）。别在这条路径上开 gzip：压缩会让 Nginx 丢掉
+    # Content-Length / Content-Range，Safari 和 iOS 会直接不播。
+    location /uploads/ {
+        proxy_pass http://127.0.0.1:4000;
+        proxy_http_version 1.1;
+        proxy_set_header Range $http_range;            # Range 必须透传下去
+        proxy_set_header If-Range $http_if_range;
+        gzip off;
+        proxy_buffering off;
+    }
+}
+```
+
+Caddy 默认**不限制**请求体大小，所以上面那个最小示例已经能传 100MB。真要设个上限，
+用 `request_body`，同样记得留余量；Caddy 会自动透传 Range 并且不压缩 `video/*`：
+
+```
+im.example.com {
+    # 不写这一段就是不限制。写了就别小于 105MB，否则视频传不上去。
+    request_body {
+        max_size 105MB
+    }
+
+    reverse_proxy 127.0.0.1:4000 {
+        # SSE 和视频都要求别缓冲。
+        flush_interval -1
+    }
+}
+```
+
+其它常见的一层：Cloudflare 免费版的上限是 **100MB**（企业版才能调大），正好卡在我们
+的上限上 —— 套了 Cloudflare 代理的话，实际能传的会比 100MB 略小一点点（multipart 的
+开销会让一份 100MB 的视频超过 100MB 的请求体）。要么给 `/api/uploads` 关掉橙云走直连，
+要么把 `MAX_VIDEO_MB` 调小。
+
 ## 看日志
 
 服务端的关键事件是**结构化日志**：一行一条 JSON，直接打到 stdout / stderr。
@@ -350,6 +427,25 @@ UPLOAD_ORPHAN_SWEEP=on
 - [ ] 退出登录后开附件地址 → `401`
 - [ ] `docker compose logs minio` 里没有 `SignatureDoesNotMatch`
 - [ ] 宿主机上 `curl http://127.0.0.1:9000` **连不上**（MinIO 不该对外）
+
+视频那一档还要多过几条。**Range 透传给 MinIO 这条自动化测试完全覆盖不到**
+（用例里的假桶是我们自己写的 Node http server，按我们理解的语义回 206/416），
+所以它只能在这里人工确认：
+
+- [ ] 传一个几十 MB 的 MP4，能在聊天里**直接播**（不是下载）
+- [ ] 拖进度条到中间，能从那里接着播 —— 这一条验的就是 206
+- [ ] 用 iPhone / Safari 打开同一条消息，视频能播（没有 Range 的话 Safari 直接不播，
+      这是最容易在 Chrome 上测不出来的一档）
+- [ ] `curl -sI -H 'Range: bytes=0-99' 'https://im.example.com/uploads/<key>?token=<token>'`
+      → `206`，带 `Content-Range: bytes 0-99/<总长>` 和 `Accept-Ranges: bytes`
+- [ ] 同样的地址给一个越界的范围（`-H 'Range: bytes=999999999-'`）→ `416`，
+      带 `Content-Range: bytes */<总长>`
+- [ ] 上面两条的响应里都有 `X-Content-Type-Options: nosniff`，**没有** `Content-Disposition`
+- [ ] `docker compose logs minio` 里没有 `SignatureDoesNotMatch`（Range 是签进签名里的，
+      反代要是偷偷改写了这个头，这里会立刻报出来）
+- [ ] 传一个 100MB 的视频成功；再传一个 101MB 的，看到的是**我们的中文提示**
+      而不是反代自己吐的英文 `413`（后者说明 `client_max_body_size` 没改）
+- [ ] 服务器上 `du -sh data/tmp` 在几次上传前后都接近 0 —— 中转文件没有攒下来
 
 ## 备份与迁移
 
