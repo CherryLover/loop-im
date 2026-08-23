@@ -14,7 +14,11 @@ import { initialOf } from './lib/md';
 import { unreadAriaLabel, unreadBadgeClass, unreadLabel, withRetryHint } from './lib/format';
 import { mergeMessage, replyTargetOf } from './lib/messages';
 import { sortConversations } from './lib/conversations';
-import { syncUserInConversations, syncUserInList, syncUserInMessages } from './lib/user-sync';
+import {
+  type PresenceMap,
+  adoptUserList, presenceOf, syncPresenceInConversations, syncPresenceInList,
+  syncUserInConversations, syncUserInList, syncUserInMessages,
+} from './lib/user-sync';
 import { notifyMessage, useDesktopNotify } from './lib/notify';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
@@ -209,18 +213,44 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     setMessages((all) => syncUserInMessages(all, user));
   }, [meId]);
 
+  /**
+   * 谁上线了 / 谁下线了。在线状态同样有**两份**拷贝：联系人名单（users）和会话成员
+   * （conversations[].members），只改前者就会出现「联系人页显示在线、聊天窗口顶栏还写着
+   * 离线」——ChatPage 的顶栏文字、顶栏圆点和群成员圆点读的都是后者。
+   *
+   * 事件里的 { userId, online } 就是全部信息，够就地改了，所以这里既不重拉 /users
+   * （一个人上线，全站每个客户端都会收到这条广播，重拉就是 N 个请求换一个布尔值），
+   * 也就用不着节流 —— 不发请求，一次广播的代价只是一趟浅比较，没变的会话还保持原引用。
+   */
+  const applyPresence = useCallback((presence: PresenceMap) => {
+    setUsers((list) => syncPresenceInList(list, presence));
+    setConversations((list) => syncPresenceInConversations(list, presence));
+  }, []);
+
   useEffect(() => {
     background(refreshConversations(), '刷新会话列表');
     background(refreshUsers(), '刷新联系人');
   }, [refreshConversations, refreshUsers, background]);
 
-  // Heartbeat keeps this client "在线" and refreshes everyone else's presence.
+  /**
+   * 心跳：一边把自己续成在线，一边把别人的在线状态收回来。
+   *
+   * 这一路不能省 —— 「关掉标签页就走了」没有任何事件可发（服务端只在登录 / 退出 /
+   * 停用时广播 presence），只有 last_seen_at 过了 90 秒窗口才算下线，而唯一会去问一声的
+   * 就是这个 45 秒的心跳。少了它，人走了，群成员列表里那个点还一直亮着。
+   *
+   * 返回的整份名单里已经带着全员的在线状态，会话成员就地跟着改，不必为此再发一个请求。
+   */
   useEffect(() => {
     if (signingOut) return;
-    const tick = () => background(api.ping().then((r) => setUsers(r.users)), '心跳');
+    const tick = () => background(api.ping().then((r) => {
+      // 整份替换会换掉数组身份，内容没变时保留旧的那份（见 adoptUserList）。
+      setUsers((list) => adoptUserList(list, r.users));
+      applyPresence(presenceOf(r.users));
+    }), '心跳');
     const timer = window.setInterval(tick, 45_000);
     return () => window.clearInterval(timer);
-  }, [signingOut, background]);
+  }, [signingOut, background, applyPresence]);
 
   // 视口在断点两侧变化时重算布局：桌面转手机后，详情是不是还露着会跟着变。
   useEffect(() => {
@@ -386,7 +416,18 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
       applyUserUpdate(user);
       if (!usersRef.current.some((u) => u.id === user.id)) background(refreshUsers(), '刷新联系人');
     },
-    onPresence: () => background(refreshUsers(), '刷新联系人'),
+    // 上下线：就地改掉两份拷贝里的这一个字段（见 applyPresence），不重拉、不节流。
+    //
+    // 跳过我自己，是一道防御，不是在修某个已知会发生的场景 —— 说清楚免得后人以为
+    // 删掉它就会坏。服务端能发出「我离线」的路径只有三条，每条到这里时我都已经没救了：
+    // 退出登录只在**没有别的活着的会话**时才广播（auth.js 的 endSession），也就是说
+    // 这个标签页此刻正在登出；管理员重置我的密码会顶掉会话，下一个请求就是 401；
+    // 被停用则另有一条 user-updated，它带着 disabled 和 online:false，照常生效。
+    // 也就是说这里挡掉的只会是「我明明还在心跳、却被一条广播点灭」这种自相矛盾的状态。
+    onPresence: (userId, online) => {
+      if (userId === meId) return;
+      applyPresence(presenceOf([{ id: userId, online }]));
+    },
     // 别人点了回应，我这边立刻跟着变。服务端按人各发一份，mine 已经是我这一份。
     onReaction: (conversationId, messageId, reactions) => applyReactions(conversationId, messageId, reactions),
     onRead: (conversationId, userId, lastReadAt) => {

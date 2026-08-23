@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { syncUserInConversations, syncUserInList, syncUserInMessages } from './user-sync';
+import {
+  adoptUserList, presenceOf, syncPresenceInConversations, syncPresenceInList,
+  syncUserInConversations, syncUserInList, syncUserInMessages,
+} from './user-sync';
 import type { Conversation, Message, User } from './types';
 
 const ME: User = {
@@ -100,6 +103,93 @@ describe('syncUserInConversations', () => {
   it('一个字段都没变时整份返回原引用', () => {
     const list = [convo(), dm()];
     expect(syncUserInConversations(list, { ...PEER }, ME.id)).toBe(list);
+  });
+});
+
+describe('syncPresenceInList', () => {
+  it('只改在线状态，名字头像一概不动', () => {
+    const [, after] = syncPresenceInList([ME, PEER], presenceOf([{ id: PEER.id, online: false }]));
+    expect(after.online).toBe(false);
+    expect(after).toMatchObject({ name: '陈子航', avatarUrl: '/uploads/old.png' });
+  });
+
+  it('这张表没提到的人保持原对象引用', () => {
+    const list = [ME, PEER];
+    const next = syncPresenceInList(list, presenceOf([{ id: PEER.id, online: false }]));
+    expect(next[0]).toBe(ME);
+  });
+
+  it('已停用的账号一律离线，不会被一条 presence 重新点亮', () => {
+    const gone: User = { ...PEER, online: false, disabled: true };
+    const list = [gone];
+    const next = syncPresenceInList(list, presenceOf([{ id: gone.id, online: true }]));
+    expect(next[0].online).toBe(false);
+    expect(next).toBe(list);                     // 没变就是没变，连新数组都不该造
+  });
+
+  it('状态没变时整份返回原引用 —— 同一条 presence 重复到达不该引起重渲染', () => {
+    const list = [ME, PEER];
+    const presence = presenceOf([{ id: PEER.id, online: false }]);
+    const once = syncPresenceInList(list, presence);
+    expect(once).not.toBe(list);
+    expect(syncPresenceInList(once, presence)).toBe(once);
+  });
+});
+
+describe('syncPresenceInConversations', () => {
+  it('群成员的在线点跟着变，群里的身份和名字不动', () => {
+    const [after] = syncPresenceInConversations([convo()], presenceOf([{ id: PEER.id, online: false }]));
+    expect(after.members[1]).toMatchObject({ name: '陈子航', roleInGroup: '后端', online: false });
+  });
+
+  it('单聊标题是对方的名字，跟在线状态无关', () => {
+    const [after] = syncPresenceInConversations([dm()], presenceOf([{ id: PEER.id, online: false }]));
+    expect(after.title).toBe('陈子航');
+    expect(after.members[1].online).toBe(false);
+  });
+
+  it('心跳返回的是整份名单：一次把好几个人改完', () => {
+    const [after] = syncPresenceInConversations(
+      [convo()],
+      presenceOf([{ id: ME.id, online: true }, { id: PEER.id, online: false }]),
+    );
+    expect(after.members.map((m) => m.online)).toEqual([true, false]);
+  });
+
+  it('没有这个人的会话保持原引用，不会被无谓地重渲染', () => {
+    const other = convo({ id: 'c_other', members: [{ ...ME, roleInGroup: '管理员' }] });
+    const list = [convo(), other];
+    const next = syncPresenceInConversations(list, presenceOf([{ id: PEER.id, online: false }]));
+    expect(next).not.toBe(list);
+    expect(next[1]).toBe(other);
+  });
+
+  it('同一条 presence 重复到达时，整份返回原引用', () => {
+    const list = [convo(), dm()];
+    const presence = presenceOf([{ id: PEER.id, online: false }]);
+    const once = syncPresenceInConversations(list, presence);
+    expect(once).not.toBe(list);
+    expect(syncPresenceInConversations(once, presence)).toBe(once);
+    expect(syncPresenceInConversations(once, presence)[0]).toBe(once[0]);
+  });
+});
+
+describe('adoptUserList', () => {
+  it('心跳拿回来的名单内容一模一样时，留着手里那份，别换数组身份', () => {
+    const prev = [ME, PEER];
+    expect(adoptUserList(prev, [{ ...ME }, { ...PEER }])).toBe(prev);
+  });
+
+  it('有人下线了就整份采用服务端这一版', () => {
+    const prev = [ME, PEER];
+    const next = [ME, { ...PEER, online: false }];
+    expect(adoptUserList(prev, next)).toBe(next);
+  });
+
+  it('名单长度变了（新同事进来）同样采用新的', () => {
+    const prev = [ME];
+    const next = [ME, PEER];
+    expect(adoptUserList(prev, next)).toBe(next);
   });
 });
 
