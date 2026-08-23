@@ -60,7 +60,11 @@ const ENV_KEYS = ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'];
  * 这些域名在**我们自己的网络里**可能好好的，但苹果那边看到的是一个不存在的域名。
  */
 const NON_ROUTABLE_TLDS = new Set([
-  'localhost', 'test', 'invalid', 'example',
+  // localdomain：`localhost.localdomain` 是多数 Linux 发行版 /etc/hosts 里的默认条目，
+  // 填进来的概率不低。合并这一批时 web-push.js 拦了它、这里没拦，
+  // 方向正好是最坏的那个（启动说「已启用」、每条推送都被发送前那道检查挡掉），
+  // 由 test/vapid-validator-parity.test.js 当场抓出来。
+  'localhost', 'localdomain', 'test', 'invalid', 'example',
   'local', 'internal', 'home', 'lan', 'intranet', 'corp',
 ]);
 

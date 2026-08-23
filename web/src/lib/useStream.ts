@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { getToken } from './api';
+import { deviceId } from './push';
 import type { Message, MessageReaction, User } from './types';
 
 export interface StreamHandlers {
@@ -23,7 +24,16 @@ export function useStream(enabled: boolean, handlers: StreamHandlers) {
     const token = getToken();
     if (!token) return;
 
-    const es = new EventSource(`/api/stream?token=${encodeURIComponent(token)}`);
+    // device：告诉服务端这条 SSE 是**哪一台**设备连的。推送判定要靠它区分
+    // 「这个人在线」和「这个人的这一台在线」—— 桌面挂着网页时，手机上那台照样该响，
+    // 而那正是最需要手机响的时候（见 server/src/push-decide.js）。
+    //
+    // 不带这个参数不会报错，只会让服务端把所有连接都当成「没有设备标识」，
+    // 于是谁都不算在线、连你正在用的那台也照推。**这是个不会报错的失效**，
+    // 所以 useStream.device.test.ts 专门盯着它。
+    const es = new EventSource(
+      `/api/stream?token=${encodeURIComponent(token)}&device=${encodeURIComponent(deviceId())}`,
+    );
     const json = <T,>(e: MessageEvent): T => JSON.parse(e.data) as T;
 
     es.addEventListener('message', (e) => ref.current.onMessage?.(json<{ message: Message }>(e).message));

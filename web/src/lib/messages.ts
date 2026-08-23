@@ -1,4 +1,5 @@
 import { truncate } from './text';
+import { isVideoAttachment } from './md';
 import type { Message, ReplyTarget } from './types';
 
 /** 引用摘要的长度，与服务端 conversations.js 的 QUOTE_PREVIEW_LIMIT 保持一致。 */
@@ -15,8 +16,9 @@ export const QUOTE_PREVIEW_LIMIT = 48;
  *      `[x](/uploads/a.bin?v=.mp4)` 不能被当成视频。
  * 口径漂了的话下面 messages.test.ts 里那组共享用例会红。
  */
-const isVideoAttachmentUrl = (url: string) =>
-  /^\/uploads\//i.test(url) && /\.(mp4|webm)$/i.test(url.replace(/[?#].*$/, ''));
+// 判据只有一份，在 md.ts —— 渲染成 <video> 和摘要折成 [视频] 必须是同一条规则，
+// 否则会出现「气泡里是播放器、引用块里却说这是个文件」。原先这里抄了一份，已删。
+const isVideoAttachmentUrl = isVideoAttachment;
 
 /**
  * 摘要的清洗口径：附件折成 [图片] / [视频] / [文件] 名字、去掉 Markdown 记号、压空白。**不截断**。

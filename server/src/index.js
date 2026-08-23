@@ -4,7 +4,8 @@ import { logError, logEvent, logWarn } from './log.js';
 import { startOrphanSweeper } from './attachment-access.js';
 import { ensureStoreReady, getDriver } from './storage.js';
 import { sweepStaleTemp } from './upload-temp.js';
-import { logVapidStatus } from './vapid-config.js';
+import { logVapidStatus, vapidConfig } from './vapid-config.js';
+import { setPushConfigProvider } from './routes/push.js';
 
 const PORT = Number(process.env.PORT || 4000);
 
@@ -60,6 +61,18 @@ sweepStaleTemp().catch((err) => logWarn('upload.temp_sweep_failed', { message: e
  *   docker compose logs loop-im | grep -E 'push\.(enabled|disabled)'
  */
 logVapidStatus();
+
+// 把自检结果接进 GET /api/push/config —— 前端要靠它决定「通知开关能不能点」，
+// 以及 subscribe() 要用的那把公钥。
+//
+// 这一步单独存在是有原因的：routes/push.js 的默认实现是「没启用」，接不上时前端
+// 看到 enabled: false，开关显示成「服务端未启用推送」——是个说得通的降级。所以**漏掉
+// 这一行不会有任何报错，只会让推送整个功能安静地不存在**。合并这一批时它就漏了，
+// 六个包各自全绿，谁都没发现。下面那条用例（push-config-wiring.test.js）就是为它加的。
+setPushConfigProvider(() => {
+  const config = vapidConfig();
+  return { enabled: config.enabled, publicKey: config.publicKey };
+});
 
 createApp().listen(PORT, () => {
   logEvent('server.started', { port: PORT, env: process.env.NODE_ENV || 'development' });

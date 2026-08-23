@@ -1,0 +1,32 @@
+{
+  "_why": [
+    "附件摘要的跨端契约表。前端 web/src/lib/messages.ts 的 plainTextOf 和服务端",
+    "server/src/routes/conversations.js 的 previewOf 是两份独立实现（一个 TS 一个 JS，",
+    "两个测试跑器，没法共用代码），但它们必须给出逐字相同的结果 —— 会话列表最后一条、",
+    "引用块、桌面通知、手机推送这四处显示的是同一句话，用户会当场看出不一致。",
+    "",
+    "为什么需要这张表：这两份实现**已经漂过一次**。messages.ts 顶上从第一天就写着",
+    "「照抄服务端的 previewOf，别再各抄一遍正则」，然后服务端加了「非图片附件 →",
+    "[文件] 名字」那条，前端没跟上，结果引用块和桌面通知里把 /uploads/ 的原始路径",
+    "整条抖了出来。两边各自的用例全绿，因为它们各测各的。",
+    "",
+    "所以期望值只写在这里一份。任何一边漂了，漂的那一边自己变红：",
+    "  前端 web/src/lib/preview-parity.test.ts",
+    "  服务端 server/test/preview-parity.test.js",
+    "改行为要改这张表，改完两边同时红 —— 那才是「我知道我在改跨端行为」。"
+  ],
+  "note": "expected 是**清洗后、未截断**的结果。截断长度各处不同（列表 26 / 引用 48 / 推送 120），不在这张表的范围内。",
+  "cases": [
+    { "input": "![风景.png](/uploads/a1.png)", "expected": "[图片]", "why": "图片语法指向图片" },
+    { "input": "[季度报告.pdf](/uploads/c3.pdf)", "expected": "[文件] 季度报告.pdf", "why": "非图片附件带文件名，不抖路径" },
+    { "input": "[发布会.mp4](/uploads/e5.mp4)", "expected": "[视频]", "why": "视频走链接语法（Composer 就是这么写的）" },
+    { "input": "![封面](/uploads/f6.mp4)", "expected": "[视频]", "why": "图片语法指向视频：md.ts 也渲染成播放器，摘要必须跟着说视频" },
+    { "input": "[录屏](/uploads/g7.WEBM)", "expected": "[视频]", "why": "后缀大小写不敏感" },
+    { "input": "[伪装](/uploads/h8.bin?v=.mp4)", "expected": "[文件] 伪装", "why": "先切 ?query 再看后缀，否则一个 .bin 会被说成视频" },
+    { "input": "[锚点](/uploads/i9.mp4#t=10)", "expected": "[视频]", "why": "#hash 同理" },
+    { "input": "看图 ![x](/uploads/j0.png) 还有 [纪要.docx](/uploads/k1.docx)", "expected": "看图 [图片] 还有 [文件] 纪要.docx", "why": "混排：图片那条必须先跑，否则链接规则会把 ![x](y) 从中间咬开" },
+    { "input": "[外链](https://example.com/a.mp4)", "expected": "[外链](https://example.com/a.mp4)", "why": "站外链接不动，它本来就是可读的一段字" },
+    { "input": "普通文本 **加粗** `代码`", "expected": "普通文本 加粗 代码", "why": "Markdown 记号洗成空格" },
+    { "input": "", "expected": "", "why": "空正文" }
+  ]
+}
