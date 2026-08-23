@@ -5,13 +5,41 @@ import type { Message, ReplyTarget } from './types';
 export const QUOTE_PREVIEW_LIMIT = 48;
 
 /**
- * 摘要的清洗口径：图片折成 [图片]、去掉 Markdown 记号、压空白。**不截断**。
+ * 这个站内附件是不是视频。
+ *
+ * 判据抄自 md.ts 的 isVideoAttachment（那边没导出，md.ts 不在这次的改动范围里），
+ * 三件事必须跟它一模一样，否则同一条正文会「渲染成播放器、摘要里却写着 [文件]」：
+ *   1. 只认 /uploads/ 开头的站内附件；
+ *   2. 后缀只认 .mp4 / .webm；
+ *   3. 先切掉 ?query / #hash 再看后缀 —— 正文是用户手打的，
+ *      `[x](/uploads/a.bin?v=.mp4)` 不能被当成视频。
+ * 口径漂了的话下面 messages.test.ts 里那组共享用例会红。
+ */
+const isVideoAttachmentUrl = (url: string) =>
+  /^\/uploads\//i.test(url) && /\.(mp4|webm)$/i.test(url.replace(/[?#].*$/, ''));
+
+/**
+ * 摘要的清洗口径：附件折成 [图片] / [视频] / [文件] 名字、去掉 Markdown 记号、压空白。**不截断**。
  * 搜索结果行要的是清洗过但不限长的一行（长度交给 CSS 省略号），所以清洗和截断分开。
+ *
  * 照抄服务端 conversations.js 的 previewOf。别再各抄一遍正则——抄一遍就多一处会走样的地方。
+ * （这句话原来就写在这儿，然后它还是漂了：服务端有「非图片附件 → [文件] 名字」那条，
+ * 这边一直没有，结果引用块和桌面通知里把 /uploads/ 的原始路径整条抖了出来。
+ * 两边的口径只有一份，就是 [图片] / [视频] / [文件] 名字这三种形态。）
+ *
+ * 顺序不能换：图片那条必须先跑。`![x](y)` 里也含着一个 `[x](y)`，
+ * 链接那条先跑就会把图片语法从中间咬开。
  */
 export function plainTextOf(body: string): string {
   return String(body || '')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
+    // ![alt](url)：指向站内视频的一律 [视频]（md.ts 把这种写法也渲染成播放器），其余 [图片]。
+    .replace(/!\[[^\]]*\]\(([^)]*)\)/g, (_m, url: string) => (isVideoAttachmentUrl(url) ? '[视频]' : '[图片]'))
+    // [名字](/uploads/…)：站内视频同样折成 [视频]，其余非图片附件只显示「[文件] 名字」，
+    // 不把 /uploads/ 路径抖出来。站外普通链接不动，它本来就是可读的一段字。
+    .replace(
+      /\[([^\]]*)\]\((\/uploads\/[^)]*)\)/g,
+      (_m, label: string, url: string) => (isVideoAttachmentUrl(url) ? '[视频]' : `[文件] ${label}`),
+    )
     .replace(/[#*`\-\n]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();

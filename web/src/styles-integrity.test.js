@@ -84,6 +84,38 @@ describe('styles.css 结构完整性', () => {
       expect(hit.ancestors, `${selector} 被裹在 ${hit.ancestors.join(' > ')} 里了`).toEqual([]);
     }
   });
+
+  // 会话详情顶栏的免打扰开关（.chat__mute）。
+  //
+  // 它是「进了会话之后唯一的免打扰入口」：单聊没有成员面板，成员面板在窄版式下又是
+  // display:none，所以这个按钮必须一直在顶栏、一直看得见。它的样式一旦整段掉进某个
+  // @media / @supports 里，桌面上就会退回成一个没有边框、也不显示「开着」的秃按钮 ——
+  // 又是那种 tsc 不看、vite 不报、jsdom 不算、CI 全绿、只有用户看得见的事故。
+  // 所以和上面那三条一样，按选择器钉住层级。
+  //
+  // 这里用 filter 而不是 find：.chat__mute 在窄版式里还有一条只改尺寸的补充规则，
+  // 用 find 就变成「谁写在前面测谁」，规则一挪位置这道闸门自己就哑了。
+  it('免打扰开关 .chat__mute 的基础样式必须在顶层 —— 只允许窄版式再补一条', () => {
+    const MOBILE_MEDIA = '@media (max-width: 720px)';
+    const { blocks } = parseBlocks(CSS);
+    for (const selector of ['.chat__mute', '.chat__mute--on']) {
+      const hits = blocks.filter((b) => b.selector === selector);
+      expect(hits.length, `找不到规则 ${selector}，是不是被改名了？改名请同时更新这条用例`).toBeGreaterThan(0);
+      expect(
+        hits.some((b) => b.ancestors.length === 0),
+        `${selector} 一条顶层规则都没有，全被条件化了：${hits.map((b) => `第 ${b.line} 行在 "${b.ancestors.join(' > ')}"`).join('、')}`,
+      ).toBe(true);
+      for (const hit of hits) {
+        const ok = hit.ancestors.length === 0
+          || (hit.ancestors.length === 1 && hit.ancestors[0] === MOBILE_MEDIA);
+        expect(
+          ok,
+          `第 ${hit.line} 行的 ${selector} 被裹在 "${hit.ancestors.join(' > ')}" 里，`
+          + `只允许顶层或 "${MOBILE_MEDIA}"`,
+        ).toBe(true);
+      }
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
