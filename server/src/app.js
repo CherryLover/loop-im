@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { authenticate } from './auth.js';
 import { subscribe } from './events.js';
-import { OVERSIZED_MESSAGE } from './upload-middleware.js';
+import { VIDEO_OVERSIZED_MESSAGE } from './upload-middleware.js';
 import { router as authRoutes } from './routes/auth.js';
 import { router as userRoutes } from './routes/users.js';
 import { router as conversationRoutes } from './routes/conversations.js';
@@ -79,7 +79,10 @@ export function createApp({ serveClient = true } = {}) {
 
   app.use((err, req, res, _next) => {
     // multer 超限只给英文的 File too large，这里统一翻成中文并按 413 返回。
-    if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: OVERSIZED_MESSAGE });
+    // 走到这一层的只有**硬上限**（分档里最大的那个，也就是视频的 100MB）：
+    // 图片/普通文件那档 8MB 的判定要等嗅探出真实类型之后才做得了，在路由里，
+    // 那条路自己返回 413 + OVERSIZED_MESSAGE。说明见 upload-middleware.js。
+    if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: VIDEO_OVERSIZED_MESSAGE });
     const status = err.status || 500;
     // 只记 5xx：4xx 是调用方自己传错了参数，量大且没有排查价值，全记下来只会淹掉真正的故障。
     if (status >= 500) logError('http.error', err, { reqId: req.id, method: req.method, path: req.path, status });

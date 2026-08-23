@@ -14,13 +14,14 @@
  *   都会变成不可逆的损失。所以只做成手动脚本，默认还只是预演。
  *
  * 为什么不着急：
- *   修复之后 /uploads 的回源响应头已经按扩展名白名单发：白名单（.png/.jpg/.jpeg/.gif/.webp）
- *   之外的一律 `Content-Disposition: attachment` + `application/octet-stream` + `nosniff`，
+ *   修复之后 /uploads 的回源响应头已经按扩展名白名单发：白名单
+ *   （.png/.jpg/.jpeg/.gif/.webp，以及后来加的 .mp4/.webm）之外的一律
+ *   `Content-Disposition: attachment` + `application/octet-stream` + `nosniff`，
  *   历史上那些 .html/.svg 从升级那一刻起就已经跑不起来了（server/src/attachments.js）。
  *   这个脚本是卫生工作，不是止血。
  *
  * 判定口径（和服务端同一套函数，不另写一份）：
- *   - 扩展名在内联白名单里，但真实字节不是对应的图片 —— 可疑（伪装成图片的东西）；
+ *   - 扩展名在内联白名单里，但真实字节不是对应的图片/视频 —— 可疑（伪装成图片、视频的东西）；
  *   - 真实字节是 SVG —— 可疑（SVG 现在一律不收）；
  *   - 扩展名不在白名单、也不是 .bin —— 可疑（修复前沿用用户扩展名留下的产物）；
  *   - 其余（合法图片、以及新方案落下的 .bin）—— 保留。
@@ -28,10 +29,13 @@
  * 隔离而不是删除是默认动作：文件被移进 uploads/quarantine/ 之后 URL 就 404 了，
  * 万一误判还能搬回来。确认无误再加 --delete。
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import {
+  closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync,
+  renameSync, statSync, unlinkSync,
+} from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { looksLikeSvg, sniffImage } from '../server/src/attachments.js';
+import { looksLikeSvg, sniffImage, sniffVideo } from '../server/src/attachments.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -53,33 +57,51 @@ if (!existsSync(uploadDir)) {
 }
 
 const QUARANTINE = join(uploadDir, 'quarantine');
-// 服务端会内联返回的扩展名，各自对应的真实图片 mime。
+// 服务端会内联返回的扩展名，各自对应的真实 mime。和 attachments.js 的两张表一一对应
+// （图片那五个 + 视频那两个）；那边加了新格式，这里也要跟上，否则新落盘的文件会被当成可疑。
 const INLINE = new Map([
   ['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'],
   ['.gif', 'image/gif'], ['.webp', 'image/webp'],
+  ['.mp4', 'video/mp4'], ['.webm', 'video/webm'],
 ]);
 
 /** 这个文件该不该被拎出来。返回原因字符串，没问题就返回 null。 */
-function suspicionOf(name, buffer) {
+function suspicionOf(name, head) {
   const ext = extname(name).toLowerCase();
-  const image = sniffImage(buffer);
-  if (looksLikeSvg(buffer)) return 'SVG（可执行的 XML，现在一律不收）';
+  if (looksLikeSvg(head)) return 'SVG（可执行的 XML，现在一律不收）';
   if (INLINE.has(ext)) {
-    if (!image) return `扩展名是 ${ext}，真实字节却不是图片`;
-    if (image.mime !== INLINE.get(ext)) return `扩展名是 ${ext}，真实字节是 ${image.mime}`;
+    // 图片和视频用各自的嗅探函数，判定口径和服务端逐字一致。
+    const sniffed = sniffImage(head) || sniffVideo(head);
+    if (!sniffed) return `扩展名是 ${ext}，真实字节却不是图片或视频`;
+    if (sniffed.mime !== INLINE.get(ext)) return `扩展名是 ${ext}，真实字节是 ${sniffed.mime}`;
     return null;
   }
   if (ext === '.bin') return null;                       // 新方案落下的普通附件
   return `扩展名 ${ext || '（无）'} 不在内联白名单里，是修复前沿用用户文件名留下的`;
 }
 
+/**
+ * 只读开头 4KB 来判定。以前是整份 readFileSync —— 视频上限抬到 100MB 之后，
+ * 一个装满视频的目录会把这个脚本自己撑爆，而所有嗅探最远也只看到偏移 1024。
+ */
+const HEAD_BYTES = 4096;
+function readHead(full) {
+  const fd = openSync(full, 'r');
+  try {
+    const buffer = Buffer.alloc(HEAD_BYTES);
+    return buffer.subarray(0, readSync(fd, buffer, 0, HEAD_BYTES, 0));
+  } finally {
+    closeSync(fd);
+  }
+}
+
 const rows = [];
 for (const name of readdirSync(uploadDir)) {
   const full = join(uploadDir, name);
-  if (!statSync(full).isFile()) continue;
-  const buffer = readFileSync(full);
-  const reason = suspicionOf(name, buffer);
-  if (reason) rows.push({ name, full, reason, bytes: buffer.length });
+  const info = statSync(full);
+  if (!info.isFile()) continue;
+  const reason = suspicionOf(name, readHead(full));
+  if (reason) rows.push({ name, full, reason, bytes: info.size });
 }
 
 console.log(`上传目录：${uploadDir}`);

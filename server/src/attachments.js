@@ -10,11 +10,18 @@
  *
  *   图片通道：必须按真实字节嗅探（magic number），只认 PNG / JPEG / GIF / WebP。
  *             扩展名由嗅探结果决定，绝不沿用用户传来的文件名。只有这一档允许内联渲染。
+ *   视频通道：同一套逻辑，只认 MP4 / WebM。允许内联（`<video>` 原生播放）。
  *   文件通道：什么都收，但一律落成 `.bin`，回源时强制 `Content-Disposition: attachment`
  *             + `application/octet-stream` + `nosniff`，浏览器只会下载，不会当网页跑。
  *   SVG：     一律拒绝。SVG 是可执行的 XML，即使按图片对待也能带脚本。
  *
  * 原始文件名只作为**显示名**存在数据库和消息里，绝不参与磁盘路径和 URL。
+ *
+ * ── 为什么视频可以内联 ──────────────────────────────────────────────────
+ * 安全模型和图片完全一致，一个字都没放松：**只有嗅探出来是白名单里的格式**才允许内联，
+ * 客户端自报的 Content-Type 一如既往不参与任何判定（那正是 issue #22 的成因）。
+ * MP4 / WebM 都不是可导航、可执行的类型，配上 `nosniff` + 精确的 `video/*`，
+ * 浏览器不会去猜内容类型，一份伪装成 .mp4 的 HTML 只会变成一个放不出来的坏视频。
  */
 import { extname } from 'node:path';
 import { truncate } from './text.js';
@@ -38,12 +45,45 @@ const IMAGE_SIGNATURES = [
   },
 ];
 
+/**
+ * 允许内联播放的视频格式。只收 MP4 和 WebM —— 这两种浏览器原生 `<video>` 都能放，
+ * 再多收（MKV / MOV / AVI）只会得到一堆放不出来的黑框，白白扩大攻击面。
+ *
+ * MP4：ISO BMFF 的第一个 box 就是 `ftyp`，类型字段固定在偏移 4（偏移 0..3 是 box 长度）。
+ *      光看 `ftyp` 还不够：`.m4a`（纯音频）和 QuickTime `.mov` 用的是同一个盒子结构，
+ *      所以还要看偏移 8 的 major brand 在不在白名单里，免得把音频当视频发出去。
+ * WebM：EBML 头 `1A 45 DF A3`。但 Matroska（.mkv）用的是同一个魔数，浏览器放不了 mkv，
+ *      所以还要在头部找到 DocType 字符串 `webm` 才算数。DocType 在规范里位置很靠前，
+ *      扫前 128 字节足够。
+ */
+const MP4_BRANDS = new Set([
+  'isom', 'iso2', 'iso4', 'iso5', 'iso6', 'iso8', 'mp41', 'mp42', 'mp71',
+  'avc1', 'dash', 'mmp4', 'M4V ', 'M4VP', 'msnv', 'MSNV', 'ndas',
+]);
+
+const VIDEO_SIGNATURES = [
+  {
+    mime: 'video/mp4',
+    ext: '.mp4',
+    match: (b) => head(b, [0x66, 0x74, 0x79, 0x70], 4)
+      && b.length >= 12
+      && MP4_BRANDS.has(b.subarray(8, 12).toString('latin1')),
+  },
+  {
+    mime: 'video/webm',
+    ext: '.webm',
+    match: (b) => head(b, [0x1a, 0x45, 0xdf, 0xa3])
+      && b.subarray(0, 128).includes('webm', 0, 'latin1'),
+  },
+];
+
 /** 非图片附件统一落成这个扩展名 + Content-Type：看一眼就知道不可能被当网页执行。 */
 export const BINARY_EXT = '.bin';
 export const BINARY_MIME = 'application/octet-stream';
 
 export const SVG_REJECTED = '出于安全考虑，不支持 SVG 文件';
 export const NOT_AN_IMAGE = '这不是有效的图片文件，只支持 PNG / JPEG / GIF / WebP';
+export const NOT_A_VIDEO = '这不是有效的视频文件，只支持 MP4 / WebM';
 export const AVATAR_NOT_IMAGE = '头像只支持 PNG / JPEG / GIF / WebP 图片';
 
 const head = (buffer, bytes, offset = 0) =>
@@ -53,6 +93,13 @@ const head = (buffer, bytes, offset = 0) =>
 export function sniffImage(buffer) {
   if (!buffer || buffer.length < 12) return null;
   const hit = IMAGE_SIGNATURES.find((s) => s.match(buffer));
+  return hit ? { mime: hit.mime, ext: hit.ext } : null;
+}
+
+/** 真实字节是不是 MP4 / WebM。和 sniffImage 同一套写法，同一条红线：只看字节。 */
+export function sniffVideo(buffer) {
+  if (!buffer || buffer.length < 12) return null;
+  const hit = VIDEO_SIGNATURES.find((s) => s.match(buffer));
   return hit ? { mime: hit.mime, ext: hit.ext } : null;
 }
 
@@ -68,17 +115,24 @@ export function looksLikeSvg(buffer) {
 }
 
 /**
- * 一份上传该走哪条通道。只看真实字节，`declaredMime` 只用来判断「用户想发的是不是图片」：
- * 想发图片却拿不出合法图片字节时要明确报错，而不是悄悄降级成附件 —— issue #22 的回归清单
- * 要求「HTML 谎报为 image/png」返回 400，悄悄收下会让人以为图片发出去了。
+ * 一份上传该走哪条通道。只看真实字节，`declaredMime` 只用来判断「用户想发的是不是图片
+ * 或视频」：想发图片/视频却拿不出合法字节时要明确报错，而不是悄悄降级成附件 ——
+ * issue #22 的回归清单要求「HTML 谎报为 image/png」返回 400，悄悄收下会让人以为图片发出去了。
+ * 视频这一档同理：「HTML 谎报 video/mp4」必须 400。
  *
- * @returns {{kind:'image'|'file', mime:string, ext:string} | {kind:'rejected', error:string}}
+ * 注意 `buffer` 只需要文件**开头的若干字节**（调用方给的是前 4KB，见 readSniffHead）：
+ * 所有判定加起来最远只看到偏移 1024（SVG 那一档），100MB 的视频不必整个进内存。
+ *
+ * @returns {{kind:'image'|'video'|'file', mime:string, ext:string} | {kind:'rejected', error:string}}
  */
 export function inspectUpload(buffer, declaredMime = '') {
   if (looksLikeSvg(buffer)) return { kind: 'rejected', error: SVG_REJECTED };
   const image = sniffImage(buffer);
   if (image) return { kind: 'image', mime: image.mime, ext: image.ext };
+  const video = sniffVideo(buffer);
+  if (video) return { kind: 'video', mime: video.mime, ext: video.ext };
   if (/^image\//i.test(String(declaredMime))) return { kind: 'rejected', error: NOT_AN_IMAGE };
+  if (/^video\//i.test(String(declaredMime))) return { kind: 'rejected', error: NOT_A_VIDEO };
   return { kind: 'file', mime: BINARY_MIME, ext: BINARY_EXT };
 }
 
@@ -125,6 +179,27 @@ const INLINE_EXTENSIONS = new Map([
 ]);
 
 /**
+ * 允许内联播放的视频扩展名。单独一张表而不是并进 INLINE_EXTENSIONS，是因为这一档
+ * 多一条 `Accept-Ranges: bytes` —— `<video>` 拖进度条要它，Safari / iOS 没有它直接不播。
+ * 图片那一档**不能**跟着多这条头：回源响应必须和改造前逐字一样（见 test/uploads-proxy.test.js）。
+ *
+ * 和 `.jpeg` 同理，这张表也会命中修复之前遗留下来的 `.mp4` / `.webm`（那时扩展名沿用
+ * 用户的原始文件名）。仍然是安全的：每一项都被钉死成 `video/*` 并带 `nosniff`，
+ * 浏览器不会再去猜内容类型，哪怕里面装的其实是 HTML，也只会是一个放不出来的坏视频。
+ */
+const INLINE_VIDEO_EXTENSIONS = new Map([
+  ['.mp4', 'video/mp4'],
+  ['.webm', 'video/webm'],
+]);
+
+/**
+ * 这个 key 是不是「按视频内联」的那一档。回源路由用它决定要不要处理 Range ——
+ * 判定依据仍然只有 setUploadHeaders 用的那张表，不在别处另开一套。
+ */
+export const isInlineVideoKey = (key) =>
+  INLINE_VIDEO_EXTENSIONS.has(extname(String(key || '')).toLowerCase());
+
+/**
  * 站内附件地址长这样：`/uploads/<key>`，key 由服务端生成（randomUUID + 服务端定的扩展名）。
  * 消息正文里它以 Markdown 链接/图片的形式出现，所以「这条消息引用了哪些附件」就是在正文里
  * 扫这个模式。字符集刻意收紧到 key 真实可能出现的范围，别把后面的 `)` 或中文一起吃进来。
@@ -147,11 +222,15 @@ export function keyFromUrl(url) {
 /**
  * `/uploads` 的回源响应头。按扩展名白名单决定：
  *
- *   白名单内 —— 钉死成对应的 `image/*`，可以内联；
+ *   图片白名单内 —— 钉死成对应的 `image/*`，可以内联；
+ *   视频白名单内 —— 钉死成对应的 `video/*`，可以内联，并额外声明 `Accept-Ranges: bytes`；
  *   其余（含 `.bin`，也含修复之前遗留下来的 `.html`、`.svg` 之类）—— 一律强制下载。
  *
  * 白名单之外全部按附件处理，意味着历史上已经落盘的恶意文件从这一刻起也跑不起来了，
  * 不必等清理脚本跑过（清理脚本见 scripts/cleanup-legacy-uploads.mjs）。
+ *
+ * ⚠️ 加视频通道时只动了这一个函数：判定「能不能内联」的逻辑全仓只有这一处，
+ * 别在路由里另开一套 if。
  */
 export function setUploadHeaders(res, filePath) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -159,6 +238,13 @@ export function setUploadHeaders(res, filePath) {
   const inline = INLINE_EXTENSIONS.get(ext);
   if (inline) {
     res.setHeader('Content-Type', inline);
+    return;
+  }
+  const video = INLINE_VIDEO_EXTENSIONS.get(ext);
+  if (video) {
+    res.setHeader('Content-Type', video);
+    // `<video>` 要靠这条头才肯发 Range；Safari / iOS 更是没有 Range 就直接不播。
+    res.setHeader('Accept-Ranges', 'bytes');
     return;
   }
   res.setHeader('Content-Type', BINARY_MIME);

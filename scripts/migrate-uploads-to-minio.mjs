@@ -30,7 +30,6 @@
  * 幂等：默认跳过桶里已经存在的同名对象（--force 覆盖）。中途断了直接重跑即可。
  */
 import { readdirSync, rmSync, statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createS3Store, isSafeKey } from '../server/src/object-store.js';
 
@@ -90,6 +89,19 @@ const STORED_CONTENT_TYPE = 'application/octet-stream';
 
 let scanned = 0; let uploaded = 0; let skipped = 0; let failed = 0; let ignored = 0;
 
+/**
+ * 「桶里有没有这个对象、多大」——只看长度，**不把内容拉下来**。
+ * 以前这里用的是 store.get()，那会把整份读进内存；视频上限抬到 100MB 之后，
+ * 一个装满视频的目录会让这个脚本自己撑爆。open() 拿到的是流，看完长度就丢掉。
+ * 返回 null 表示桶里没有。
+ */
+async function probe(key) {
+  const opened = await store.open(key);
+  if (!opened) return null;
+  opened.stream?.destroy();
+  return { size: opened.totalSize };
+}
+
 const entries = readdirSync(dir, { withFileTypes: true })
   .filter((e) => e.isFile())
   .map((e) => e.name)
@@ -101,9 +113,9 @@ console.log(`共 ${entries.length} 个文件\n`);
 // 先探一下连通性再逐个跑：桶名打错、凭据不对、跑在 compose 网络外面解析不到 minio ——
 // 这几种情况下每个文件都会失败一次，刷一屏没用的报错，不如一开始就说清楚。
 // 取一个必然不存在的 key：能拿到 null 就说明网络、凭据、桶都是通的。
-// key 必须是合法形状，否则 store.get 会在本地就短路掉，根本不发请求。
+// key 必须是合法形状，否则 store.open 会在本地就短路掉，根本不发请求。
 try {
-  await store.get('connectivity-probe-0000.bin');
+  await probe('connectivity-probe-0000.bin');
 } catch (err) {
   console.error(`连不上对象存储：${err.message}`);
   console.error(`  endpoint=${process.env.S3_ENDPOINT || 'http://minio:9000'} bucket=${process.env.S3_BUCKET}`);
@@ -122,7 +134,7 @@ for (const name of entries) {
   const bytes = statSync(join(dir, name)).size;
 
   try {
-    if (!force && await store.get(name)) {
+    if (!force && await probe(name)) {
       skipped += 1;
       console.log(`  已有  ${name}（${bytes} 字节）`);
       continue;
@@ -131,10 +143,11 @@ for (const name of entries) {
       console.log(`  待传  ${name}（${bytes} 字节）`);
       continue;
     }
-    await store.put(name, await readFile(join(dir, name)), STORED_CONTENT_TYPE);
+    // 流式上传：内存恒定，签名（SigV4 要整份 payload 的 sha256）由 putFile 流式算，仍然精确。
+    await store.putFile(name, join(dir, name), STORED_CONTENT_TYPE);
     // 传完立刻回读一次核对：宁可慢一点，也不要在没确认的情况下删本地文件。
-    const back = await store.get(name);
-    if (!back || back.length !== bytes) throw new Error('回读核对失败，桶里的字节数对不上');
+    const back = await probe(name);
+    if (!back || back.size !== bytes) throw new Error('回读核对失败，桶里的字节数对不上');
     uploaded += 1;
     if (deleteLocal) rmSync(join(dir, name), { force: true });
     console.log(`  已传  ${name}（${bytes} 字节）${deleteLocal ? '，本地已删' : ''}`);

@@ -10,6 +10,7 @@ import type { Conversation, ReplyTarget } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   MAX_UPLOAD_MB: 8,
+  MAX_VIDEO_UPLOAD_MB: 100,
   api: { upload: vi.fn() },
 }));
 

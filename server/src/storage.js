@@ -85,6 +85,23 @@ export async function putObject({ buffer, ext = '', mime }) {
 }
 
 /**
+ * 同上，但正文来自一个**临时文件**而不是内存里的 Buffer —— 这是上传路由现在走的那条路。
+ * 100MB 的视频不该整份进 Node 堆（`multer.memoryStorage()` 正是这么干的，并发一上来就 OOM）。
+ * 临时文件的清理是**调用方**的责任，三条路径都要删，见 routes/uploads.js 的 discardTemp。
+ */
+export async function putObjectFromFile({ path, ext = '', mime }) {
+  const key = `${randomUUID()}${ext}`;
+  await getStore().putFile(key, path, mime);
+  return { key, url: `/uploads/${key}`, mime };
+}
+
+/**
+ * 是否要在主存储落空时回落到本地磁盘那一份。见 getObject 的说明。
+ */
+const fallbackEnabled = (store) =>
+  store.name !== 'local' && process.env.UPLOADS_LOCAL_FALLBACK !== '0';
+
+/**
  * 取对象。**双读**：主存储没有就回落到本地磁盘。
  *
  * 这是为了让「本地 → MinIO」的迁移可以分两步走：先把服务切到 MinIO（新文件进桶），
@@ -95,8 +112,24 @@ export async function getObject(key) {
   const store = getStore();
   const hit = await store.get(key);
   if (hit) return hit;
-  if (store.name === 'local' || process.env.UPLOADS_LOCAL_FALLBACK === '0') return null;
+  if (!fallbackEnabled(store)) return null;
   return getLocalFallback().get(key);
+}
+
+/**
+ * 流式取对象（+ Range）。回源路由走的是这条，不再把整份读进内存。
+ *
+ * **双读回落和 getObject 完全一样**，只是判据换了一个：open() 用 `null` 表示
+ * 「主存储里没有这个对象」，此时才回落。416（对象在、范围越界）**不是**落空，
+ * 绝不能因此去问本地磁盘 —— 那会把一个明确的 416 变成本地那份老文件的 200，
+ * 播放器拿到错位的字节，比直接报错更难查。
+ */
+export async function openObject(key, { range } = {}) {
+  const store = getStore();
+  const hit = await store.open(key, { range });
+  if (hit) return hit;
+  if (!fallbackEnabled(store)) return null;
+  return getLocalFallback().open(key, { range });
 }
 
 /** 删对象。主存储和本地兜底那一份都要删，否则清理完了老文件还留在磁盘上。 */

@@ -7,6 +7,9 @@ server/data/*.db-wal
 server/data/*.db-shm
 server/data/uploads/*
 !server/data/uploads/.gitkeep
+# 上传中转目录（multer 先落到这里，路由推给对象存储之后删掉）。
+# 正常情况下它是空的；进程被 kill -9 时可能留下一两个残骸，别让它们进版本库。
+server/data/tmp/
 .env
 .DS_Store
 tsconfig.tsbuildinfo

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { Composer } from './components/Composer';
 import { ProfileModal } from './modals/ProfileModal';
-import { MAX_UPLOAD_MB } from './lib/api';
+import { MAX_UPLOAD_MB, MAX_VIDEO_UPLOAD_MB } from './lib/api';
 import type { Conversation, User } from './lib/types';
 
 const member = (id: string, name: string, isAI = false) => ({
@@ -102,8 +102,11 @@ describe('超过 8MB 的图片', () => {
 describe('上限提示', () => {
   it('输入框和个人资料都写明了 8MB 上限', () => {
     composer();
-    // 入口在 issue #22 之后改成「任意文件」，上限文案不变。
-    expect(screen.getByTitle(`从本地选择文件（图片或任意文件，不超过 ${MAX_UPLOAD_MB}MB）`)).toBeInTheDocument();
+    // 入口在 issue #22 之后改成「任意文件」；视频内联播放上线后又多了一档 100MB，
+    // 两档都要在提示里写清楚，图片/普通文件这一档的 8MB 没有变。
+    expect(screen.getByTitle(
+      `从本地选择文件（图片、视频或任意文件；视频不超过 ${MAX_VIDEO_UPLOAD_MB}MB，其余不超过 ${MAX_UPLOAD_MB}MB）`,
+    )).toBeInTheDocument();
 
     render(
       <ProfileModal

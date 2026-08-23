@@ -43,6 +43,10 @@ const amzDate = (date) => date.toISOString().replace(/[-:]/g, '').replace(/\.\d{
  *
  * @param headers 额外的头（如 content-type）。host / x-amz-date / x-amz-content-sha256
  *                由本函数补齐，调用方不要自己写。
+ * @param payloadHash 已经算好的 payload sha256（十六进制）。请求体是**流**、正文根本
+ *                没有整份进过内存时用它（100MB 的视频上传，见 object-store.js 的 putStreamed）；
+ *                给了它就不再看 payload。注意仍然是**精确的**载荷哈希，
+ *                不是 UNSIGNED-PAYLOAD —— 签名照样覆盖全部字节。
  */
 export function signS3Request({
   method,
@@ -51,6 +55,7 @@ export function signS3Request({
   query = '',
   headers = {},
   payload = Buffer.alloc(0),
+  payloadHash: precomputedHash,
   accessKeyId,
   secretAccessKey,
   region = 'us-east-1',
@@ -59,7 +64,7 @@ export function signS3Request({
 }) {
   const stamp = amzDate(date);
   const day = stamp.slice(0, 8);
-  const payloadHash = sha256hex(payload);
+  const payloadHash = precomputedHash || sha256hex(payload);
 
   const signed = {
     ...Object.fromEntries(Object.entries(headers).filter(([, v]) => v !== undefined && v !== null)),
