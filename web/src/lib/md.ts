@@ -9,6 +9,18 @@ import { truncate } from './text';
  * （这个函数的输出是直接 innerHTML 进 DOM 的，放行 HTML 等于把 XSS 开在自家门口）。
  */
 import { attachmentUrl } from './api';
+import { localPreviewFor } from './upload-cache';
+
+/**
+ * 该往 src 里放哪个地址：自己刚上传的那张，本地内存里还有一份 blob，优先用它，
+ * 省掉一次「刚传上去又下回来」的往返。没有本地副本就照旧走服务端 URL。
+ *
+ * 两个形态都查一遍（带 ?token= 的和不带的）：upload-cache 自己会把 key 归一化，
+ * 所以这两次查的是同一格；这么写只是为了万一写入那一侧换了 key 的口径也能兜住。
+ * 命中不了就必须原样返回 attachmentUrl() 的结果 —— ?token= 丢了图就 401 了。
+ */
+const displaySrc = (bare: string, resolved: string) =>
+  localPreviewFor(resolved) ?? localPreviewFor(bare) ?? resolved;
 
 const escapeHtml = (raw: string) =>
   raw
@@ -76,7 +88,33 @@ export function renderMarkdown(source: string): string {
     // preload 是 metadata 不是 auto：一屏里滚过几个视频，auto 会把每一个都拉下来，
     // 流量和内存都吃不消。metadata 只取时长和首帧信息，点了才开始下。
     // playsinline 是给 iOS Safari 的：不写它，手机上一点播放就强制全屏接管。
-    + ` src="${hold(attachmentUrl(safe))}" aria-label="${hold(label || '视频附件')}"></video>`;
+    + ` src="${hold(displaySrc(safe, attachmentUrl(safe)))}" aria-label="${hold(label || '视频附件')}"></video>`;
+
+  /**
+   * 图片：一个 1:1 的方缩略图，点开看原图。
+   *
+   * 外面那层是 <button> 而不是 <div>：缩略图是切过的，看原图这条路必须存在，
+   * 而「能点」就得「能 Tab 到、能回车按下、读屏软件念得出是个按钮」——
+   * 原生 button 白送这一整套，自己用 div + role + tabindex + onKeyDown 拼一份
+   * 只会拼漏。button 是 phrasing content，塞在分块阶段生成的 <p> 里是合法的。
+   *
+   * data-state 是**加载状态的落脚点**：这里先钉成 loading，运行时由 MarkdownBody
+   * 的 load/error 监听改成 ready / error，蒙版和「加载失败」都由 CSS 按它来画。
+   * 之所以不在这里写 onload="…"：这段 HTML 是要 innerHTML 进 DOM 的，
+   * 一旦开了 on* 属性这个口子，往后任何一处属性拼接出岔子就直接是 XSS。
+   * 状态交给外面用 addEventListener 挂，这份产物里一个 on* 属性都不会有。
+   *
+   * loading=lazy：一屏之外的图不占带宽（历史消息往上翻时差别很明显）。
+   */
+  const imageTag = (safe: string, alt: string) => {
+    const src = displaySrc(safe, attachmentUrl(safe));
+    return '<button type="button" class="mdimg" data-state="loading"'
+      // 按钮的可及名字说的是「点它会发生什么」，img 的 alt 说的是「这是什么图」，
+      // 两者都要：alt 在加载失败那一档还要当兜底文本用。
+      + ` aria-label="${hold(alt ? `查看大图：${alt}` : '查看大图')}">`
+      + `<img class="mdimg__img" alt="${hold(alt)}" src="${hold(src)}" loading="lazy" decoding="async">`
+      + '</button>';
+  };
 
   // ---- 1) 代码先抽走 ----
   // 代码块和行内代码的内容立刻进槽位，之后所有行内规则都碰不到它。所以代码里的
@@ -94,7 +132,7 @@ export function renderMarkdown(source: string): string {
   s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt: string, url: string) => {
     const safe = safeUrl(url);
     if (isVideoAttachment(safe)) return videoTag(safe, alt);
-    return `<img alt="${hold(alt)}" src="${hold(attachmentUrl(safe))}">`;
+    return imageTag(safe, alt);
   });
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) => {
     const safe = safeUrl(url);

@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { attachmentUrl, setToken, clearToken } from './api';
 import { renderMarkdown } from './md';
+import { rememberPreview } from './upload-cache';
 
 beforeEach(() => { clearToken(); });
 afterEach(() => { clearToken(); });
@@ -58,9 +59,35 @@ describe('渲染出来的附件链接带凭据', () => {
     expect(html).toContain('class="filecard"');
   });
 
-  it('未登录时渲染结果和改造前一模一样（测试和登录页都会走到这条分支）', () => {
+  it('未登录时 src 原样，不拼一个空 token 上去', () => {
     expect(renderMarkdown('![发版流程](/uploads/9f3a.png)'))
-      .toContain('<img alt="发版流程" src="/uploads/9f3a.png">');
+      .toContain('alt="发版流程" src="/uploads/9f3a.png"');
+  });
+
+  it('视频的 src 也带上 token', () => {
+    setToken('tok-abc');
+    expect(renderMarkdown('![片子](/uploads/9f3a.mp4)'))
+      .toContain('src="/uploads/9f3a.mp4?token=tok-abc"');
+  });
+
+  it('本地预览没命中时，token 一个字都不能少', () => {
+    // 缩略图这一档在 src 前面加了一层「优先用本地 blob」的查表。没命中就必须原样
+    // 落回 attachmentUrl() 的结果 —— 把 ?token= 弄丢的话，图会直接 401 变成灰块。
+    setToken('tok-abc');
+    const html = renderMarkdown('![发版流程](/uploads/never-cached.png)');
+    expect(html).toContain('src="/uploads/never-cached.png?token=tok-abc"');
+  });
+
+  it('本地预览命中时用 blob，token 的有无都不影响命中', () => {
+    rememberPreview('/uploads/cached.png', 'blob:http://localhost/abc-123');
+    // 不带 token
+    expect(renderMarkdown('![图](/uploads/cached.png)'))
+      .toContain('src="blob:http://localhost/abc-123"');
+    // 带 token：查表前会把 ?query 切掉，所以还是同一格
+    setToken('tok-abc');
+    const html = renderMarkdown('![图](/uploads/cached.png)');
+    expect(html).toContain('src="blob:http://localhost/abc-123"');
+    expect(html).not.toContain('tok-abc');
   });
 
   it('聊天里的普通外链不会被顺手加上凭据（别把 token 漏给第三方站点）', () => {

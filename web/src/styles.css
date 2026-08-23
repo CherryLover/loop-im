@@ -679,3 +679,146 @@ input, textarea { font-family: inherit; }
     animation: pop .18s ease-out;
   }
 }
+
+/* ---------- 聊天里的图片：1:1 缩略图 + 加载状态 + 看原图 ---------- */
+/* 整段追加在文件末尾，上面已有的 `.md img` / `.md .mdvideo` 一个字都没改：
+   下面这几条要么更具体（`.md .mdimg__img` 两个类，压过 `.md img` 的一类一元素），
+   要么同样具体但排在后面，都能正常盖过去。 */
+
+/* 缩略图的宿主。是个 <button>（要能点开原图，就得能 Tab、能回车），
+   所以先把浏览器给按钮的那套默认样式抹平。 */
+.md .mdimg {
+  --mdimg-size: 160px;
+  position: relative;
+  display: block;
+  width: var(--mdimg-size);
+  height: var(--mdimg-size);          /* 和宽度相等 —— 这就是「1:1」 */
+  max-width: 100%;
+  margin: 6px 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface3);
+  font: inherit;
+  color: inherit;
+  cursor: zoom-in;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.md .mdimg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 图铺满这个方框，多出来的边居中裁掉。原来那条 `.md img { width: 260px }` 管不到这里
+   （这条选择器更具体），气泡也就不会再被原图宽度撑开。 */
+.md .mdimg__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  object-fit: cover;
+  object-position: center;
+}
+
+/* 加载中：一层灰蒙版盖住整格，外加一道很慢的高光，让人看出是在加载而不是卡住。
+   data-state 由 MarkdownBody 在 load / error 时改写，改完这条就不再匹配，蒙版自然消失。 */
+@keyframes mdimgShimmer { from { background-position: 140% 0; } to { background-position: -40% 0; } }
+.md .mdimg[data-state="loading"]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-color: var(--surface3);
+  background-image: linear-gradient(100deg, transparent 22%, rgba(255, 255, 255, .34) 50%, transparent 78%);
+  background-size: 180% 100%;
+  background-repeat: no-repeat;
+  animation: mdimgShimmer 1.5s ease-in-out infinite;
+}
+
+/* 加载失败：说清楚是失败了，而不是留一个永远的灰块。
+   按钮那边同时被置成 disabled —— 没有原图可看，别给一个按下去没反应的东西。 */
+.md .mdimg[data-state="error"] { cursor: default; border-style: dashed; }
+.md .mdimg[data-state="error"] .mdimg__img { visibility: hidden; }
+.md .mdimg[data-state="error"]::after {
+  content: '图片加载失败';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  text-align: center;
+  background: var(--surface3);
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* 自己那侧是实色气泡，边框和失败文案都得反过来，否则贴在深色上看不见。 */
+.bubble--me .mdimg { border-color: rgba(255, 255, 255, .3); }
+.bubble--me .mdimg[data-state="error"]::after {
+  background: rgba(255, 255, 255, .16);
+  color: rgba(255, 255, 255, .88);
+}
+
+/* 视频也不该把气泡撑满。但**不做 1:1 裁切** —— 图裁掉的多半是留白，
+   视频裁掉的是画面内容（横片会被切掉两侧、竖片会被切掉上下）。
+   所以只给一个最大宽高的框，比例交给视频自己保持。 */
+.md .mdvideo {
+  width: auto;
+  max-width: min(100%, 280px);
+  max-height: 240px;
+}
+
+/* 看原图的那一层。z-index 夹在 .scrim(20) 和 .toast(30) 中间：
+   要盖住聊天列表，但不该把提示条也压下去。 */
+.imgview {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(0, 0, 0, .82);
+  animation: pop .14s ease-out;
+}
+.imgview__img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
+}
+.imgview__close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, .28);
+  background: rgba(0, 0, 0, .5);
+  color: #fff;
+  cursor: pointer;
+}
+.imgview__close:hover { background: rgba(0, 0, 0, .72); }
+.imgview__close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* 关掉动效偏好：蒙版的高光和大图的入场都停掉，静态形态本身已经说明了状态。 */
+@media (prefers-reduced-motion: reduce) {
+  .md .mdimg[data-state="loading"]::before { animation: none; }
+  .imgview { animation: none; }
+}
+
+@media (max-width: 720px) {
+  /* 手机上气泡最宽 78vw，160 的方格在窄屏里显得压手，收一点。 */
+  .md .mdimg { --mdimg-size: 140px; }
+  .md .mdvideo { max-width: min(100%, 240px); max-height: 200px; }
+  .imgview { padding: 14px; }
+}

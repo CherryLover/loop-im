@@ -19,8 +19,16 @@ describe('Markdown 渲染', () => {
   });
 
   it('图片渲染成 img，保留 alt', () => {
-    expect(renderMarkdown('![发版流程](/uploads/a.png)'))
-      .toContain('<img alt="发版流程" src="/uploads/a.png">');
+    const html = renderMarkdown('![发版流程](/uploads/a.png)');
+    expect(html).toContain('<img class="mdimg__img" alt="发版流程" src="/uploads/a.png"');
+    // 缩略图的宿主：1:1 裁切、加载状态、点开看原图都挂在它身上。
+    expect(html).toContain('<button type="button" class="mdimg" data-state="loading"');
+    expect(html).toContain('aria-label="查看大图：发版流程"');
+  });
+
+  it('没有 alt 时按钮仍然有能念出来的名字', () => {
+    // alt 为空时按钮拿不到可及名字，读屏软件只会念「按钮」，所以有一条兜底文案。
+    expect(renderMarkdown('![](/uploads/a.png)')).toContain('aria-label="查看大图"');
   });
 
   it('@ 提及会被高亮', () => {
@@ -63,7 +71,11 @@ describe('Markdown 渲染', () => {
 
   it('伪装成图片的附件链接也只是一张坏图，不会变成可执行页面', () => {
     // 服务端给 .bin 回的是 octet-stream + nosniff，浏览器不会拿它当文档。
-    expect(renderMarkdown('![伪装](/uploads/evil.bin)')).toBe('<p><img alt="伪装" src="/uploads/evil.bin"></p>');
+    expect(renderMarkdown('![伪装](/uploads/evil.bin)')).toBe(
+      '<p><button type="button" class="mdimg" data-state="loading" aria-label="查看大图：伪装">'
+      + '<img class="mdimg__img" alt="伪装" src="/uploads/evil.bin" loading="lazy" decoding="async">'
+      + '</button></p>',
+    );
   });
 
   it('文件名里的 @ 和 ** 不会把标签属性撑破', () => {
@@ -301,6 +313,13 @@ describe('恶意输入仍然被转义', () => {
     ['斜体里塞标签', '*<script>alert(1)</script>*'],
     ['链接名里塞标签', '[<img src=x onerror=alert(1)>](/uploads/a.bin)'],
     ['视频名里塞标签', '[<img src=x onerror=alert(1)>](/uploads/a.mp4)'],
+    // 缩略图这一档新长出了 <button ... aria-label> 和 <img class alt src>，
+    // alt 会同时进 img 的 alt 和 button 的 aria-label 两个属性，两处都得钉。
+    ['图片 alt 里闭引号 + onerror', '![" onerror="alert(1)](/uploads/a.png)'],
+    ['图片 alt 里闭引号 + 收标签', '!["><script>alert(1)</script>](/uploads/a.png)'],
+    ['图片 alt 里塞标签', '![<img src=x onerror=alert(1)>](/uploads/a.png)'],
+    ['图片 alt 里闭 button 再开一个', '![</button><img src=x onerror=alert(1)>](/uploads/a.png)'],
+    ['图片 URL 里闭引号', '![图](/uploads/a.png" onerror="alert(1))'],
   ];
   for (const [name, input] of cases) {
     it(`${name} 不会长成真节点`, () => {
@@ -329,6 +348,34 @@ describe('恶意输入仍然被转义', () => {
     expect(video).not.toBeNull();
     expect(video?.getAttribute('aria-label')).toBe('<img src=x onerror=alert(1)>');
     expect(host.querySelectorAll('*').length).toBe(2);   // 只有 <p> 和 <video>，没多长东西
+  });
+
+  it('图片 alt 里的闭引号撑不破 button，也撑不破 img', () => {
+    // 这条是上面那批的「正面对照」：不光要证明没长出危险节点，
+    // 还要证明那串东西确实**原样留在了属性值里**（说明引号被转义住了，没闭掉属性）。
+    const host = inject('![" onerror="alert(1)](/uploads/a.png)');
+    const btn = host.querySelector('button.mdimg');
+    const img = host.querySelector('img.mdimg__img');
+    expect(btn).not.toBeNull();
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('alt')).toBe('" onerror="alert(1)');
+    expect(btn?.getAttribute('aria-label')).toBe('查看大图：" onerror="alert(1)');
+    // 只有 <p> / <button> / <img>，一个都不多。
+    expect(host.querySelectorAll('*').length).toBe(3);
+    expect(img?.getAttribute('onerror')).toBeNull();
+    expect(btn?.getAttribute('onerror')).toBeNull();
+  });
+
+  it('图片这一档也不会往产物里写任何 on* 属性', () => {
+    // 加载状态没走 onload="…" / onerror="…" 内联属性，就是为了不在这里开口子。
+    // 这条把「产物里一个 on* 都没有」钉死，将来谁想图省事加回去会先撞到它。
+    const host = inject('![正常图](/uploads/a.png)\n\n![](/uploads/b.png)');
+    for (const el of host.querySelectorAll('*')) {
+      for (const attr of el.attributes) {
+        expect(attr.name.startsWith('on')).toBe(false);
+      }
+    }
+    expect(renderMarkdown('![正常图](/uploads/a.png)')).not.toMatch(/\son[a-z]+=/i);
   });
 
   it('正文里混进 U+0000 也指不到占位槽上', () => {
