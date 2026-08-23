@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { CornerUpLeft, SmilePlus } from 'lucide-react';
 import { Avatar, AiBadge } from './Avatar';
-import { renderMarkdown } from '../lib/md';
+import { MarkdownBody } from './MarkdownBody';
+import { ImageViewer } from './ImageViewer';
 import { clock, dayLabel } from '../lib/format';
 import { REACTION_EMOJIS } from '../lib/reactions';
 import type { Message, ReadState } from '../lib/types';
@@ -101,6 +102,13 @@ export function MessageList({
 
   // 表情面板此刻开在哪条消息上（同一时刻只开一个）。
   const [pickerFor, setPickerFor] = useState<string | null>(null);
+
+  /**
+   * 正在看的大图。气泡里的图是 1:1 切过的缩略图，看原图这条路由它兜住。
+   * 状态放在列表这一层而不是每个气泡里：同一时刻只该有一层，
+   * 放在气泡里的话点第二张就会叠出两层。
+   */
+  const [viewing, setViewing] = useState<{ src: string; alt: string } | null>(null);
 
   /**
    * 气泡下方那一行已有回应：一个表情一个按钮，显示计数，指上去能看到都有谁。
@@ -231,9 +239,10 @@ export function MessageList({
               <div className={`msg--me${flashId === m.id ? ' msg--flash' : ''}`} data-mid={m.id}>
                 <div className="msg__col msg__col--me">
                   {quoteBlock(m)}
-                  <div
+                  <MarkdownBody
                     className={`md bubble bubble--me${m.pending ? ' bubble--sending' : ''}`}
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(m.body) }}
+                    body={m.body}
+                    onOpenImage={(src, alt) => setViewing({ src, alt })}
                   />
                   {reactionRow(m)}
                   {/* 「已读」只依据对方真实上报的已读位置，不拿在线状态或送达去推断。 */}
@@ -256,9 +265,10 @@ export function MessageList({
                     <div className="msg__name">{m.senderName}</div>
                   ) : null}
                   {quoteBlock(m)}
-                  <div
+                  <MarkdownBody
                     className={`md bubble ${m.isAI ? 'bubble--ai' : 'bubble--other'}`}
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(m.body) }}
+                    body={m.body}
+                    onOpenImage={(src, alt) => setViewing({ src, alt })}
                   />
                   {reactionRow(m)}
                   <div className="msg__meta">
@@ -285,6 +295,10 @@ export function MessageList({
       ) : null}
 
       <div ref={endRef} />
+
+      {viewing ? (
+        <ImageViewer src={viewing.src} alt={viewing.alt} onClose={() => setViewing(null)} />
+      ) : null}
     </div>
   );
 }
