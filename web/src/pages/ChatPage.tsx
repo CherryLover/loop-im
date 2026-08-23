@@ -294,6 +294,31 @@ export function ChatPage(props: ChatPageProps) {
                   {subtitle}
                 </div>
               </div>
+              {/*
+                进了会话之后的免打扰入口。放顶栏而不是成员面板，理由有两条，缺一不可：
+                  - 单聊（dm / ai）根本没有成员面板；
+                  - 成员面板在窄版式下是 display:none（styles.css 的 @media max-width:720px），
+                    手机上等于点不到。
+                顶栏是两种会话类型、两种版式都在的唯一位置。
+                列表行上那个 .convo__action 保留不动：一眼看出「哪几个会话静音了」是它的活，
+                这里管的是「我现在正看着的这个会话」。两处读写的都是同一份 conversation.muted，
+                状态天然同步，不另存一份本地状态。
+
+                文案沿用列表那边的「动词 +「标题」」，末尾多一个「（当前会话）」：
+                同一个会话被选中时，列表里那个按钮和这个按钮会同时在页面上，
+                无障碍名称一模一样的话，读屏按按钮列表过一遍就是两个分不清的「免打扰「X」」。
+                加个限定语既说清了这个按钮管的是哪一处，也让两处各自可寻址。
+              */}
+              <button
+                type="button"
+                className={`btn btn--icon chat__mute${active.muted ? ' chat__mute--on' : ''}`}
+                aria-pressed={!!active.muted}
+                title={active.muted ? `取消免打扰「${active.title}」（当前会话）` : `免打扰「${active.title}」（当前会话）`}
+                aria-label={active.muted ? `取消免打扰「${active.title}」（当前会话）` : `免打扰「${active.title}」（当前会话）`}
+                onClick={() => props.onToggleMute(active.id, !active.muted)}
+              >
+                {active.muted ? <Bell size={15} /> : <BellOff size={15} />}
+              </button>
             </div>
 
             <MessageList
