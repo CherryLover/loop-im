@@ -60,6 +60,35 @@ const MIGRATIONS = [
   [null, null, 'CREATE INDEX IF NOT EXISTS idx_attachment_refs_key ON attachment_refs(key)'],
   // 回源时要按 url 反查 attachments 那一行（判断归属、判断是不是孤儿）。
   [null, null, 'CREATE INDEX IF NOT EXISTS idx_attachments_url ON attachments(url)'],
+  // push_subscriptions：浏览器给出的 Web Push 订阅，一台设备一行。
+  //
+  // 放在 MIGRATIONS 而不是 schema.sql：CREATE TABLE IF NOT EXISTS 对**已经建好的库**
+  // 什么也不做，新表只写进 schema.sql 的话老库照样没有它（attachment_refs 表在
+  // schema.sql、索引在这里，两处都要看才知道全貌，是个反例，不要再制造第二个）。
+  // column 传 null 走「DDL 自带 IF NOT EXISTS，幂等由 DDL 自己保证」那一档。
+  //
+  // 故意不加外键，和 messages.reply_to 同一个道理（见上面）：账号停用/删除时
+  // 订阅要不要清必须是显式的一行代码（routes/users.js 的停用路径），
+  // 不能靠 ON DELETE 在看不见的地方悄悄发生 —— 那种清理出了错没人会发现。
+  [null, null, `CREATE TABLE IF NOT EXISTS push_subscriptions (
+                  id          TEXT PRIMARY KEY,
+                  user_id     TEXT NOT NULL,
+                  device_id   TEXT NOT NULL,
+                  endpoint    TEXT NOT NULL,
+                  p256dh      TEXT NOT NULL,
+                  auth        TEXT NOT NULL,
+                  ua          TEXT,
+                  created_at  INTEGER NOT NULL,
+                  last_ok_at  INTEGER,
+                  fail_count  INTEGER NOT NULL DEFAULT 0
+                )`],
+  // endpoint 唯一是**安全边界**，不是去重优化。同一台设备换个人登录时，浏览器给出的
+  // endpoint 还是同一个；按 (user_id, endpoint) 建唯一索引的话，库里会同时留着
+  // 「甲的这个 endpoint」和「乙的这个 endpoint」两行，甲会继续收到发给乙的消息摘要。
+  // 所以按 endpoint 唯一，upsert 时**覆盖 user_id**（见 push-store.js）。
+  [null, null, 'CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subs_endpoint ON push_subscriptions(endpoint)'],
+  // 推送前的热路径是「这一批收件人名下有哪些订阅」，按 user_id 建索引。
+  [null, null, 'CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id)'],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
   // column 为 null：这条迁移不是补列（索引、新表之类），DDL 自己保证幂等，直接跑。
