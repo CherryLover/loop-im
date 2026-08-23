@@ -11,7 +11,7 @@ test('TC-AUTH-02 密码错误：给出提示，且不透露邮箱是否存在', 
   watchErrors(page, errors);
   await page.goto('/');
   await page.getByLabel('邮箱').fill(ADMIN.email);
-  await page.getByLabel('密码').fill('definitely-wrong');
+  await page.getByLabel('密码', { exact: true }).fill('definitely-wrong');
   await page.getByRole('button', { name: '登录' }).click();
   const err = page.locator('.login__error, .modal__error, [role="alert"]').first();
   await expect(err).toBeVisible({ timeout: 10_000 });

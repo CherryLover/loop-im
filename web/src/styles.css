@@ -679,3 +679,39 @@ input, textarea { font-family: inherit; }
     animation: pop .18s ease-out;
   }
 }
+
+/* ---------- 密码输入框的「小眼睛」（PasswordInput） ----------
+   本段只追加，没有改动上面任何既有规则。 */
+.password-field { position: relative; display: block; width: 100%; }
+/* 给右边的按钮腾位置，密码长了也不会钻到图标底下。
+   写在 .login__label .input 之后，同特异度靠源码顺序赢，且只覆盖 padding-right 这一条。 */
+.password-field .input { padding-right: 34px; }
+.password-field__eye {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  border: none; border-radius: 7px; background: transparent;
+  color: var(--faint); cursor: pointer;
+}
+.password-field__eye:hover { color: var(--text); background: var(--surface3); }
+.password-field__eye:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- 头像上传的中间状态（ProfileModal） ---------- */
+.avatar-slot { position: relative; display: inline-flex; flex: none; }
+.avatar-slot--busy .avatar { opacity: .45; }
+.avatar-slot__spinner {
+  position: absolute; top: 50%; left: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px;
+  border: 2px solid var(--border2); border-top-color: var(--accent);
+  border-radius: 99px; animation: avatarSpin .7s linear infinite;
+}
+@keyframes avatarSpin { to { transform: rotate(360deg); } }
+/* 空的时候**不能**设 display:none：这是个 aria-live 区域，读屏要先看见它在 DOM 里、
+   再看见内容变化才会播报；藏起来又拿出来的区域有一半读屏是不报的。
+   空态高度本来就是 0，只多出父级的一点 gap，不值得为此换掉播报。 */
+.avatar-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.avatar-status .modal__error, .avatar-status .modal__ok { min-width: 0; overflow-wrap: anywhere; }
+
+/* 会晕的人把转速降下来，但保留「在动」这一信息——完全静止就又变回「没反应」了。 */
+@media (prefers-reduced-motion: reduce) {
+  .avatar-slot__spinner { animation-duration: 2.4s; }
+}

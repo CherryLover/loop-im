@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Logo } from '../components/Logo';
 import { AiBadge } from '../components/Avatar';
+import { PasswordInput } from '../components/PasswordInput';
 import { api, setToken } from '../lib/api';
 import type { AiPublicInfo, User } from '../lib/types';
 
@@ -10,6 +11,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (user: User, ai: AiPubli
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const passwordId = useId();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -49,17 +51,19 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (user: User, ai: AiPubli
                 required
               />
             </label>
-            <label className="login__label">
-              密码
-              <input
+            {/* 这里是 div + htmlFor，不是把输入框裹进 <label>：小眼睛按钮的 aria-label
+                含「密码」二字，塞进 label 子树会混进输入框的可访问名。 */}
+            <div className="login__label">
+              <label htmlFor={passwordId}>密码</label>
+              <PasswordInput
+                id={passwordId}
                 className="input"
-                type="password"
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
               />
-            </label>
+            </div>
           </div>
 
           <label className="login__check">
