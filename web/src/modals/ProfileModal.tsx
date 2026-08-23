@@ -10,7 +10,8 @@ import type { User } from '../lib/types';
 
 /**
  * 开关旁边那一句人话。三件事都要说清楚，缺一件用户就会以为功能坏了：
- * - 环境不行时说明是**环境**不行（非 HTTPS / 浏览器太老 / 权限被拒），别让开关默默失灵；
+ * - 环境不行时说明是**环境**不行（非 HTTPS / iOS 还没装到主屏 / 浏览器太老 / 权限被拒），
+ *   别让开关默默失灵；而且要说到「下一步具体点哪儿」，光说「不支持」等于什么都没说；
  * - 已开启时说明**什么时候才会弹**——本产品只在用户看不见消息时弹，用户开完开关
  *   还停在聊天页就永远等不到，这不是 bug，但不写出来没人猜得到；
  * - 还没开时说明点下去会发生什么。
@@ -20,7 +21,17 @@ const notifyHint = (permission: NotifyPermission, enabled: boolean) => {
     return '当前不是 HTTPS（也不是 localhost），浏览器禁用了桌面通知，权限申请连弹都不会弹。'
       + '请改用 https:// 或 http://localhost 访问。';
   }
-  if (permission === 'unsupported') return '当前浏览器不支持桌面通知。';
+  // iOS 标签页这一档：绝不能说「换个浏览器」——iOS 上所有浏览器都是同一个 WebKit，
+  // 换谁都一样。这里要说的是唯一能解决问题的那条路，而且要说到用户点得到的按钮名字。
+  if (permission === 'needs-install') {
+    return '在 iPhone / iPad 上，网页通知只对「添加到主屏幕」之后的应用生效，换别的浏览器没用（iOS 上都是同一个内核）。'
+      + '点屏幕底部中间的分享按钮（方框里一个向上的箭头）→ 往下找到「添加到主屏幕」→ 添加，'
+      + '之后从主屏图标打开本站，这个开关就能用了。'
+      + '注意：主屏应用有自己独立的登录状态，第一次打开需要重新登录一次，登录时记得勾上「保持登录」。';
+  }
+  if (permission === 'unsupported') {
+    return '当前浏览器不支持桌面通知。iPhone / iPad 需要 iOS 16.4 或更新版本，并且要从主屏图标打开。';
+  }
   if (permission === 'denied') return '浏览器已拒绝本站的通知权限。需要到地址栏的站点设置里手动允许，这里才能再打开。';
   if (enabled) {
     return '只在你看不见这条消息时才弹：切到别的标签页、切到别的应用，或人在联系人 / AI 页时。'
@@ -188,13 +199,17 @@ export function ProfileModal({
             type="button"
             className="btn btn--sm"
             aria-pressed={notifyEnabled}
-            // 按钮置灰的三种原因（非 HTTPS / 浏览器不支持 / 权限被拒）各自都在下面那句话里
-            // 写明了；aria-describedby + title 把说明挂到按钮上，读屏和悬停都能拿到，
-            // 不至于只看到一个「点不动」的灰按钮。
+            // 按钮置灰的四种原因（非 HTTPS / iOS 还没装到主屏 / 浏览器不支持 / 权限被拒）
+            // 各自都在下面那句话里写明了；aria-describedby + title 把说明挂到按钮上，
+            // 读屏和悬停都能拿到，不至于只看到一个「点不动」的灰按钮。
+            // 'needs-install' 也走置灰这条老路，不给它单开一种交互（比如变成一颗
+            // 「怎么安装」按钮）：安装这件事浏览器不让网页代劳，多一个新控件只是多一处
+            // 要维护的例外，说明文字已经承担了全部信息量。
             aria-describedby={notifyHintId}
             title={notifyHint(notifyPermission, notifyEnabled)}
             disabled={
               notifyPermission === 'insecure'
+              || notifyPermission === 'needs-install'
               || notifyPermission === 'unsupported'
               || notifyPermission === 'denied'
             }

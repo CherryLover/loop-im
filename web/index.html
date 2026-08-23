@@ -2,8 +2,38 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover 不是排版偏好：不加它，iOS 上 env(safe-area-inset-*) 恒为 0，
+         styles.css 里那套安全区适配一行都不生效。改这里之前先看 web/src/styles.css。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Loop IM</title>
+
+    <!-- ---------- PWA ----------
+         manifest 里的 `display` 是**功能开关，不是外观选项**。MDN 浏览器兼容数据对
+         iOS Safari 的 Notification 接口原文：
+
+           "The `Notification` interface is undefined, unless the page is a web app
+            saved to the home screen. The app's manifest must have a non-default
+            `display` value."
+
+         也就是说 iOS 上 Notification 这个标识符存不存在，取决于 manifest 有没有
+         非默认的 display（默认值是 browser）。把它改回 browser / 删掉 manifest，
+         iPhone 和 iPad 上的通知会整条链路静默失效，而且不报任何错。
+         web/src/pwa-manifest.test.js 锁住了这一条。 -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- iOS 主屏图标。WebKit：两个都提供时 apple-touch-icon 优先于 manifest 的 icons。
+         这张必须不透明——iOS 会把透明区域渲染成黑色。 -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <!-- iOS 16.4 之前靠这个 meta 进独立模式，16.4 起 manifest 的 display 也算数。
+         老 meta 在新系统上是否仍必需没有确证，两个都写零代价。 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- default 而不是 black-translucent：后者会让内容顶到状态栏底下，要求布局完全靠
+         安全区撑开，风险大。 -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Loop" />
+    <!-- 与 manifest 的 theme_color 一致，取 styles.css 的浅色 --bg。manifest 只能写死
+         一个颜色，深色主题下启动画面会闪一下浅色，这是 manifest 的固有限制。 -->
+    <meta name="theme-color" content="#F6F5F2" />
+
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap"

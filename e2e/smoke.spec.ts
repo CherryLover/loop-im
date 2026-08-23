@@ -62,6 +62,11 @@ test('管理员：建群 → @Aria 拿到回复 → AI 管理看到这个人', a
 test('管理员：添加联系人后对方出现在列表里', async ({ page }) => {
   await signIn(page, ADMIN);
   await page.locator('.nav-btn[title="联系人"]').click();
+  // locator.count() 是一次性的，**不会**像 expect 那样自动重试。刚点完导航时联系人
+  // 列表可能还没渲染出来（它等的是挂载时那次 refreshUsers()），这时基数会被读成 0，
+  // 后面 toHaveCount(before + 1) 就变成了「期望 1、实际 6」——症状看着像数量算错，
+  // 其实是基数取早了。先等列表真的出现，再取基数。
+  await expect(page.locator('.contact').first()).toBeVisible();
   const before = await page.locator('.contact').count();
   const mark = stamp();
   const name = `吴思${mark}`;

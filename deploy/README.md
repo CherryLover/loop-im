@@ -168,6 +168,78 @@ im.example.com {
 开销会让一份 100MB 的视频超过 100MB 的请求体）。要么给 `/api/uploads` 关掉橙云走直连，
 要么把 `MAX_VIDEO_MB` 调小。
 
+### ⚠️ 反代不要给 `/sw.js` 加缓存，否则新版本推不下去
+
+装到主屏幕的 PWA 靠 Service Worker（`/sw.js`）收推送通知。它是**所有后续更新的唯一入口**：
+浏览器每次启动时去取一遍这个脚本，字节变了才会装新版。这条链路上任何一层把它缓存住，
+用户就永久卡在旧 SW 上 —— 推送逻辑改了、修了 bug，全都推不下去。
+
+难受的地方在于**它没有任何症状指向缓存**：页面本身是好的（HTML 和带 hash 的 JS 都正常更新），
+只有通知行为停留在旧版。用户报的是「通知不对劲」，你去看代码，代码是新的。
+
+服务端已经对这一个文件发 `Cache-Control: no-cache`（`server/src/app.js` 的静态托管那段，
+`server/test/pwa-static.test.js` 钉着）。**反代要做的只有一件事：别覆盖它。**
+
+> `no-cache` 不是「不缓存」，是「可以存，但每次都回源校验」。命中 304 时一个字节都不传，
+> 所以这不是在浪费带宽。真写成 `no-store` 反而更差 —— 每次启动整份重下。
+
+**Nginx**：默认不加 `Cache-Control`，通常不用改。但如果你为静态资源配了统一的
+`expires` / `add_header Cache-Control`（很常见的一段模板），必须把 `sw.js` 摘出来：
+
+```nginx
+    # ★ 有全局静态资源缓存规则的话，sw.js 一定要单独开一条，且放在那条规则前面。
+    #   proxy_hide_header + add_header 是为了盖掉上游或模板里可能带上的长缓存。
+    location = /sw.js {
+        proxy_pass http://127.0.0.1:4000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+
+        expires off;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-cache" always;
+    }
+```
+
+**Caddy**：默认原样透传上游的 `Cache-Control`，所以最小示例已经是对的。只有在你自己
+加了静态缓存头时才需要把它摘出来：
+
+```
+im.example.com {
+    # 只有在别处加了长缓存时才需要这一段；不写就是原样透传服务端的 no-cache。
+    @sw path /sw.js
+    header @sw Cache-Control "no-cache"
+
+    reverse_proxy 127.0.0.1:4000 {
+        flush_interval -1
+    }
+}
+```
+
+**Cloudflare**：橙云默认不缓存 `.js`（不在默认可缓存扩展名里），但如果你建了
+「Cache Everything」的页面规则，一定要给 `/sw.js` 加一条 Bypass Cache 的例外。
+
+其余几条前提，一并写在这里省得来回问：
+
+- **HTTPS 是硬前提。** Service Worker 和 Push API 都是 `[SecureContext]`，只在 HTTPS
+  （或 `localhost`）下存在。走 HTTP 的话 `navigator.serviceWorker` 直接是 undefined，
+  推送整块功能不存在，且没有任何降级方案。上面「对外提供 HTTPS」那一节已经覆盖。
+- **iOS / iPadOS 最低 16.4**（2023-03）。低于这个版本的 iPhone 没有 `Notification` 对象，
+  界面上会明说「需要 iOS 16.4 或更新版本」，不做兜底 —— 没有可用的替代机制。
+- **`/manifest.webmanifest` 的 Content-Type 必须是 `application/manifest+json`。**
+  服务端现成就对，别在反代里手工改写这个类型。搞错了 iOS 可能直接不认这份 manifest，
+  而症状是「加到主屏幕之后还是收不到通知」，跟 MIME 一点关系都看不出来。
+- **「添加到主屏幕」之后是一个独立的存储沙箱**，Safari 标签页里的登录状态**不共享**，
+  用户装完必须再登录一次。这是 iOS 的行为，不是 bug —— 提前跟用户说一声，
+  能省掉一轮「装完就退出登录了」的误报。
+
+上线后拿这三条 curl 自查（`/sw.js` 和 `/manifest.webmanifest` 要等前端构建产物包含它们之后才有）：
+
+```bash
+curl -sI https://im.example.com/sw.js                 # → 200，Cache-Control: no-cache
+curl -sI https://im.example.com/manifest.webmanifest  # → 200，application/manifest+json
+curl -sI https://im.example.com/chat/whatever         # → 200 text/html（SPA 路由照常）
+```
+
 ## 看日志
 
 服务端的关键事件是**结构化日志**：一行一条 JSON，直接打到 stdout / stderr。

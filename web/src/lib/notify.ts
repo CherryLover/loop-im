@@ -15,14 +15,23 @@ import type { Conversation, Message } from './types';
  * 4. 环境问题要说人话。Notification 是 [SecureContext] 接口：通过 http://内网IP 访问时
  *    浏览器直接不给，权限申请连弹都不弹。这一档单独报成 'insecure'，不能和「浏览器太老」
  *    混成同一句「不支持」——那是把 URL 的问题赖给浏览器，用户换个浏览器还是不行。
+ *    同理，iOS 标签页里 Notification 不存在，报「浏览器不支持」也是错的——iOS 上所有
+ *    浏览器都是同一个 WebKit，换谁都一样，那一档单独报成 'needs-install'。
  */
 
 /**
- * 前两档是本模块加的，浏览器自己只有后三档：
+ * 前三档是本模块加的，浏览器自己只有后三档：
  * - 'insecure'：当前页面不是安全上下文（非 HTTPS 且非 localhost），浏览器禁用了通知；
+ * - 'needs-install'：iOS / iPadOS，页面还跑在 Safari 标签页里，得先「添加到主屏幕」；
  * - 'unsupported'：浏览器压根没有 Notification。
  */
-export type NotifyPermission = 'insecure' | 'unsupported' | 'default' | 'granted' | 'denied';
+export type NotifyPermission =
+  | 'insecure'
+  | 'needs-install'
+  | 'unsupported'
+  | 'default'
+  | 'granted'
+  | 'denied';
 
 const KEY = 'loop-im-notify';
 
@@ -41,10 +50,89 @@ export function notifySupported(): boolean {
   return typeof Notification !== 'undefined';
 }
 
+/**
+ * 当前页面是不是跑在「已安装的 Web App」里（从主屏 / 启动器图标打开，没有地址栏那种）。
+ *
+ * 两条路都要认，缺一条都会漏判：
+ * - `display-mode: standalone` 媒体查询——标准做法，Android / 桌面 / iOS 16.4+ 都认；
+ * - `navigator.standalone`——iOS 的私有属性，老 iOS 上**只有**它。
+ *
+ * 两个 API 在 jsdom 里都不存在（`window.matchMedia` 是 undefined，`navigator.standalone`
+ * 也是），所以每一步都得先探再用。探不到一律当「不是独立模式」——这和
+ * notifyInsecureContext() 只认 `=== false` 是同一个思路的两面：那边「不知道」不能拿来
+ * 把功能判死，这边「不知道」不能拿来断言用户已经装好了。两边都是往「别乱下结论」的
+ * 方向倒，只是安全的那一侧刚好相反。
+ */
+export function isStandaloneDisplay(): boolean {
+  if (typeof window === 'undefined') return false;
+  const nav = window.navigator as (Navigator & { standalone?: boolean }) | undefined;
+  // 只认 === true。iOS 标签页里这个属性是 false，别的环境里它压根不存在（undefined）——
+  // 后者是「没有这个 API」，不是「不在独立模式」，得让下面的媒体查询继续说话。
+  if (nav?.standalone === true) return true;
+  try {
+    return window.matchMedia('(display-mode: standalone)').matches === true;
+  } catch {
+    // 这个 catch 兜的是两件事，别以为它只防一件：
+    // 1. matchMedia 根本不存在（jsdom 就是这样，调用直接 TypeError）；
+    // 2. 个别老 WebKit 碰到不认识的媒体特性会抛，而不是返回 matches:false。
+    // 曾经在这上面加过一道 `typeof window.matchMedia !== 'function'` 的前置守卫，
+    // 后来发现它一行都测不出来——第 1 种情况已经被这个 catch 完整覆盖，
+    // 那道守卫是纯粹的死代码，删掉了。
+    return false;
+  }
+}
+
+/**
+ * 当前是不是 iOS / iPadOS。判据只有 UA 和 maxTouchPoints，两条：
+ *
+ * 1. UA 里有 iPhone / iPad / iPod —— 认。
+ * 2. iPadOS 13 起 Safari 默认报**桌面** UA（`Macintosh; Intel Mac OS X ...`），里面
+ *    根本没有 "iPad"。剩下还站得住的区分点只有触摸点数：真 Mac 报 0（触控板不算
+ *    触摸屏），iPad 报 5。所以补一条 `Macintosh + maxTouchPoints > 1`。
+ *    iPhone 上手动开「请求桌面网站」也落到这一条。
+ *
+ * **已知误判，写出来省得后人以为它准：**
+ * - 误报：接了触摸屏的 Mac、某些辅助输入设备、以及 Chrome DevTools 的设备模拟，
+ *   都可能满足第 2 条。代价可控——这个函数只在 `notifySupported()` 已经为 false 时
+ *   才会被问到，而任何一台跑得动 Notification 的 Mac 根本走不到那一步；真误报了，
+ *   后果也只是多看到一句「添加到主屏幕」的建议。
+ * - 漏报：改过 UA 的 App 内嵌 WebView（微信、企业 IM 之类）可能既不含 iPhone 也不含
+ *   Macintosh，会退回 'unsupported'。那正是**改动前**的行为，不比现在更差。
+ *
+ * 不能用的两个判据，别再捡回来：
+ * - "AppleWebKit"：Chrome、Edge、连 jsdom 的默认 UA 里都有它，一认就全世界都是 iOS；
+ * - `navigator.platform`：已废弃，而且 iPadOS 上它就报 "MacIntel"，和 Mac 分不开。
+ */
+export function isIosWebKit(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  if (/\b(iPhone|iPad|iPod)\b/.test(ua)) return true;
+  return /\bMacintosh\b/.test(ua) && (navigator.maxTouchPoints ?? 0) > 1;
+}
+
 export function notifyPermission(): NotifyPermission {
-  // 安全上下文排在最前：非 HTTPS 时 Notification 往往干脆是 undefined，
-  // 先判它才能给出「换 HTTPS」这句真正有用的话，而不是「浏览器不支持」。
+  // ── 这四步的先后顺序本身就是需求，别随手调换 ────────────────────────────
+  //
+  // 1) 'insecure' 压在最前。非 HTTPS 时 Notification 往往干脆是 undefined，先判它
+  //    才能给出「换 HTTPS」这句真正有用的话，而不是「浏览器不支持」。
+  //    iOS 上同样如此，而且更要紧：Notification 是 [SecureContext] 接口，非 HTTPS 的
+  //    页面**就算装到主屏也照样没有**。这时候劝人去「添加到主屏幕」，是让他白折腾一趟
+  //    再回到同一个死胡同。所以 'insecure' 排在 'needs-install' 之前，不是之后。
+  //
+  // 2) 'needs-install' 必须排在 'unsupported' 之前。iOS Safari 标签页里 Notification
+  //    确实是 undefined，按老顺序会被判成「当前浏览器不支持桌面通知」——而那句话是
+  //    错的：iOS 上所有浏览器都是同一个 WebKit，用户换到 Chrome / Firefox 结果一模
+  //    一样，只会更困惑。真正该做的是「添加到主屏幕」。这就是这一档存在的全部理由。
+  //
+  // 3) 三个条件缺一不可：没有 Notification（有就不必引导安装了）、确实是 iOS
+  //    （在 Android Chrome 或老桌面浏览器上说「加到主屏幕」同样是误导）、
+  //    而且还没装（装完了却仍然没有 Notification 是另一回事，见下一条）。
+  //
+  // 4) 剩下的 'unsupported' 才是名副其实的「这个浏览器真的没有」。已经装到主屏、
+  //    Notification 仍然缺席的 iOS（低于 16.4）会落到这里，那时候「不支持」就是**对的**
+  //    ——所以这一档不需要任何 iOS 版本号判断，顺序本身已经把版本问题分掉了。
   if (notifyInsecureContext()) return 'insecure';
+  if (!notifySupported() && isIosWebKit() && !isStandaloneDisplay()) return 'needs-install';
   if (!notifySupported()) return 'unsupported';
   return Notification.permission as NotifyPermission;
 }
@@ -68,13 +156,16 @@ export function saveNotifyEnabled(on: boolean): void {
 
 /**
  * 申请权限。只该由「用户点开关」这一条路径调用。
- * 已经是 granted / denied 时直接返回当前值：被拒之后再调浏览器也不会真的问，
- * 反复调只会让人以为出了故障。
+ *
+ * 只有 'default' 这一档才真的去问浏览器，其余全部原样返回 notifyPermission() 的判断：
+ * - 三个环境档（insecure / needs-install / unsupported）下 requestPermission() 要么
+ *   根本不存在，要么注定失败；
+ * - 已经 granted / denied 的，再调浏览器也不会真的问，反复调只让人以为出了故障。
+ * 借 notifyPermission() 判断而不是自己重列一遍条件，是为了让两处的顺序不可能走岔。
  */
 export async function requestNotifyPermission(): Promise<NotifyPermission> {
-  if (notifyInsecureContext()) return 'insecure';
-  if (!notifySupported()) return 'unsupported';
-  if (Notification.permission !== 'default') return Notification.permission as NotifyPermission;
+  const current = notifyPermission();
+  if (current !== 'default') return current;
   try {
     // 老浏览器上 requestPermission 是回调式的，返回 undefined；那就以当前权限为准。
     const result = await Notification.requestPermission();
