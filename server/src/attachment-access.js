@@ -112,6 +112,18 @@ export function linkAttachmentsToMessage({ body, conversationId, messageId, send
 // Composer 在**选中文件的那一刻**就上传了。用户改主意移除附件、或者干脆不发，
 // 对象已经落库/落桶了，而且此前全仓没有任何一处会删除它 —— 桶只会一直涨。
 
+/**
+ * 清理的总开关，**默认关闭**。
+ *
+ * 这套清理会真的删掉用户传上来的文件，而本项目的取向是：程序层面不主动删用户数据，
+ * 桶涨多大交给运维侧的转存 / 备份去管。所以默认一个字节都不动，要开必须显式打开。
+ *
+ * 注意这个开关只挡住**后台定时器**（startOrphanSweeper），不挡 sweepOrphanObjects 本身 ——
+ * 后者留着给「想清的时候手动清一次」和用例直接调用，这两种都是有人明确按下按钮。
+ */
+export const orphanSweepEnabled = () =>
+  ['1', 'on', 'true', 'yes'].includes(String(process.env.UPLOAD_ORPHAN_SWEEP ?? '').trim().toLowerCase());
+
 const ORPHAN_TTL_HOURS = () => {
   const raw = Number(process.env.UPLOAD_ORPHAN_TTL_HOURS);
   return Number.isFinite(raw) && raw > 0 ? raw : 24;
@@ -175,10 +187,21 @@ export async function sweepOrphanObjects(options = {}) {
 /**
  * 起一个后台定时器跑清理。只在 index.js 里调用，不放进 createApp：
  * 测试跑几百个 app 实例，每个都挂一个定时器纯属添乱（用例直接调 sweepOrphanObjects）。
- * 返回停止函数。
+ * 返回停止函数 —— 开关关着时返回的是个空函数，调用方不必分两种情况处理。
+ *
+ * 开关状态两条路都记一行日志：这是「服务器会不会自己删文件」这种事，
+ * 出了问题第一个要查的就是它当时到底开没开，不能靠猜。
  */
 export function startOrphanSweeper() {
+  if (!orphanSweepEnabled()) {
+    logEvent('uploads.sweeper.disabled', { reason: 'UPLOAD_ORPHAN_SWEEP 未开启' });
+    return () => {};
+  }
   const interval = SWEEP_INTERVAL_MS();
+  logEvent('uploads.sweeper.started', {
+    ttlHours: ORPHAN_TTL_HOURS(),
+    intervalMinutes: interval / 60000,
+  });
   const tick = () => { sweepOrphanObjects().catch(() => {}); };
   const timer = setInterval(tick, interval);
   timer.unref?.();                                   // 别让它拖住进程退出
