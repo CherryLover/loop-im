@@ -240,6 +240,113 @@ curl -sI https://im.example.com/manifest.webmanifest  # → 200，application/ma
 curl -sI https://im.example.com/chat/whatever         # → 200 text/html（SPA 路由照常）
 ```
 
+## 推送通知（Web Push）
+
+手机上的推送（iOS 主屏 App、Android）默认**关着**。不配就是关着：服务照常启动，
+聊天、SSE、附件、桌面通知一切照旧，只是手机锁屏上不会响。想开就配三个环境变量。
+
+### 生成密钥
+
+```bash
+# 在 compose 网络里起一个一次性容器跑一下就行，宿主机不用装 Node
+docker compose run --rm loop-im node scripts/generate-vapid-keys.mjs \
+  --subject mailto:admin@im.example.com
+```
+
+stdout 就是能直接粘进 `.env` 的三行，提示和警告都走 stderr，所以也可以
+`... >> .env`（追加完记得把原来注释掉的那几行删了，同名变量后面的覆盖前面的）。
+
+脚本在输出之前会拿**服务端启动自检用的同一套校验**把刚生成的密钥再验一遍，
+验不过就非零退出、一个字符都不输出 —— 不会出现「照文档生成的密钥被自己的服务拒了」。
+
+填完重启，然后用这一条确认到底开没开：
+
+```bash
+docker compose logs loop-im | grep -E 'push\.(enabled|disabled)'
+```
+
+- `push.enabled` → 开着，行里带 `subject` 和公钥前 12 位（用来核对线上是不是你刚发的那套）。
+- `push.disabled` → 关着，`reason` 说明为什么、`detail` 和 `hint` 是人话：
+  `not_configured`（没配，正常）、`partial_config`（只配了一部分）、
+  `invalid_key`（密钥格式不对或两把钥匙不是一对）、`invalid_subject`、`subject_not_routable`。
+
+**三项必须一起配齐。** 缺一项也是整体关闭，不会出现「订阅存下来了、推送永远发不出去、
+界面上开关还亮着」的半开状态 —— 那种状态没有任何症状，只有用户会发现。
+
+### ⚠️ `VAPID_SUBJECT` 写成 localhost / 内网域名，iPhone 一条推送都收不到
+
+必须是**真实域名**的 `mailto:` 邮箱或 `https://` 网址。苹果的推送服务
+（`web.push.apple.com`）对这一项的校验比别家严：`mailto:admin@localhost`、
+`mailto:ops@im.corp`、`https://192.168.1.10/` 这类会被直接 `403 BadJwtToken` 拒掉，
+而 FCM（Android）和 Mozilla 照收不误。
+
+难受的地方和 `/sw.js` 缓存那条一样，**症状完全不指向原因**：本地开发全绿、
+Android 手机收得到、只有 iPhone 一条都没有；服务端看到的是一个不解释原因的 403。
+所以启动自检会在**服务起来的那一刻**就拦下这类写法，而不是等到发第一条推送：
+
+```
+{"level":"warn","event":"push.disabled","reason":"subject_not_routable",
+ "detail":"VAPID_SUBJECT 的邮箱域名不可路由（localhost 只在这台机器上存在），苹果的推送服务会用 403 BadJwtToken 拒掉，本地和安卓却全绿",
+ "hint":"换成你们真实对外域名的邮箱，例如 mailto:admin@im.example.com"}
+```
+
+会被拦下来的：`localhost`、纯 IP（v4 / v6）、`.local`、`.internal`、`.lan`、`.corp`、
+`.home`、`.intranet`、RFC 2606 保留的 `.test` / `.invalid` / `.example`，
+以及 `intranet` 这种只有一级的主机名。这些在你们内网里可能解析得好好的，
+但苹果那边看到的是一个不存在的域名。
+
+> 这个邮箱不需要真的收信，但域名要是你们真实持有的对外域名。
+
+### ⚠️ 换 VAPID 公钥 = 所有已有订阅立即失效
+
+**这是本节最要紧的一条。** 公钥是在浏览器 `subscribe()` 的那一刻**绑进订阅里**的。
+换掉 `VAPID_PUBLIC_KEY` 之后，库里那些老订阅推过去会被推送服务拒掉，
+而**没有任何办法从服务端把它们迁移过来**。
+
+它造成的故障形态最讨厌：服务正常、日志里是 `push.enabled`、新装的设备一切正常，
+只有**换钥匙之前就开过通知的那批人**从此再也收不到，而且他们自己界面上的开关还是开着的——
+没人会去报「我的通知从上周三开始就没响过」，通常是几天后才有人偶然提一句。
+
+所以：
+
+- 生成脚本**只在第一次部署时跑一次**，跑完把三行存好（跟 `JWT_SECRET` 一个待遇）；
+- 已经在用的环境不要手滑重跑；
+- 万一真换了，必须通知**所有**用户：在**每一台**设备上把通知开关关掉再打开一次
+  （一台设备一个订阅，在手机上重开不会修好平板上的）。
+
+私钥泄漏是唯一值得换钥匙的理由 —— 权衡的是「别人能冒充我们给你们的用户发推送」，
+那当然该换，换完照上面通知一轮。
+
+### ⚠️ 服务器必须能出站访问 HTTPS，纯内网隔离的部署做不了推送
+
+推送**不是我们直接发给用户手机的**：我们把加密后的内容发给苹果 / 谷歌的推送服务，
+再由它们转投到设备。所以这台服务器得能出网。
+
+- iOS / macOS Safari → `https://web.push.apple.com`
+- Android / Chrome → `https://fcm.googleapis.com`
+- Firefox → `https://updates.push.services.mozilla.com`
+
+**防火墙请按「放行出站 443」来配，不要白名单某几个主机名。** 具体打到哪个域名是
+**浏览器在订阅时给的 endpoint** 决定的，我们只是照着它发；这些域名会随浏览器厂商、
+用户所在区域和它们自己的架构调整而变，写死一份白名单等于给自己埋一个「某天某个牌子的
+手机突然收不到了」的雷。要收紧的话，收紧到「只有这个容器能出 443」比按域名收紧靠谱得多。
+
+出不去的症状：日志里是 `push.enabled`（配置本身没问题），但每次推送都记一条失败。
+**订阅、开关、聊天都完全正常，只是通知永远不到** —— 所以隔离网络里的部署，
+请干脆别配这三个变量，让开关如实显示成「服务端未启用推送」，
+而不是让用户点开一个永远不生效的开关。
+
+### 上线自检清单（推送）
+
+- [ ] `docker compose logs loop-im | grep push.enabled` 有一行，且 `subject` 是你填的那个
+- [ ] 该行的公钥前缀和你手里那份 `.env` 对得上
+- [ ] `grep push.disabled` **没有**输出
+- [ ] iPhone 上「添加到主屏幕」→ 从主屏图标打开 → 重新登录 → 打开通知开关
+- [ ] 用另一台设备给他发一条消息，**手机 App 完全关掉**，锁屏上能收到
+- [ ] 手机 App 开在前台时**不**重复弹（前台走的是页面自己的通知，见 `docs/`）
+
+前五条里任何一条不过，先看 `grep push` 的日志再往下查 —— 配置层面的问题在那里全都说清楚了。
+
 ## 看日志
 
 服务端的关键事件是**结构化日志**：一行一条 JSON，直接打到 stdout / stderr。
@@ -334,6 +441,15 @@ docker compose logs --since 1h loop-im | grep '"reqId":"3f9a1c2b"'
 | `sse.force_disconnected` | info | 停用账号时主动掐断。跟 `admin.user.disabled` 对着看 |
 | `http.error` | error | 5xx。`method` / `path` / `status` / `err` |
 | `server.started` | info | 进程起来了。`port` / `env` |
+
+**启动自检**（每次启动各打一行，用来一眼看出这些可选功能当时是开是关）
+
+| 事件 | 级别 | 说明 |
+| --- | --- | --- |
+| `store.ready` | info | 附件存储就绪。`driver` 是 `local` 还是 S3 |
+| `uploads.sweeper.started` / `uploads.sweeper.disabled` | info | 孤儿对象清理开没开 |
+| `push.enabled` | info | 推送开着。`subject` / `publicKeyHead`（公钥前 12 位，用来核对线上是哪一套） |
+| `push.disabled` | warn | 推送关着。`reason` / `detail` / `hint`，见「推送通知（Web Push）」那一节 |
 
 ### 哪些事情**不**记
 
