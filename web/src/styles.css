@@ -1110,3 +1110,89 @@ input, textarea { font-family: inherit; }
   .imgview__nav--prev { left: 4px; }
   .imgview__nav--next { right: 4px; }
 }
+
+/* ---------- 安全区适配（PWA 独立模式：刘海 / 灵动岛 / Home 指示条） ----------
+   本段只追加，没有改动上面任何既有规则；覆盖的都是单个 longhand 属性，
+   靠源码顺序赢，特异度没变。
+
+   前提：index.html 的 viewport 要带 `viewport-fit=cover`（由任务包 1A 加）。
+   没有它，iOS 上 env(safe-area-inset-*) 恒为 0 —— 本段就退化成一串同值覆盖，
+   不报错也不生效，两个任务包合并之后才一起起效。
+
+   ▍为什么用 env() 而不是别的
+   安全区的尺寸是运行时才知道的（机型、竖屏横屏、有没有装到主屏各不相同），
+   CSS 里没有第二种拿到它的办法；媒体查询猜机型必然漏，JS 量出来再写回样式
+   会在旋转屏幕时闪一下。env() 是唯一由浏览器直接喂进来的值。
+
+   ▍为什么每个 env() 都写第二个参数（兜底值）
+   桌面和非独立模式下 env() 是有定义的，返回 0px，加法结果 = 原值；
+   但在**不认识 env() 的老浏览器**里整条 calc() 会被判为无效、整条声明作废，
+   连原来的 10px / 12px 都一起没了。写上兜底值之后，即使 env() 不被支持，
+   calc(10px + 0px) 仍是一个合法的 10px。
+
+   ▍为什么保证桌面像素级零变化
+   全部写成「原值 + env(...)」的加法，而不是 max(原值, env(...))：
+   加法让「安全区 = 0 ⇒ 结果 = 原值」这条等式在每个属性上都严格成立，
+   可以逐条对拍；而 max() 在安全区小于原值时反而会吃掉原有间距，
+   在安全区大于原值时又会丢掉原本要留的那几个像素。 */
+
+/* iOS 上 height:100% 会跟着地址栏收放上下跳；dvh 是动态视口单位，独立模式下更稳。
+   上面 .app 的 height:100% 留着当老浏览器的兜底（不认识 dvh 的整条声明被忽略）。
+   桌面上 html/body/#root 都是 height:100%、body margin:0，100dvh 与 100% 等值，
+   所以这条在桌面上不产生任何差异。 */
+.app { min-height: 100dvh; }
+
+/* 横屏时安全区在左右两侧（iPhone 横放、iPad 分屏、灵动岛横置）。
+   加在 .app__body 上而不是 .app 上：.app 还要托住 .tabbar 那条通栏背景，
+   给 .app 加左右内边距会让底部导航的背景缩进来，露出两条缝。 */
+.app__body {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* 顶栏躲开灵动岛 / 刘海。
+   **不能给 .app 直接加 padding-top**：.app 是 flex 容器，加了会把整个布局
+   （含底部导航）往下推，桌面上也跟着变。只加在真正贴着屏幕顶边的两个元素上。
+   .chat__head 自带 background 和下边框，撑高之后刘海底下是它的底色，不是空洞。 */
+.convos { padding-top: env(safe-area-inset-top, 0px); }
+.chat__head { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
+
+/* iPad（宽版式）才看得见的两条边。用户最早报的就是「iPad 和 iPhone 上不行」，
+   iPad 独立模式走的是宽版式：.tabbar 是 display:none，顶栏那两条管不到侧栏，
+   于是 .sidebar 上下都直接贴着屏幕边 —— logo 钻进状态栏，底部头像按钮压在
+   Home 指示条上，装完第一眼就能看到。 */
+.sidebar {
+  padding-top: calc(14px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+}
+/* 宽版式下 .composer 是最底部的元素（.tabbar 被 display:none 了），
+   输入框和发送键会压在 Home 指示条上。
+   窄版式下它**不是**最底部的 —— 下面还有 .tabbar，安全区由 .tabbar 吃，
+   所以下面的 @media 里把这条退回原值，避免上下各算一遍、白白顶高 34px。
+   这里写成「顶层给上 + 窄屏退回」而不是「只在 @media (min-width: 721px) 里给」，
+   是因为后者和 max-width: 720px 之间有条缝：视口宽 720.5px（缩放常会算出小数）
+   时两个查询都不匹配，.tabbar 已经藏了、.composer 又没拿到安全区，正好漏掉。
+   复用同一个断点就不存在这个缝。 */
+.composer { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+
+@media (max-width: 720px) {
+  /* .tabbar 原本是 padding: 6px 4px 10px，那 10px 会被 Home 指示条完全吃掉：
+     指示条压着的那一带仍然是可点区域，手指落上去就是误触。
+     .tabbar 是 .app__body 的兄弟节点，不吃上面那条左右内边距，得自己再加一遍。 */
+  .tabbar {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(4px + env(safe-area-inset-left, 0px));
+    padding-right: calc(4px + env(safe-area-inset-right, 0px));
+  }
+  /* 提示条是贴着底部导航上沿摆的，导航被安全区顶高之后它得跟着抬同样多，
+     否则会重新压回指示条上。它是 position:fixed，同样不吃 .app__body 的内边距。 */
+  .toast {
+    bottom: calc(62px + 63px + 10px + env(safe-area-inset-bottom, 0px));
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    right: calc(12px + env(safe-area-inset-right, 0px));
+  }
+  /* 退回 .composer 原本的 12px：窄版式下它上面还压着 .tabbar，
+     下安全区已经由 .tabbar 吃掉了，这里再吃一遍就是凭空多顶高一个指示条的厚度。
+     故意写成不带 env() 的常量 —— 这条的职责就是「取消」，不是「适配」。 */
+  .composer { padding-bottom: 12px; }
+}
