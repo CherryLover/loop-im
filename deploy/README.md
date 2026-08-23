@@ -321,9 +321,23 @@ docker compose run --rm loop-im node scripts/migrate-uploads-to-minio.mjs --appl
 ### 孤儿对象清理
 
 前端在**选中文件的那一刻**就把文件传上去了，用户改主意移除附件或者干脆不发，对象也已经落库。
-应用内置了一个后台任务，默认每小时扫一次，回收「超过 24 小时、且没有任何消息引用」的对象
+应用内置了一个能回收这类对象的后台任务，但它**默认是关的**——这套清理会真的删用户传上来的
+文件，而本项目的取向是程序层面不主动删数据，桶涨多大交给运维侧的转存 / 备份去管。
+不配置就是一个字节都不删，桶只会一直涨，这是有意为之。
+
+真要开，显式打开即可（`on` / `true` / `1` 都认）：
+
+```bash
+UPLOAD_ORPHAN_SWEEP=on
+```
+
+开了之后默认每小时扫一次，回收「超过 24 小时、且没有任何消息引用」的对象
 （`UPLOAD_ORPHAN_TTL_HOURS` / `UPLOAD_SWEEP_INTERVAL_MINUTES` 可调）。
-头像、以及库里查不到 `attachments` 记录的历史对象一律不碰。
+就算开着，这几类也一律不碰：已经发出去的附件（`attachment_refs` 有记录、或正文里直接引着它，
+两道独立判定）、头像（不进 `attachments` 表）、以及库里查不到 `attachments` 记录的历史对象。
+
+启动日志里能直接看出当时是开是关：开着记 `uploads.sweeper.started`（带 TTL 与间隔），
+关着记 `uploads.sweeper.disabled`。
 
 ### 上线自检清单
 

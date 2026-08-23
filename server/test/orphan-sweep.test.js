@@ -13,7 +13,7 @@ import { group, member } from './fixtures.js';
 import { PNG } from './samples.js';
 import { createMemoryStore } from '../src/object-store.js';
 import { __setStoreForTest, resetStore } from '../src/storage.js';
-import { findOrphanCandidates, orphanTtlMs, sweepOrphanObjects } from '../src/attachment-access.js';
+import { findOrphanCandidates, orphanSweepEnabled, orphanTtlMs, startOrphanSweeper, sweepOrphanObjects } from '../src/attachment-access.js';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -21,11 +21,21 @@ let api, db, adminToken, chen, chenToken, room, store;
 
 const HOUR = 60 * 60 * 1000;
 
+/**
+ * 传一个文件，并把它的上传时间往前拨 1 毫秒。
+ *
+ * 那 1 毫秒不是凑数：判定条件是 `created_at < now - TTL`（严格小于，故意的 —— 宁可少删）。
+ * 本文件多处用 `olderThanMs: 0` 来验判定本身，此时条件退化成 `created_at < now()`，
+ * 于是「上传」和「清理」落在同一毫秒里就会判成不够格。跑整套时机器忙，天然差开 1ms 看不出来；
+ * 单独跑这个文件时代码路径是热的，两步都在同一毫秒内完成，用例就会挂。
+ * 与其把生产代码放宽成 `<=`（那等于扩大删除范围），不如让用例别卡在边界上。
+ */
 const uploadAs = async (token) => {
   const form = new FormData();
   form.append('file', new Blob([PNG], { type: 'image/png' }), 'shot.png');
   const res = await api.call('POST', '/api/uploads', { token, form });
   assert.equal(res.status, 201);
+  ageBy(res.body.url, 1);
   return { url: res.body.url, key: res.body.url.replace('/uploads/', '') };
 };
 
@@ -171,5 +181,82 @@ describe('孤儿清理 · 判定条件', () => {
     const result = await sweepOrphanObjects({ olderThanMs: 0 });
     assert.equal(result.failed >= 1, true);
     assert.ok(attachmentRow(url), '对象没删掉就不能把记录删了，否则再也找不到它');
+  });
+});
+
+/**
+ * 总开关。默认关闭是这套东西最要紧的一条设定：清理会真的删用户传上来的文件，
+ * 而本项目的取向是程序层面不主动删数据。所以「不配置 = 什么都不删」必须有用例钉死，
+ * 免得哪天有人手滑把默认值改回去，没有任何一处会报警。
+ */
+describe('孤儿清理 · 总开关', () => {
+  const SWEEP = 'UPLOAD_ORPHAN_SWEEP';
+  const INTERVAL = 'UPLOAD_SWEEP_INTERVAL_MINUTES';
+  let stop = () => {};
+
+  const restore = () => {
+    stop();
+    stop = () => {};
+    delete process.env[SWEEP];
+    delete process.env[INTERVAL];
+  };
+
+  beforeEach(restore);
+  after(restore);
+
+  it('不配置就是关的：默认一个字节都不删', () => {
+    assert.equal(orphanSweepEnabled(), false);
+  });
+
+  it('认得几种常见的「开」写法，别人写 on / true / 1 都该生效', () => {
+    for (const on of ['on', 'ON', 'true', 'True', '1', 'yes']) {
+      process.env[SWEEP] = on;
+      assert.equal(orphanSweepEnabled(), true, `${on} 应该算开`);
+    }
+    for (const off of ['off', 'false', '0', 'no', '', '   ']) {
+      process.env[SWEEP] = off;
+      assert.equal(orphanSweepEnabled(), false, `${off} 应该算关`);
+    }
+  });
+
+  it('开关关着时，就算对象早就过了 TTL，后台定时器也永远不会动它', async () => {
+    const { url, key } = await uploadAs(chenToken);
+    ageBy(url, 100 * 24 * HOUR);                     // 躺了 100 天，按 TTL 早该删了
+    process.env[INTERVAL] = '0.01';                  // 600ms 一轮，跑得完
+
+    stop = startOrphanSweeper();
+    await new Promise((r) => setTimeout(r, 900));    // 够跑好几轮了
+
+    assert.ok(store.objects.has(key), '关着的时候对象必须还在');
+    assert.ok(attachmentRow(url), 'attachments 那一行也必须还在');
+  });
+
+  it('显式打开之后，过了 TTL 的对象才会被后台定时器回收', async () => {
+    const { url, key } = await uploadAs(chenToken);
+    ageBy(url, 100 * 24 * HOUR);
+    process.env[SWEEP] = 'on';
+    process.env[INTERVAL] = '0.01';
+
+    stop = startOrphanSweeper();
+    // 轮询到删掉为止：断言「最终会发生」，不跟定时器的精确时刻较劲。
+    const deadline = Date.now() + 5000;
+    while (store.objects.has(key) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    assert.equal(store.objects.has(key), false, '开着的时候过期对象应该被回收');
+    assert.equal(attachmentRow(url), undefined, '对象删掉了，记账那行也该跟着走');
+  });
+
+  it('开着，但对象还没到 TTL —— 一样不动（开关不改判定条件）', async () => {
+    const { url, key } = await uploadAs(chenToken);   // 刚传，远没到 24 小时
+    process.env[SWEEP] = 'on';
+    process.env[INTERVAL] = '0.01';
+
+    stop = startOrphanSweeper();
+    await new Promise((r) => setTimeout(r, 900));
+
+    assert.ok(store.objects.has(key), '没到 TTL 的对象不该被删');
+    assert.ok(attachmentRow(url), 'attachments 那一行也必须还在');
   });
 });

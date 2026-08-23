@@ -114,7 +114,8 @@ DEMO_PASSWORD=只在本地用的密码
   给逐字相同的 404，不做存在性探针）。头像是全员可见的，单独一档。归属关系记在
   `attachment_refs` 表里，升级时会扫历史消息正文自动回填。
 
-历史文件的清点/清理是**手动**的，不在启动时自动删用户数据：
+附件的清理一律**不默认发生**：内置的孤儿对象清理默认关闭（`UPLOAD_ORPHAN_SWEEP`），
+历史文件的清点/清理也是**手动**的，不在启动时自动删用户数据：
 
 ```bash
 node scripts/cleanup-legacy-uploads.mjs                  # 只清点，什么都不改（默认）
@@ -254,7 +255,8 @@ chats/                 设计过程的对话记录
 | `S3_BUCKET` / `S3_ENDPOINT` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` / `S3_REGION` | 配置后附件走 MinIO / S3 兼容存储，留空用本地磁盘。切换步骤见 `deploy/README.md` |
 | `UPLOADS_LOCAL_FALLBACK` | 切换期双读：对象存储里没有的附件回落到本地磁盘。老文件搬完后设 `0` 关掉 |
 | `UPLOADS_LEGACY_ACCESS` | 历史附件（库里查不到归属的老对象）的降级策略：`authenticated`（默认）/ `deny` |
-| `UPLOAD_ORPHAN_TTL_HOURS` / `UPLOAD_SWEEP_INTERVAL_MINUTES` | 孤儿对象清理的保留时长与扫描间隔，默认 24 小时 / 60 分钟 |
+| `UPLOAD_ORPHAN_SWEEP` | 孤儿对象清理的总开关，**默认关闭**（程序不主动删用户数据）。设 `on` 才启用 |
+| `UPLOAD_ORPHAN_TTL_HOURS` / `UPLOAD_SWEEP_INTERVAL_MINUTES` | 上面开了才有意义：保留时长与扫描间隔，默认 24 小时 / 60 分钟 |
 | `CODEX_ENDPOINT` | Codex 本地 Agent 的调用地址（可选） |
 
 AI 供应商与 API Key 存在数据库里，通过「AI 配置」页面维护，接口不会把 Key 回传给前端。
