@@ -59,9 +59,10 @@ DEMO_PASSWORD=只在本地用的密码
 - 左右气泡布局，消息以 Markdown 存储与渲染（段落、列表、加粗、行内代码、链接、图片、@提及）。
 - 历史消息按游标分页，默认加载最新 50 条，顶部「加载更早的消息」或上滑继续往前翻。
 - 输入框默认单行、与回形针按钮等高；回形针从本地选**任意文件**，也支持直接粘贴图片或文件。
-- 附件按用途分两档，服务端按**真实字节**判定，不看客户端自报的类型和文件名（见下节）：
-  图片（PNG/JPEG/GIF/WebP）拼成 Markdown 图片内联显示；PDF/ZIP/DOCX 等普通文件拼成
-  链接，渲染成「文件卡片 + 下载」，永远不内联。
+- 附件按用途分三档，服务端按**真实字节**判定，不看客户端自报的类型和文件名（见下节）：
+  图片（PNG/JPEG/GIF/WebP，上限 8MB）拼成 Markdown 图片内联显示；视频（MP4/WebM，
+  上限 100MB）用浏览器原生 `<video>` 内联播放，回源支持 Range（206），能拖进度条；
+  PDF/ZIP/DOCX 等普通文件（上限 8MB）拼成链接，渲染成「文件卡片 + 下载」，永远不内联。
 - 输入 `@` 弹出提及气泡，支持 ↑↓ 选择、Enter/Tab 确认、Esc 关闭。
 - 群聊右栏显示成员、在线状态与「AI 掌握的上下文」摘要。
 - 新消息、AI 输入中、在线状态通过 SSE (`/api/stream`) 实时推送。
@@ -95,15 +96,19 @@ DEMO_PASSWORD=只在本地用的密码
 | | 判定 | 落盘 | 回源响应头 | 前端 |
 | --- | --- | --- | --- | --- |
 | 图片 | magic number 嗅探，只认 PNG / JPEG / GIF / WebP | 扩展名**由嗅探结果决定** | `image/*` + `nosniff` | 内联 `<img>` |
+| 视频 | 同一套嗅探，只认 MP4（`ftyp` + major brand 白名单）/ WebM（EBML + DocType `webm`） | 扩展名**由嗅探结果决定** | `video/*` + `nosniff` + `Accept-Ranges: bytes`，支持 206 / 416 | 内联 `<video>` |
 | 普通文件 | 其余任意内容照收 | 一律 `<uuid>.bin` | `application/octet-stream` + `Content-Disposition: attachment` + `nosniff` + `CSP: default-src 'none'` | 文件卡片 + 下载，永不内联 |
 | SVG | 开头 1KB 出现 `<svg` 即命中 | 拒收（400） | — | — |
 
 要点：
 
-- 客户端自报的 `Content-Type` 和文件名都**不参与安全判定**。声称是图片却拿不出图片字节
-  的一律 400（不会悄悄降级成附件）；原始文件名只作为**显示名**存库和进消息，绝不参与
+- 客户端自报的 `Content-Type` 和文件名都**不参与安全判定**。声称是图片/视频却拿不出对应
+  字节的一律 400（不会悄悄降级成附件）；原始文件名只作为**显示名**存库和进消息，绝不参与
   磁盘路径与 URL。
-- 头像只走图片这一档 —— 它一定会被渲染成 `<img>`。
+- 视频能内联，安全模型和图片完全一致：只有嗅探通过的才进这一档，MP4 / WebM 都不是可导航
+  可执行的类型，配 `nosniff` + 精确 `video/*` 之后，一份伪装成 `.mp4` 的 HTML 只会是个
+  放不出来的坏视频。
+- 头像只走图片这一档 —— 它一定会被渲染成 `<img>`，上限仍然是 8MB。
 - 回源响应头按扩展名白名单发，白名单之外一律强制下载，所以**修复之前**遗留在磁盘上的
   `.html` / `.svg` 从升级那一刻起也已经跑不起来了。
 - 对象可以存进 MinIO，但**浏览器永远不直连对象存储**：上面这组头全部是 Express 回源时加的，
@@ -185,6 +190,8 @@ server/                Express + node:sqlite 后端
   src/auth.js           bcrypt + JWT（15 天）、在线判定
   src/ai.js             供应商调用、@ 解析、回复策略、画像学习
   src/attachments.js    附件类型判定（magic number 嗅探）与 /uploads 回源响应头策略
+  src/range.js          Range 请求头解析（视频 206 / 416）
+  src/upload-temp.js    上传中转文件的读取与清理（成功 / 失败 / 断线 / 启动兜底）
   src/storage.js        附件存储（默认本地磁盘，配了 S3_BUCKET 就走 MinIO；切换期双读）
   src/object-store.js   对象存储的可替换接口：local / s3 / memory（测试用内存实现）
   src/s3-sign.js        AWS SigV4 签名（只够 PUT/GET/DELETE 单个对象，不引第三方 SDK）
@@ -226,7 +233,7 @@ chats/                 设计过程的对话记录
 | POST | `/api/conversations/:id/read` | 上报已读位置 |
 | PATCH | `/api/conversations/:id/prefs` | 置顶 / 免打扰（个人设置，只改自己那一份） |
 | GET | `/api/conversations/:id/ai-context` | 群内 AI 上下文摘要 |
-| POST | `/api/uploads` | 附件上传（图片按真实字节嗅探，其余作为只能下载的文件） |
+| POST | `/api/uploads` | 附件上传（图片 / 视频按真实字节嗅探，其余作为只能下载的文件）。返回 `kind` 为 `image` / `video` / `file` |
 | GET | `/api/stream` | SSE：新消息 / AI 输入中 / 在线状态 / 已读回执 |
 | GET/PUT | `/api/ai/settings` | AI 配置（管理员） |
 | POST | `/api/ai/test` | 测试连通性（管理员） |

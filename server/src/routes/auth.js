@@ -5,9 +5,10 @@ import {
   publicUser, signToken, tokenDaysFor, touch, verifyPassword,
 } from '../auth.js';
 import { AVATAR_NOT_IMAGE, inspectUpload } from '../attachments.js';
-import { putObject } from '../storage.js';
+import { putObjectFromFile } from '../storage.js';
 import { AI_NAME, providerOf, settings } from '../ai.js';
-import { upload } from '../upload-middleware.js';
+import { MAX_UPLOAD_BYTES, OVERSIZED_MESSAGE, upload } from '../upload-middleware.js';
+import { discardTemp, readSniffHead } from '../upload-temp.js';
 import { emitAll } from '../events.js';
 import { clearFailures, recordFailure, retryAfterMs } from '../rate-limit.js';
 import { limitUsage } from '../usage-limit.js';
@@ -103,22 +104,30 @@ router.patch('/me', authenticate, (req, res) => {
 });
 
 // 头像只走图片通道：它会被渲染成 <img>，必须是按真实字节确认过的图片（见 issue #22）。
-// 限流同样挂在 multer 前面，超额时不必把图片字节收进内存。
+// 视频那一档 100MB 的放宽**不适用于头像**：这里的上限仍然是 8MB。
+// 限流同样挂在 multer 前面，超额时不必把图片字节写进临时文件。
 router.post('/me/avatar', authenticate, limitUsage('upload'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: '请选择图片' });
-  const verdict = inspectUpload(req.file.buffer, req.file.mimetype);
-  if (verdict.kind !== 'image') {
-    return res.status(400).json({ error: verdict.kind === 'rejected' ? verdict.error : AVATAR_NOT_IMAGE });
+  try {
+    // multer 的硬上限是视频那一档的 100MB，头像的 8MB 得在这里自己卡。
+    // 体积排在格式前面，和聊天附件那条口一致（理由见 upload-middleware.js 的 sizeTierFor）。
+    if (req.file.size > MAX_UPLOAD_BYTES) return res.status(413).json({ error: OVERSIZED_MESSAGE });
+    const verdict = inspectUpload(await readSniffHead(req.file.path), req.file.mimetype);
+    if (verdict.kind !== 'image') {
+      return res.status(400).json({ error: verdict.kind === 'rejected' ? verdict.error : AVATAR_NOT_IMAGE });
+    }
+    const { url } = await putObjectFromFile({ path: req.file.path, ext: verdict.ext, mime: verdict.mime });
+    run('UPDATE users SET avatar_url = ? WHERE id = ?', url, req.user.id);
+    // 头像和聊天附件走同一个落盘入口，但**可见性规则不同**：头像是全员可见的
+    // （成员列表、@候选、历史消息里到处都是），所以它不进 attachments / attachment_refs，
+    // 回源时按 users.avatar_url 单独放行一档，见 attachment-access.js 的 isAvatar。
+    logEvent('avatar.updated', { userId: req.user.id, bytes: req.file.size, mime: verdict.mime });
+    const user = get('SELECT * FROM users WHERE id = ?', req.user.id);
+    emitAll('user-updated', { user: publicUser(user) });
+    res.json({ user: publicUser(user) });
+  } finally {
+    await discardTemp(req.file);
   }
-  const { url } = await putObject({ buffer: req.file.buffer, ext: verdict.ext, mime: verdict.mime });
-  run('UPDATE users SET avatar_url = ? WHERE id = ?', url, req.user.id);
-  // 头像和聊天附件走同一个 putObject，但**可见性规则不同**：头像是全员可见的
-  // （成员列表、@候选、历史消息里到处都是），所以它不进 attachments / attachment_refs，
-  // 回源时按 users.avatar_url 单独放行一档，见 attachment-access.js 的 isAvatar。
-  logEvent('avatar.updated', { userId: req.user.id, bytes: req.file.size, mime: verdict.mime });
-  const user = get('SELECT * FROM users WHERE id = ?', req.user.id);
-  emitAll('user-updated', { user: publicUser(user) });
-  res.json({ user: publicUser(user) });
 });
 
 router.post('/me/password', authenticate, (req, res) => {

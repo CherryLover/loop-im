@@ -158,9 +158,10 @@ export function rejectOverQuota(res, action, state, meta = {}) {
 /**
  * 「检查 + 立刻计数」的中间件，给上传和群写操作用。
  *
- * 这两类和发消息不同，故意数的是**尝试**而不是成功：上传的代价在于把最多 8MB
- * 字节收进内存，无论后面 inspectUpload 判没判过都已经付出了；所以中间件要挂在
- * multer 前面，超额时连收都不收。
+ * 这两类和发消息不同，故意数的是**尝试**而不是成功：上传的代价在于把最多 100MB
+ * 字节收下来（现在是写进中转文件，不再是收进内存，但带宽和磁盘照样要付），
+ * 无论后面 inspectUpload 判没判过都已经付出了；所以中间件要挂在 multer 前面，
+ * 超额时连收都不收。视频那一档把这个代价抬高了一个量级，这条更要紧了。
  */
 export const limitUsage = (action) => (req, res, next) => {
   const userId = req.user?.id;
