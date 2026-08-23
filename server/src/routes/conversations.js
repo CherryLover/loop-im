@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { all, get, run, now, uid } from '../db.js';
 import { authenticate, isDisabled, publicUser, requireAdmin } from '../auth.js';
 import { emitTo } from '../events.js';
+import { queuePush, reportPushFailure } from '../push-decide.js';
 import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
@@ -57,6 +58,18 @@ const prefsOf = (conversationId, userId) => {
   );
   return { pinned: !!row?.pinned, muted: !!row?.muted };
 };
+
+/**
+ * 把这个会话设成免打扰的人。推送判定的输入之一（push-decide.js 的规则 4）。
+ *
+ * ⚠️ 免打扰**一票否决**，@我 也不推。用户原话：「跟谁 @ 谁没关系，只要设置了免打扰
+ * 就不推送」。所以这里查的就是全部 muted 成员，不需要也不许再和 mentions 交叉。
+ * 完整出处和被否决的备选见 push-decide.js 顶部那段注释。
+ */
+const mutedMemberIds = (conversationId) => new Set(
+  all('SELECT user_id FROM conversation_members WHERE conversation_id = ? AND muted = 1', conversationId)
+    .map((r) => r.user_id),
+);
 
 /**
  * 会话列表的排序口径：置顶的整体排在前面，置顶组与非置顶组各自内部仍按
@@ -115,11 +128,43 @@ const readsOf = (conversationId, viewerId) => all(
   conversationId, viewerId,
 ).map((r) => ({ userId: r.user_id, lastReadAt: r.last_read_at }));
 
+/**
+ * 站内视频附件的 Markdown 写法（两种都算）。
+ *
+ * 判据是 **URL 的扩展名**，不是 Markdown 语法——口径和前端 `web/src/lib/md.ts` 的
+ * `isVideoAttachment` 完全一致，理由也一样：`/uploads/<key>` 里的扩展名是服务端按真实
+ * 字节嗅探出来再拼上去的（见 attachments.js），是服务端替我们背书过的事实；
+ * 而「写 `![片子](…)` 还是 `[片子](…)`」是发消息的人说了算的，同一段视频在库里两种写法
+ * 都有（Composer 现在走链接写法，AI 生成的和手打的都可能不一样）。只按语法区分，
+ * 等于让同一个附件在预览里有两种叫法。
+ *
+ * 和 md.ts 一样，先把 `?query` / `#hash` 切掉再看后缀：正文是用户手打的，
+ * `[x](/uploads/a.bin?v=.mp4)` 不能因此被叫成视频。
+ */
+const VIDEO_ATTACHMENT = /!?\[[^\]]*\]\(\/uploads\/[^)\s?#]*\.(?:mp4|webm)(?:[?#][^)]*)?\)/gi;
+
+/**
+ * 推送正文的长度。会话列表那一行是 26 字，推送要长得多。
+ *
+ * 为什么是 120 而不是「完整消息」：通知本身有系统级的长度限制，锁屏上折叠态
+ * iOS 大约 4 行、安卓 1~2 行，再长的部分**根本不会被显示**，只是白白占 payload
+ * （Web Push 的密文体有 4KB 上限，中文一个字 3 字节，一条超长正文能把它吃掉一大半）。
+ * 120 个字对 IM 消息来说已经覆盖了绝大多数「一条消息」的全长，超出的那一小撮
+ * 本来在通知里也读不完，点进去看才是对的。
+ */
+export const PUSH_PREVIEW_LIMIT = 120;
+
 // 截断走 text.js 的 truncate（按字素簇），不能用 slice —— slice 按 UTF-16 码元切，
 // 正好切在 emoji 中间就留下半个代理对，预览里是个 �。理由与样例见 text.js。
-const previewOf = (body, limit = 26) =>
+//
+// 导出是给推送用的（push-decide.js 的正文就是这里出来的）：会话列表最后一条消息和
+// 推送正文必须是**同一个函数**算出来的，不是同一份逻辑抄两遍，否则迟早只改一边。
+export const previewOf = (body, limit = 26) =>
   truncate(
-    body
+    String(body ?? '')
+      // 视频要排在图片和文件两条前面：它两种写法都占，被前面任何一条先吃掉就成了
+      // 「[图片]」或者「[文件] 名字」，视频在预览里就永远露不出面。
+      .replace(VIDEO_ATTACHMENT, '[视频]')
       .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
       // 非图片附件是普通链接，会话列表里只显示「[文件] 名字」，不把 /uploads/ 路径抖出来。
       .replace(/\[([^\]]*)\]\(\/uploads\/[^)]*\)/g, '[文件] $1')
@@ -527,6 +572,36 @@ function reportAiTurnFailure(err) {
 }
 
 /**
+ * 一条刚发出去的消息，该推的推走。**发射后不管**，和 runAiTurn 一模一样的形状。
+ *
+ * 调用点都在 `emitTo(...)` / `res.json(...)` 之后，所以这里绝不能把异常放出去：
+ * 响应已经发了，之后冒出来的 rejection 会被 Express 5 转给错误中间件，那时
+ * `headersSent` 已是 true，撞 `ERR_HTTP_HEADERS_SENT`，在日志里留下与真实故障
+ * 无关的堆栈（issue #19 那个坑）。所以两道都要有：
+ *   - `queuePush` 内部自己兜住所有异步错误、永远 resolve；
+ *   - 这里的 try 兜住同步部分（下面那两次 SQL 查询）；
+ *   - 末尾的 .catch 只是第三道保险。
+ * **发推送失败绝不能让发消息这个请求失败。**
+ *
+ * `insertSystemMessage` 那处不接：它发的是 `kind: 'system'`，规则 3 本来就会全挡掉，
+ * 不接省一次无谓的查询，也少一处将来会忘的调用点。
+ */
+export function pushForMessage(convo, message, audience, deps) {
+  try {
+    queuePush({
+      message,
+      conversation: convo,
+      // 推送正文和会话列表最后一条消息走的是同一个 previewOf，只是给的字数不同。
+      body: previewOf(message.body, PUSH_PREVIEW_LIMIT),
+      memberIds: audience,
+      mutedBy: mutedMemberIds(convo.id),
+    }, deps).catch(reportPushFailure);
+  } catch (err) {
+    reportPushFailure(err);
+  }
+}
+
+/**
  * 发消息接口把 201 响应发出去之后，才轮到 Aria 干活：学习沟通习惯、必要时生成回复。
  *
  * 这段工作必须自成一体、绝不向外抛。发消息的 handler 是 async 的，响应之后再出现的
@@ -545,6 +620,7 @@ export async function runAiTurn(ctx, deps = {}) {
     insert = insertAiMessage,
     emit = emitTo,
     onError = reportAiTurnFailure,
+    push = pushForMessage,
   } = deps;
 
   const safeEmit = (event, data) => {
@@ -565,7 +641,12 @@ export async function runAiTurn(ctx, deps = {}) {
       try {
         const { body: reply } = await generate(convo, userId);
         const row = insert(convo.id, reply);
-        safeEmit('message', { message: serializeMessage(row, { name: 'Aria' }) });
+        const aiMessage = serializeMessage(row, { name: 'Aria' });
+        safeEmit('message', { message: aiMessage });
+        // ⚠️ Aria 的回复**不做任何特例**，按同一套规则推给所有没设免打扰的成员。
+        // 方案文档 §E.1 Q3 倾向「只推给触发她的那个人」，已被用户否决——要的是规则统一。
+        // 所以这里传的 audience 就是整个会话，和上面用户消息那处一字不差。
+        push(convo, aiMessage, audience);
       } catch (err) {
         onError(err);
       } finally {
@@ -627,6 +708,10 @@ router.post('/:id/messages', (req, res) => {
   const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), req.user);
   emitTo(audience, 'message', { message });
   res.status(201).json({ message });
+
+  // 响应已经发出去了。下面这两步都是「发射后不管」，任何一步失败都不许影响
+  // 这次发消息的结果（消息已经入库、201 已经回了）。
+  pushForMessage(convo, message, audience);
 
   // Aria: 被 @ 时必回；未被 @ 时按「群聊静默读取」决定是否读取上下文并学习沟通习惯。
   // 响应已经发出，这里只能「发射后不管」：runAiTurn 自己兜住所有错误，
