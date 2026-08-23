@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { ChevronLeft, Settings } from 'lucide-react';
 import { Avatar } from '../components/Avatar';
+import { PasswordInput } from '../components/PasswordInput';
 import { api } from '../lib/api';
 import { clock, relativeTime } from '../lib/format';
 import type { AiOverview, AiProfileDetail } from '../lib/types';
@@ -265,9 +266,8 @@ function AiConfig({
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div className="section-label">API Key / 本地凭据</div>
-          <input
+          <PasswordInput
             className="input input--mono"
-            type="password"
             placeholder={overview.hasApiKey ? '已保存，留空表示不修改' : 'sk-…'}
             value={apiKey}
             onChange={(e) => {

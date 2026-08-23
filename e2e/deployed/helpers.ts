@@ -31,7 +31,7 @@ export async function shot(page: Page, name: string) {
 export async function signIn(page: Page, who: { email: string; password: string }, remember = true) {
   await page.goto('/');
   await page.getByLabel('邮箱').fill(who.email);
-  await page.getByLabel('密码').fill(who.password);
+  await page.getByLabel('密码', { exact: true }).fill(who.password);
   if (!remember) {
     const box = page.getByRole('checkbox');
     if (await box.count()) await box.first().uncheck();

@@ -359,6 +359,144 @@ describe('权限申请是用户主动触发的', () => {
   });
 });
 
+// 「点了开启，但好像没有消息发出来」这条反馈，三件事叠在一起：
+// 1) 设计上只在用户看不见消息时才弹（上面那一组已经锁死，不改判据）；
+// 2) 开启时没有任何反馈——真缺陷，补一条确认通知 + 把「什么时候才会弹」写在界面上；
+// 3) 非 HTTPS 访问时浏览器直接禁用 Notification，以前只会含糊地说「浏览器不支持」。
+describe('开启时要给反馈，别让人以为坏了', () => {
+  it('开成功的当下立刻弹一条确认通知，用户马上知道通道是通的', async () => {
+    stubNotification('default');
+    requestPermission = vi.fn(async () => {
+      FakeNotification.permission = 'granted';
+      return 'granted' as NotificationPermission;
+    });
+    await mount();
+
+    await openProfile();
+    await userEvent.click(await screen.findByRole('button', { name: /已关闭/ }));
+
+    await waitFor(() => expect(shown).toHaveLength(1));
+    expect(shown[0].title).toBe('桌面通知已开启');
+    expect(shown[0].options.body).toContain('切到别的标签页');
+  });
+
+  it('权限没拿到就不会弹这条确认（否则等于骗人）', async () => {
+    stubNotification('default');
+    requestPermission = vi.fn(async () => {
+      FakeNotification.permission = 'denied';
+      return 'denied' as NotificationPermission;
+    });
+    await mount();
+
+    await openProfile();
+    await userEvent.click(await screen.findByRole('button', { name: /已关闭/ }));
+
+    await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
+    expect(shown).toHaveLength(0);
+  });
+
+  it('关掉开关不会弹通知', async () => {
+    stubNotification();
+    prefOn();
+    await mount();
+
+    await openProfile();
+    await userEvent.click(await screen.findByRole('button', { name: /已开启/ }));
+
+    await screen.findByRole('button', { name: /已关闭/ });
+    expect(shown).toHaveLength(0);
+  });
+
+  it('界面上写明了什么时候才会弹——开着却停在聊天页是不弹的，不写没人猜得到', async () => {
+    stubNotification();
+    prefOn();
+    await mount();
+
+    await openProfile();
+    const hint = await screen.findByText(/只在你看不见这条消息时才弹/);
+    expect(hint).toHaveTextContent('切到别的标签页');
+    expect(hint).toHaveTextContent('别的应用');
+    expect(hint).toHaveTextContent('联系人');
+    expect(hint).toHaveTextContent('正开着这个会话就不弹');
+  });
+
+  it('还没开的时候就说清楚：会申请一次权限，之后只在看不见时弹', async () => {
+    stubNotification('default');
+    await mount();
+
+    await openProfile();
+    const hint = await screen.findByText(/打开后会向浏览器申请一次通知权限/);
+    expect(hint).toHaveTextContent('立刻弹一条确认通知');
+    expect(hint).toHaveTextContent('切到别的标签页');
+  });
+
+  it('置灰的按钮把原因挂在自己身上（aria-describedby），不是只留一个点不动的灰按钮', async () => {
+    stubNotification('denied');
+    await mount();
+
+    await openProfile();
+    const toggle = await screen.findByRole('button', { name: /已关闭/ });
+    expect(toggle).toBeDisabled();
+    const hint = document.getElementById(toggle.getAttribute('aria-describedby') || '');
+    expect(hint).toHaveTextContent('浏览器已拒绝本站的通知权限');
+    expect(toggle).toHaveAttribute('title', expect.stringContaining('浏览器已拒绝本站的通知权限'));
+  });
+});
+
+describe('非 HTTPS 访问（非安全上下文）', () => {
+  // Notification 是 [SecureContext] 接口：走 http://内网IP 时浏览器干脆不给，
+  // 权限申请连弹都不弹。以前这一档会被报成「当前浏览器不支持」——把 URL 的问题
+  // 赖给浏览器，用户换个浏览器还是不行。
+  it('明确告诉用户是 HTTPS 的问题，而不是浏览器的问题', async () => {
+    vi.stubGlobal('isSecureContext', false);
+    stubNotification('default');
+    await mount();
+
+    await openProfile();
+    const hint = await screen.findByText(/当前不是 HTTPS/);
+    expect(hint).toHaveTextContent('浏览器禁用了桌面通知');
+    expect(hint).toHaveTextContent('https://');
+    expect(screen.queryByText('当前浏览器不支持桌面通知。')).not.toBeInTheDocument();
+  });
+
+  it('开关置灰，点不出一次注定失败的权限申请', async () => {
+    vi.stubGlobal('isSecureContext', false);
+    stubNotification('default');
+    await mount();
+
+    await openProfile();
+    const toggle = await screen.findByRole('button', { name: /已关闭/ });
+    expect(toggle).toBeDisabled();
+    await userEvent.click(toggle, { pointerEventsCheck: 0 });
+    expect(requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('即便偏好开着也不会弹消息通知——环境不允许，静默失灵才是最坏的', async () => {
+    vi.stubGlobal('isSecureContext', false);
+    vi.spyOn(Object.getPrototypeOf(document), 'hidden' as never, 'get').mockReturnValue(true);
+    stubNotification();                       // 假装 Notification 还在且已授权
+    prefOn();
+    await mount();
+
+    await incoming();
+
+    expect(shown).toHaveLength(0);
+    expect(await screen.findByText('内容 m2')).toBeInTheDocument();
+  });
+
+  it('jsdom / 老浏览器上 isSecureContext 是 undefined，属于「不知道」，不能据此判死', async () => {
+    // 这条是防呆：如果把判断写成 !window.isSecureContext，上面所有用例会一起变绿而功能全废。
+    expect(window.isSecureContext).toBeUndefined();
+    vi.spyOn(Object.getPrototypeOf(document), 'hidden' as never, 'get').mockReturnValue(true);
+    stubNotification();
+    prefOn();
+    await mount();
+
+    await incoming();
+    expect(shown).toHaveLength(1);
+  });
+});
+
 describe('点通知回到对应会话', () => {
   it('聚焦窗口、切到会话页，并选中那条消息所在的会话', async () => {
     stubNotification();
