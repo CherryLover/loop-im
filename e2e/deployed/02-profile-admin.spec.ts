@@ -150,7 +150,7 @@ test('TC-READ-01/07 未读徽标与已读回执：两个真实浏览器互相看
  * 置顶 / 免打扰
  * ──────────────────────────────────────────────────────────── */
 
-test('TC-PREF-01/04/05 置顶与免打扰：置顶跳到最前，免打扰不清未读', async ({ page }) => {
+test('TC-PREF-01/04 置顶与免打扰：置顶跳到最前，免打扰有明确记号', async ({ page }) => {
   watchErrors(page, errors);
   await signIn(page, ADMIN);
 
@@ -167,7 +167,8 @@ test('TC-PREF-01/04/05 置顶与免打扰：置顶跳到最前，免打扰不清
   await expect(page.locator('[aria-label="已置顶"]').first()).toBeVisible();
   await shot(page, '28-置顶');
 
-  // 免打扰
+  // 免打扰。「免打扰不清未读」（TC-PREF-05）需要一个本来就有未读的会话，
+  // 由 server/test/conversation-prefs.test.js 与 ChatPage.prefs.test.tsx 覆盖。
   await rows.first().locator('[aria-label^="免打扰"]').click();
   await expect(page.locator('[aria-label="已免打扰"]').first()).toBeVisible({ timeout: 15_000 });
   await shot(page, '29-免打扰');
@@ -181,7 +182,7 @@ test('TC-PREF-01/04/05 置顶与免打扰：置顶跳到最前，免打扰不清
  * AI 管理后台
  * ──────────────────────────────────────────────────────────── */
 
-test('TC-ADMIN-01~09 AI 管理：状态、画像二级页、原始对话、AI 配置', async ({ page }) => {
+test('TC-ADMIN-02~09 AI 管理：统计、画像二级页、原始对话、AI 配置', async ({ page }) => {
   watchErrors(page, errors);
   await signIn(page, ADMIN);
   await page.locator('.nav-btn[title="AI 管理"]').click();
@@ -224,13 +225,15 @@ test('TC-ADMIN-01~09 AI 管理：状态、画像二级页、原始对话、AI �
   console.log('    换供应商后旧的测试结果已清掉 ✅');
 });
 
-test('TC-CONTACT-04/05 普通成员看不到管理入口', async ({ page }) => {
+test('TC-CONTACT-04 普通成员看不到管理入口', async ({ page }) => {
   watchErrors(page, errors);
   await signIn(page, YI);
   await page.locator('.nav-btn[title="联系人"]').click();
   await expect(page.locator('.contacts__bar').getByRole('button', { name: '添加联系人' })).toHaveCount(0);
   await expect(page.locator('.contacts__bar').getByRole('button', { name: '建群' })).toHaveCount(0);
   await expect(page.locator('.nav-btn[title="AI 管理"]')).toHaveCount(0);
+  // 这里只验「前端没有入口」。「成员直接打管理接口要 403」（TC-CONTACT-05）
+  // 是后端的事，由 server/test/auth.test.js 覆盖 —— 前端藏起来 ≠ 安全。
   await shot(page, '35-成员无管理入口');
 });
 
@@ -287,7 +290,7 @@ test('TC-CONTACT-06/08/09/13 添加联系人、重置密码、停用与恢复', 
  * 响应式
  * ──────────────────────────────────────────────────────────── */
 
-test('TC-UI-02/03 移动端：底部标签栏，列表与详情互相切换', async ({ browser }) => {
+test('TC-UI-02 移动端：底部标签栏，会话列表与详情互相切换', async ({ browser }) => {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await ctx.newPage();
   watchErrors(page, errors);

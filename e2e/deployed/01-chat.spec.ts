@@ -28,12 +28,14 @@ test('TC-AUTH-01 登录成功：进入应用并显示已上线', async ({ page }
   await shot(page, '02-登录成功');
 });
 
-test('TC-GROUP-01/09 建群：直接进新群，Aria 默认在群里，留下系统提示', async ({ page }) => {
+test('TC-GROUP-01 建群：直接进新群，4 名成员含 Aria，Aria 发出开场白', async ({ page }) => {
   watchErrors(page, errors);
   await signIn(page, ADMIN);
   await createGroup(page, GROUP, [JIA.name, YI.name]);
   // 建群人 + 2 名成员 + Aria
   await expect(page.locator('.members__row')).toHaveCount(4);
+  // 注意这是 Aria 发的开场白（bubble--ai），不是成员变动那种居中的系统提示 ——
+  // 系统提示（TC-GROUP-09）由 server/test/group-members.test.js 覆盖。
   await expect(page.locator('.bubble--ai').last()).toContainText('群聊已创建');
   await shot(page, '03-建群成功');
 });
@@ -120,7 +122,7 @@ test('TC-CHAT-09 @ 提及气泡：↑↓ 选择，Enter 确认', async ({ page }
   await page.keyboard.press('Escape');
 });
 
-test('TC-AI-01 群里 @Aria：出现输入中，然后拿到回复', async ({ page }) => {
+test('TC-AI-01 群里 @Aria：拿到回复', async ({ page }) => {
   watchErrors(page, errors);
   await signIn(page, ADMIN);
   await page.locator('.convo', { hasText: GROUP }).first().click();
@@ -134,6 +136,8 @@ test('TC-AI-01 群里 @Aria：出现输入中，然后拿到回复', async ({ pa
   await composer.pressSequentially('这个群现在进度怎么样？');
   await page.keyboard.press('Enter');
 
+  // 只断言「回复来了」。中间那个「输入中」是瞬时状态，本地模拟回复太快抓不稳，
+  // 它由 web/src/lib/useStream.test.ts 的事件分发覆盖。
   await expect(page.locator('.bubble--ai')).toHaveCount(before + 1, { timeout: 25_000 });
   await expect(page.locator('.bubble--ai').last()).toContainText('已收到提及');
   await shot(page, '09-AI回复');
