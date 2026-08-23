@@ -720,6 +720,13 @@ input, textarea { font-family: inherit; }
 /* 会晕的人把转速降下来，但保留「在动」这一信息——完全静止就又变回「没反应」了。 */
 @media (prefers-reduced-motion: reduce) {
   .avatar-slot__spinner { animation-duration: 2.4s; }
+}
+/* ↑ 这个 `}` 是补上的。之前它漏了，而 CSS 的容错是「到文件末尾自动收口」——
+   于是下面**整段**图片/预览的样式全都掉进了这个
+   `@media (prefers-reduced-motion: reduce)` 里，只对开了「减少动态效果」的人生效。
+   浏览器不会报错，构建也不会报错，jsdom 更测不出来（它压根不算样式），
+   所以这个坑一直是绿的。缩略图的 1:1 裁切、加载蒙版、预览层的定位，
+   对绝大多数用户其实一条都没生效过。 */
 
 /* ---------- 聊天里的图片：1:1 缩略图 + 加载状态 + 看原图 ---------- */
 /* 整段追加在文件末尾，上面已有的 `.md img` / `.md .mdvideo` 一个字都没改：
@@ -811,8 +818,15 @@ input, textarea { font-family: inherit; }
   max-height: 240px;
 }
 
-/* 看原图的那一层。z-index 夹在 .scrim(20) 和 .toast(30) 中间：
-   要盖住聊天列表，但不该把提示条也压下去。 */
+/* ---------- 看原图：盖住整页的蒙版 + 会话图片画廊 ---------- */
+
+/* 这一层由 ImageViewer 用 createPortal 挂在 <body> 下，不在 #root 里面。
+   这才是 `position: fixed` 真的等于「整个视口」的前提 —— 长在 .chat__scroll 里的时候，
+   祖先上任何一个 transform / filter / contain 都会把它的定位基准换成那个祖先。
+
+   z-index 夹在 .scrim(20) 和 .toast(30) 中间：要盖住整页，但不该把提示条也压下去
+   （.toast 在 #root 里，而 #root 没有自己的 z-index，所以两者是在同一个根层叠上下文里
+   直接比大小的，30 仍然赢 25）。 */
 .imgview {
   position: fixed;
   inset: 0;
@@ -820,10 +834,20 @@ input, textarea { font-family: inherit; }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 28px;
+  /* 上下留出关闭按钮和底部指示器的位置，图不会被它们压住。 */
+  padding: 60px 68px 72px;
   background: rgba(0, 0, 0, .82);
   animation: pop .14s ease-out;
+  /* 横划翻页是我们自己处理的。交给浏览器的话，在移动端会变成「左右滑 = 后退/前进」
+     或者页面横向橡皮筋，手势会被抢走。pan-y 保留竖向（长图还要能拖）。 */
+  touch-action: pan-y;
+  /* 大图是 <img>，长按/拖拽会触发浏览器自带的拖图和选中，划动时很碍事。 */
+  -webkit-user-select: none;
+  user-select: none;
 }
+
+/* 大图**不裁切**：缩略图那份是 object-fit: cover 切过的方格，
+   点开就是为了看完整的画面，所以这里必须 contain，等比缩到框里为止。 */
 .imgview__img {
   max-width: 100%;
   max-height: 100%;
@@ -832,7 +856,76 @@ input, textarea { font-family: inherit; }
   object-fit: contain;
   border-radius: 8px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
+  -webkit-user-drag: none;
 }
+/* 还没加载好 / 加载失败时先别把半张图或者浏览器的碎图图标露出来，
+   位置由旁边的 .imgview__status 顶着说明。 */
+.imgview__img[data-state="loading"] { opacity: 0; }
+.imgview__img[data-state="error"] { display: none; }
+
+/* 大图的加载态。和缩略图同一个道理：别给一片纯黑让人以为卡死了。 */
+.imgview__status {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .1);
+  color: rgba(255, 255, 255, .82);
+  font-size: 13px;
+}
+
+/* 前后翻的箭头。压在图上，不占版面 —— 竖图两侧本来就是黑边。 */
+.imgview__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, .28);
+  background: rgba(0, 0, 0, .5);
+  color: #fff;
+  cursor: pointer;
+}
+.imgview__nav--prev { left: 12px; }
+.imgview__nav--next { right: 12px; }
+.imgview__nav:hover:not(:disabled) { background: rgba(0, 0, 0, .78); }
+.imgview__nav:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+/* 到头了就明确地灰掉，不循环。看得见边界，才知道「这个方向没有了」。 */
+.imgview__nav:disabled { opacity: .28; cursor: default; }
+
+/* 底部的指示器：第几张 / 共几张，外加「这个数只算已加载的消息」那句实话。 */
+.imgview__bar {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  max-width: min(92vw, 520px);
+  padding: 7px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, .55);
+  text-align: center;
+}
+.imgview__count {
+  color: #fff;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;   /* 翻页时数字不跳宽 */
+}
+.imgview__hint {
+  color: rgba(255, 255, 255, .66);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
 .imgview__close {
   position: absolute;
   top: 14px;
@@ -861,5 +954,9 @@ input, textarea { font-family: inherit; }
   /* 手机上气泡最宽 78vw，160 的方格在窄屏里显得压手，收一点。 */
   .md .mdimg { --mdimg-size: 140px; }
   .md .mdvideo { max-width: min(100%, 240px); max-height: 200px; }
-  .imgview { padding: 14px; }
+  /* 窄屏上左右不再给箭头留位置：那儿主要靠手指划，箭头缩小压到图边上就行。 */
+  .imgview { padding: 52px 10px 66px; }
+  .imgview__nav { width: 38px; height: 38px; }
+  .imgview__nav--prev { left: 4px; }
+  .imgview__nav--next { right: 4px; }
 }

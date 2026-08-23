@@ -10,8 +10,13 @@ interface MarkdownBodyProps {
   /**
    * 点了缩略图：把要看的原图交出去。不传就不给放大入口
    * （缩略图仍然渲染，只是点不动）。
+   *
+   * 第三个参数是**被点的那个 `<img>` 节点本身**。调用方要把这一张定位到
+   * 整个会话的图片画廊里，只靠 src 是不够的：同一张图在会话里发过两次就有两个
+   * 一模一样的 src，按 src 找会永远命中第一次那张，翻页起点就错了。
+   * 交出节点，调用方用引用相等去比，不会有歧义。
    */
-  onOpenImage?: (src: string, alt: string) => void;
+  onOpenImage?: (src: string, alt: string, el: HTMLImageElement) => void;
 }
 
 /**
@@ -91,9 +96,9 @@ export function MarkdownBody({ body, className, onOpenImage }: MarkdownBodyProps
     if (!onOpenImage) return;
     const target = e.target as HTMLElement | null;
     const box = target?.closest?.('button.mdimg');
-    const img = box?.querySelector('img.mdimg__img');
+    const img = box?.querySelector<HTMLImageElement>('img.mdimg__img');
     if (!img || box?.getAttribute('data-state') === 'error') return;
-    onOpenImage(img.getAttribute('src') || '', img.getAttribute('alt') || '');
+    onOpenImage(img.getAttribute('src') || '', img.getAttribute('alt') || '', img);
   }
 
   return (
