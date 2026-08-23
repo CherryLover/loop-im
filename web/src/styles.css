@@ -72,7 +72,11 @@ input, textarea { font-family: inherit; }
   margin: 6px 0; padding: 2px 0 2px 10px;
   border-left: 3px solid var(--border2); color: var(--muted);
 }
-.bubble--me .md blockquote { border-left-color: rgba(255, 255, 255, .45); color: rgba(255, 255, 255, .85); }
+/* 注意选择器里**没有** `.md`：MessageList 把 `md`、`bubble`、`bubble--me` 三个类
+   放在**同一个** div 上（`className="md bubble bubble--me"`），所以
+   `.bubble--me .md blockquote` 这种后代写法一个元素都匹配不到 —— 它要求 .md 是
+   .bubble--me 的**子孙**。这条以前就是这么写的，等于一直没生效；顺手改对。 */
+.bubble--me blockquote { border-left-color: rgba(255, 255, 255, .45); color: rgba(255, 255, 255, .85); }
 .md .mdcode {
   margin: 6px 0; padding: 8px 10px; border-radius: 8px;
   background: var(--surface3); overflow-x: auto;
@@ -84,6 +88,35 @@ input, textarea { font-family: inherit; }
 .md .mention { color: var(--accent-text); font-weight: 700; }
 /* Mentions inside the sender's own (filled) bubble need to invert instead. */
 .bubble--me .mention { color: #fff; }
+
+/* ---- 自己那侧气泡里的代码 / 链接：必须反相 ----------------------------
+   .bubble--me 是实色紫 #5B4BC4 + 白字，而 --surface3 是给「浅色页面底」配的：
+   浅色主题下是 #E8E5E0，白字压上去只有 1.26:1 —— 不是「看着累」，是根本读不出来；
+   深色主题下是 #302E38，文字够黑白分明，但一块深灰压在紫气泡上明度比只有 2.06，
+   就是用户说的「三个颜色叠在一起」。
+
+   所以这里不套任何 --surfaceN，改成**把气泡自己的紫压暗**：
+     - 白字对比不降反升（8.7~9.5:1，远超 AA 的 4.5:1），
+       用半透明白垫底则是越垫越糊（.16 白只剩 4.55:1），这正是用户抱怨的方向；
+     - 不引入第三种色相，气泡里从头到尾只有一种紫；
+     - --me 在浅色和深色主题里都是 #5B4BC4，所以一条规则同时覆盖两个主题，
+       不需要再写 [data-theme='dark'] 的分支。
+   注意**没有**去动 --me 本身：紫色是全站主色，问题出在气泡内部元素没适配。
+
+   ⚠ 选择器一律写成 `.bubble--me X`，不能写 `.bubble--me .md X`：
+   md / bubble / bubble--me 是同一个 div 上的三个类（见上面 blockquote 那条的说明）。
+   特异度上 `.bubble--me code` 和 `.md code` 打平，靠的是「排在后面」赢。 */
+/* 行内代码：rgba(0,0,0,.20) → 实际 #493C9D，白字 8.69:1 */
+.bubble--me code { background: rgba(0, 0, 0, .20); }
+/* 代码块：再压深一点，让整块和气泡分得开。rgba(0,0,0,.26) → #433891，白字 9.49:1 */
+.bubble--me .mdcode { background: rgba(0, 0, 0, .26); }
+/* 代码块里的 <code>：`.md .mdcode code`(0,2,1) 本来就压得过 `.bubble--me code`(0,2,0)，
+   但这里的先后 + 特异度关系太容易被后人一改就翻车，显式钉死，省得暗块上再叠一层暗。 */
+.bubble--me .mdcode code { background: none; }
+/* 链接。全局 a 用的是 --accent，压在紫气泡上浅色主题 1.79:1、深色 2.27:1，
+   连 3:1 都不到。改成白字 6.46:1，并且**补一条下划线** —— 不能只靠颜色区分链接。
+   .filecard 也是 <a>，它自己有一整套卡片样式（且已经做过反相），排除掉。 */
+.bubble--me a:not(.filecard) { color: #fff; text-decoration: underline; }
 
 /* 视频附件：浏览器原生播放器，没有引入任何播放器依赖。宽度跟着图片那一档走。 */
 .md .mdvideo {
@@ -108,8 +141,10 @@ input, textarea { font-family: inherit; }
 .md .filecard__hint { flex: none; font-size: 10.5px; color: var(--muted); }
 .bubble--me .filecard { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .3); }
 .bubble--me .filecard__hint { color: rgba(255, 255, 255, .8); }
-/* 附件条上的文件图标（Composer 的待发送预览）。 */
-.attach__thumb--file { color: var(--muted); }
+/* 视频的边框和图片一样是 --border（给浅色页面底配的），压在紫气泡上浅色主题偏亮、
+   深色主题又是一道暗线，两个主题各歪一边。对齐 .bubble--me .mdimg 的既有做法。 */
+.bubble--me .mdvideo { border-color: rgba(255, 255, 255, .3); }
+/* （`.attach__thumb--file` 原来错放在这一段，已挪到下面 Composer 附件那一段。） */
 
 /* ---------- Shared primitives ---------- */
 .app { height: 100%; display: flex; flex-direction: column; background: var(--surface); position: relative; }
@@ -400,24 +435,136 @@ input, textarea { font-family: inherit; }
   height: 40px; font-size: 13.5px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow-sm); flex: none;
 }
 .composer__send:disabled { opacity: .5; cursor: default; }
+/* ---- 待发送附件：横向一排 1:1 方块 -----------------------------------
+   以前每个附件是一整行（缩略图 + 文件名 + 状态 + 叉），竖着堆。选满 9 个就是 9 行，
+   `max-height: 208px` 只是让它内部滚动，可它本身仍然吃掉 208px 的垂直空间 ——
+   390px 的手机上这一坨加上引用条，输入框就被顶出去了。
+
+   改成横排方块之后，**不管选 1 个还是 9 个，垂直占用都是固定的一格**，
+   这才是「挤掉输入框」的真正解法；宽度不够就横向滚，横向的空间手机上不稀缺。
+
+   --attach-size 就是方块边长，要微调只改这一个值（下面 720px 断点里还有一份）。
+   为什么是 72px 而不是原来缩略图的 26px：
+     - 26px 是「和文件名并排」时的尺寸，它只是个色块提示；一旦文件名退到角落，
+       方块本身就得承担「这是哪张图」的识别任务，26px 认不出内容。
+     - 方块右上角要放移除按钮。WCAG 2.5.8 的最小目标尺寸是 24×24，
+       26px 的格子里塞不下，72px 里它只占约 9% 的面积，不挡画面。
+     - 底部还要留一条文件名，10px 字 + 上下 2px ≈ 14px，占 72px 的不到两成。
+     - 9 个 × (72 + 8) = 720px，桌面上基本一排放得下，手机上滚两三屏。 */
+.attach-list {
+  --attach-size: 72px;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  /* 放不下就横向滚。overscroll-behavior 防止滑到头之后把整页带着走
+     （iOS Safari 上还会误触「侧滑返回」）。 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  /* 滚动条压在方块底边上会盖住文件名，留出它的高度。 */
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  /* 默认那条 9px 的滚动条放在 72px 的方块下面太粗，收细一档。
+     Firefox 走 scrollbar-width，WebKit/Blink 走下面的伪元素，两边都给。 */
+  scrollbar-width: thin;
+}
+.attach-list::-webkit-scrollbar { height: 6px; }
+.attach-list::-webkit-scrollbar-thumb { border-width: 1px; }
+
 .attach {
-  display: flex; align-items: center; gap: 8px; background: var(--surface2);
-  border: 1px solid var(--border); border-radius: 10px; padding: 7px 9px;
-  margin-bottom: 8px; font-size: 12px;
+  position: relative;
+  flex: none;                          /* 不许被挤扁，挤扁就不是 1:1 了 */
+  width: var(--attach-size);
+  height: var(--attach-size);          /* 和宽度相等 —— 这就是「1:1」 */
+  scroll-snap-align: start;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 12px;
 }
+/* 缩略图铺满整格。非图片的那一档没有缩略图，居中放一个大图标 —— 文件名在下面那条，
+   所以格子里只要说清「这是个视频 / 这是个文件」就够了。 */
 .attach__thumb {
-  width: 26px; height: 26px; border-radius: 6px; background: var(--surface3);
-  display: flex; align-items: center; justify-content: center; font-size: 11px; overflow: hidden;
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface3);
 }
-.attach__thumb img { width: 100%; height: 100%; object-fit: cover; }
-.attach__name { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; }
-.attach__state { color: var(--muted); }
-.attach__x { margin-left: auto; border: none; background: transparent; color: var(--muted); cursor: pointer; display: flex; }
-/* 多选之后附件是一列。最多 9 条，超过一屏就自己滚，别把输入框挤出可视区。 */
-.attach-list { display: flex; flex-direction: column; max-height: 208px; overflow-y: auto; }
-.attach-list .attach { margin-bottom: 6px; }
+.attach__thumb img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+.attach__thumb--file { color: var(--muted); }
+
+/* 文件名压在方块底部。72px 宽只放得下六七个字，完整名字在 .attach 的 title 上。
+   底衬用纯黑半透明而不是主题色：它可能压在任何一张图上，只有固定的暗底
+   才能保证白字始终可读（最坏情况——纯白图——白字仍有 5.74:1）。 */
+.attach__name {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 2px 4px;
+  background: rgba(0, 0, 0, .6);
+  color: #fff;
+  font-family: 'JetBrains Mono', monospace; font-size: 10px; line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 状态。ready 这一档（「已上传，将作为图片附件发送」之类）不该占版面 ——
+   缩略图本身就说明它好了 —— 但要留在 DOM 里给读屏，所以是视觉隐藏而不是不渲染。 */
+.attach__state {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+/* 上传中：整格压一层暗罩 + 居中文案。文案短，72px 里放得下。 */
+.attach[data-state='uploading'] .attach__state {
+  position: absolute; inset: 0; width: auto; height: auto; margin: 0;
+  clip-path: none; padding: 0 4px;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  background: rgba(0, 0, 0, .6); color: #fff; font-size: 10.5px; line-height: 1.4;
+}
+/* 失败：三个**互相独立**的标记，任意一个单独看都能判断出「这个坏了」——
+   1) 虚线边框（形状），2) 右下角的 ⚠（图形），3) 下面 .attach-alert 的整句原因（文字）。
+   颜色只是第四层强调，色觉障碍不看颜色也不会漏掉。 */
+.attach[data-state='error'] { border: 1px dashed var(--anx); }
+.attach[data-state='error'] .attach__thumb { opacity: .45; }
+.attach[data-state='error']::after {
+  content: '⚠';
+  position: absolute; left: 4px; bottom: 20px;
+  width: 18px; height: 18px; border-radius: 99px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .68); color: #fff; font-size: 11px; line-height: 1;
+}
+
+/* 移除按钮钉在右上角。**不做 hover 才显示** —— 触屏没有 hover，藏起来等于删不掉。
+   26×26 的点击区满足 WCAG 2.5.8 的 24×24 最小目标尺寸；视觉上是 22px 的深色圆点，
+   底衬和文件名条一样用固定的黑半透明，压在任何一张图上都看得见（最坏 5.74:1）。 */
+.attach__x {
+  position: absolute; top: 2px; right: 2px;
+  width: 26px; height: 26px; padding: 0;
+  border: none; background: transparent; color: #fff;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.attach__x::before {
+  content: ''; position: absolute; inset: 2px;
+  border-radius: 99px; background: rgba(0, 0, 0, .6);
+}
+/* ::before 是生成的第一个子节点，svg 排在它后面，同为定位元素时后画的在上。 */
+.attach__x svg { position: relative; }
+.attach__x:hover::before { background: rgba(0, 0, 0, .82); }
+.attach__x:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; border-radius: 99px; }
+
 .attach-list__count { color: var(--muted); font-size: 11.5px; margin-bottom: 6px; }
-/* 「超出上限」这类一次性提示，和附件条区分开。 */
+/* 上传失败的完整原因，一个附件一行。放在方块外面是因为报错可能很长，
+   格子里只能截断，而这句恰恰要读全。 */
+.attach-alerts { margin-bottom: 8px; }
+.attach-alert {
+  margin: 0 0 2px; font-size: 11.5px; line-height: 1.5; color: var(--anx);
+  overflow-wrap: anywhere;
+}
+.attach-alert:last-child { margin-bottom: 0; }
+/* 这一行里的 .attach__state 是可见的（它就是那句原因），把上面的视觉隐藏还原回来。 */
+.attach-alert .attach__state {
+  position: static; width: auto; height: auto; margin: 0; clip-path: none; white-space: normal;
+}
+/* 「超出上限」这类一次性提示，和附件方块区分开。 */
 .attach-note { color: var(--anx); font-size: 11.5px; margin-bottom: 8px; }
 
 /* ---- 引用回复 -------------------------------------------------------- */
@@ -674,6 +821,9 @@ input, textarea { font-family: inherit; }
   .chat__back { display: flex; }
   .msg__col { max-width: 78vw; }
   .page { padding: 18px 14px 22px; }
+  /* 手机上垂直空间最紧张，方块收一档；72 → 64 还认得出内容，
+     整条附件区（含滚动条留白）从 86px 降到 78px。 */
+  .attach-list { --attach-size: 64px; }
   .col-scene, .col-last { display: none; }
   .col-person { width: 130px; }
   .col-keys { min-width: 120px; }
