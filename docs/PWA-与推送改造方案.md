@@ -89,8 +89,14 @@ Notifications 规范构造步骤第一步：
 照样抛」这个说法**找不到依据，而且与 BCD 相反**。那句 `TypeError` 警告主要针对的是
 Android Chrome（那里确实是 `Illegal constructor`）。
 
-**未确证**：iOS 主屏 Web App 的页面上下文里 `new Notification()` 到底能不能真的弹出来。
-BCD 说能，但我没找到 WebKit 官方的正面表述，也没有真机。**列入真机验收清单（TC-PWA-11）。**
+另外，BCD 同一个条目下还有**第二条**注释，前一版方案漏掉了它：
+
+> A notification can only be sent from a service worker. To show a notification, see
+> `ServiceWorkerRegistration.showNotification()`.
+
+也就是说 BCD 自己就把这个问题答完了：装到主屏之后 `Notification` 这个**标识符**存在
+（所以 `Notification.permission` / `requestPermission()` 能用，我们的状态机要靠它），
+但真要**弹出来**只能走 service worker。原先把这一条列进真机清单是多余的，已移除。
 
 **但最终结论不变：统一改用 `registration.showNotification()`。** 理由换成这三条：
 - Android Chrome 的页面里 `new Notification()` 确实会抛，一套代码要能跨端；
@@ -1470,9 +1476,9 @@ notifyPermission() ─┼─ 没有 Notification + iOS WebKit + 非独立模式 
 
 ### E.2 只能真机验证的事（自动化一条都测不了）
 
-1. **iOS 主屏 Web App 的页面上下文里 `new Notification()` 能不能用**（A.1 ②）。
-   MDN BCD 说能，我没找到 WebKit 官方表述。不影响方案（我们统一走 `showNotification`），
-   但值得测一下，因为如果 BCD 错了，说明 BCD 在这块整体不可信。
+1. ~~iOS 主屏 Web App 里 `new Notification()` 能不能用~~ —— **已由文档撤销**。
+   BCD 同一条目的第二条注释直接答了（「只能由 service worker 弹」），不必真机验，
+   详见 A.1 ②。
 2. **`notificationclick` 在 iOS 上到底触不触发**（A.2 ⑫）。BCD 说不支持，
    社区报告说支持。**这一条直接决定「点通知能不能回到会话」这个核心体验。**
 3. **`clients.openWindow()` 在 iOS 上可不可靠**（A.2 ⑫）。有多份苹果论坛报告说
