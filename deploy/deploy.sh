@@ -16,8 +16,9 @@ cd "$(dirname "$(readlink -f "$0")")"
 COMPOSE_FILE="docker-compose.yml"
 ENV_FILE=".env"
 DATA_DIR="data"
+MINIO_DIR="minio-data"
 STATE_FILE=".last-deployed-tag"
-HEALTH_TIMEOUT=90
+HEALTH_TIMEOUT=120
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -87,7 +88,39 @@ prepare_data_dir() {
   elif [ ! -w "$DATA_DIR" ]; then
     warn "$DATA_DIR 当前用户不可写，若容器启动后报权限错误，执行：sudo chown -R 1000:1000 $DATA_DIR"
   fi
-  ok "数据目录就绪：$(pwd)/$DATA_DIR （SQLite 库与图片附件都在这里）"
+  ok "主程序数据目录：$(pwd)/$DATA_DIR （SQLite 库；迁移前的本地附件也在这里）"
+
+  # MinIO 的数据单独一个目录，和主程序分开：备份、搬迁、清理都能各管各的。
+  # 这里不 chown —— 官方 MinIO 镜像以 root 跑，交给它自己处理属主，
+  # 我们擅自改成 1000 反而可能让它写不进去。
+  mkdir -p "$MINIO_DIR"
+  ok "对象存储数据目录：$(pwd)/$MINIO_DIR （MinIO 的附件对象）"
+}
+
+# MinIO 现在随 compose 一起启停，凭据就成了必填。它只在 Docker 内网用、
+# 不经过任何人的手，所以第一次直接替用户生成，省掉一步「你还得自己想两个密码」。
+ensure_minio_credentials() {
+  command -v openssl >/dev/null 2>&1 || {
+    warn "没装 openssl，无法自动生成对象存储凭据"
+    return 0
+  }
+  local changed=0
+  for key in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
+    local value
+    value="$(read_env "$key")"
+    [ -n "${value//[[:space:]]/}" ] && continue
+    local generated
+    generated="$(openssl rand -hex 24)"
+    if grep -qE "^#? ?${key}=" "$ENV_FILE"; then
+      # 连注释掉的那一行一起替换，避免同一个键在文件里出现两次
+      sed -i.bak -E "s|^#? ?${key}=.*|${key}=${generated}|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    else
+      printf '%s=%s\n' "$key" "$generated" >> "$ENV_FILE"
+    fi
+    changed=1
+  done
+  [ "$changed" = "1" ] && ok "已生成对象存储凭据并写入 $ENV_FILE（只在 Docker 内网使用）"
+  return 0
 }
 
 wait_for_health() {
@@ -118,6 +151,7 @@ deploy() {
   require_tools
   require_files
   require_env
+  ensure_minio_credentials
   prepare_data_dir
 
   export LOOP_IM_TAG="$tag"

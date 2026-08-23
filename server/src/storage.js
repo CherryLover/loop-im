@@ -41,6 +41,30 @@ export function getStore() {
   return store;
 }
 
+/**
+ * 启动自检：等对象存储真的可用（桶建好、能写能读能删）再对外服务。
+ *
+ * compose 里已经用 `depends_on: condition: service_healthy` 等过 MinIO 健康检查，
+ * 正常路径上第一次就能过。这里仍然retry，是因为「健康」和「能收请求」之间还有几百毫秒，
+ * 而且重启风暴、宿主机负载高的时候这个窗口会被拉长。
+ *
+ * 失败到底就抛给调用方（index.js 会打日志并退出，让 restart 策略重来）。
+ * 半开状态更难查：容器显示 Up、聊天能用、只有发图坏 —— 那种问题会拖很久才被发现。
+ */
+export async function ensureStoreReady({ attempts = 20, delayMs = 1000, log = () => {} } = {}) {
+  let lastErr;
+  for (let i = 1; i <= attempts; i += 1) {
+    try {
+      return await getStore().ready();
+    } catch (err) {
+      lastErr = err;
+      log({ attempt: i, attempts, message: err.message });
+      if (i < attempts) await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 /** 本地磁盘那一份，切换期用来兜底回读（见 getObject）。 */
 let localFallback = null;
 const getLocalFallback = () => (localFallback ||= createLocalStore(UPLOAD_DIR));

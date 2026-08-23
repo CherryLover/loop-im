@@ -1,41 +1,43 @@
-# Loop IM 部署编排。所有数据都落在与本文件同级的 ./data 目录里，
-# 备份 = 打包这个目录；迁移 = 复制这个目录 + .env。
+# Loop IM 部署编排。
 #
-# 附件对象存储（MinIO）是**可选**的：.env 里不填 S3_BUCKET 就还是走本地磁盘，
-# 和加这个服务之前一模一样。填了才切过去。见 README 的「附件存到 MinIO」。
+# 目录结构（全部与本文件同级，便于整体打包搬走）：
+#   .
+#   ├── docker-compose.yml
+#   ├── .env              ← 配置与密钥，不进 git
+#   ├── deploy.sh
+#   ├── data/             ← 主程序：SQLite 库、迁移前的本地附件
+#   └── minio-data/       ← MinIO：附件对象
+#
+# 两个数据目录**刻意分开**：主程序的库和对象存储的数据生命周期不同，
+# 分开之后可以单独备份、单独搬迁，出问题时也能只清其中一个而不误伤另一个。
 services:
-  # 附件对象存储。⚠️ 故意**不**映射任何端口到宿主机 —— 它只在 compose 的内部网络里
-  # 被 loop-im 容器访问。浏览器绝不直连它：附件的全部安全头（强制下载、nosniff、CSP，
-  # 见 server/src/attachments.js）都是 Express 回源时加的，让浏览器直连对象存储
+  # 附件对象存储。和主程序一起随 compose 起停，不再是可选项。
+  #
+  # ⚠️ 故意**不**映射任何端口到宿主机 —— 它只在 compose 的内部网络里被 loop-im 访问。
+  # 浏览器绝不直连它：附件的全部安全头（强制下载、nosniff、CSP，见
+  # server/src/attachments.js）都是 Express 回源时加的，让浏览器直连对象存储
   # 会把这些头全部丢掉，一份 HTML 附件当场变回存储型 XSS。
   #
-  # 想临时开控制台排查问题，就在本机开一条 SSH 隧道，不要在这里加 ports：
+  # 想临时开控制台排查问题，在本机开一条 SSH 隧道，不要在这里加 ports：
   #   ssh -L 9001:127.0.0.1:9001 user@server
-  #   docker compose exec minio true   # 确认容器在跑
-  # 再临时 `docker compose run --rm -p 127.0.0.1:9001:9001 minio ...`，用完即弃。
   minio:
     image: ${MINIO_IMAGE:-quay.io/minio/minio}:${MINIO_TAG:-latest}
     container_name: loop-im-minio
     restart: unless-stopped
-    # 放进 profile：不加 `--profile minio` 就压根不会被启动，
-    # 已有的、不打算用对象存储的部署执行 `docker compose up -d` 时行为完全不变。
-    profiles: ["minio"]
     command: server /data --console-address ":9001"
     environment:
-      # 凭据只从 .env 读，仓库里一个字符都不写。.env 不进 git（见 .gitignore）。
-      # 这里不用 ${VAR:?} 的必填写法：compose 会对整个文件做插值，哪怕 profile 没启用
-      # 也会报错，那样就把不用 MinIO 的部署一起卡死了。没填时由 MinIO 自己启动失败并报错。
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY}
+      # 凭据只从 .env 读，仓库里一个字符都不写。deploy.sh 首次运行会自动生成。
+      # 用 :? 必填：MinIO 拿空账号会以一种很难懂的方式启动失败，不如在这里直接说清楚。
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:?.env 里缺 S3_ACCESS_KEY_ID（跑一次 ./deploy.sh 会自动生成）}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:?.env 里缺 S3_SECRET_ACCESS_KEY（跑一次 ./deploy.sh 会自动生成）}
     volumes:
-      # 对象也落在 ./data 底下，备份口径不变：打包 data/ 就是全量备份。
-      - ./data/minio:/data
+      - ./minio-data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
-      interval: 30s
+      interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 15s
+      retries: 10
+      start_period: 10s
     logging:
       driver: json-file
       options:
@@ -46,6 +48,11 @@ services:
     image: ${LOOP_IM_IMAGE:-ghcr.io/cherrylover/loop-im}:${LOOP_IM_TAG:-latest}
     container_name: loop-im
     restart: unless-stopped
+    # 等 MinIO 真的能收请求再启动。程序自己还会重试 + 自检建桶（见 src/index.js），
+    # 这里挡一道是为了让正常路径上第一次就成功，日志里不留一串失败重试。
+    depends_on:
+      minio:
+        condition: service_healthy
     env_file:
       - .env
     environment:
@@ -57,7 +64,7 @@ services:
       # 想直接对外访问就把 .env 里的 BIND_ADDRESS 改成 0.0.0.0
       - "${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-4000}:4000"
     volumes:
-      # SQLite 库与图片附件都在这里
+      # SQLite 库在这里；切到对象存储之前的本地附件也在这里（双读兜底还会用到）
       - ./data:/app/data
     healthcheck:
       test:
