@@ -9,11 +9,12 @@ import { CreateGroupModal } from './modals/CreateGroupModal';
 import { AddContactModal } from './modals/AddContactModal';
 import { ProfileModal } from './modals/ProfileModal';
 import { ManageGroupModal, type ManageMode } from './modals/ManageGroupModal';
-import { ApiError, api } from './lib/api';
+import { ApiError, api, attachmentUrl } from './lib/api';
 import { initialOf } from './lib/md';
 import { unreadAriaLabel, unreadBadgeClass, unreadLabel, withRetryHint } from './lib/format';
 import { mergeMessage, replyTargetOf } from './lib/messages';
 import { sortConversations } from './lib/conversations';
+import { syncUserInConversations, syncUserInList, syncUserInMessages } from './lib/user-sync';
 import { notifyMessage, useDesktopNotify } from './lib/notify';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
@@ -92,6 +93,9 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   // 改置顶/免打扰时要拿到改之前的那一项来做回滚，用 ref 镜像一份，免得进 deps。
   const conversationsRef = useRef<Conversation[]>([]);
   conversationsRef.current = conversations;
+  // 收到 user-updated 时要判断「这个人名单里有没有」，用 ref 拿最新值，免得进 deps。
+  const usersRef = useRef<User[]>([]);
+  usersRef.current = users;
   const signingOutRef = useRef(false);
   // 退出或卸载时要把在途的列表 / 消息请求一起取消：它们的凭据马上就作废了。
   const abortRef = useRef<AbortController | null>(null);
@@ -100,6 +104,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   const notify = useDesktopNotify();
 
   const isAdmin = me.role === 'admin';
+  // 登录期间恒定不变（改名换头像都不会换 id），可以安心进各个 useCallback 的 deps。
+  const meId = me.id;
 
   /**
    * 「聊天详情真的在用户眼前」——所有已读上报共用这一个判据（issue #20）。
@@ -184,6 +190,24 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     const { ai: info } = await api.me();
     setAi(info);
   }, []);
+
+  /**
+   * 有人改了名字 / 换了头像（或被停用），把界面上**确实拷了一份**用户资料的地方就地对齐：
+   * 我自己、联系人名单、会话列表（成员 + 单聊标题）、已加载消息（发送者、引用摘要、回应名单）。
+   *
+   * 这里刻意**不重拉会话和消息**。`user-updated` 是全站广播，一个人改名，每个在线客户端
+   * 都会收到；在这里重拉等于一次改名换来 N 个请求，还会把消息列表的滚动位置、翻页游标
+   * 和在途的乐观气泡一起冲掉。而这些字段在服务端本来就是 JOIN users 现算的，事件里带的
+   * 那一份 user 就是权威值，够就地改了（见 lib/user-sync.ts）。
+   *
+   * 每个 sync 函数在「什么都没变」时返回原引用，所以与我无关的会话不会被换掉、不会重渲染。
+   */
+  const applyUserUpdate = useCallback((user: User) => {
+    setMe((current) => (current.id === user.id ? { ...current, ...user } : current));
+    setUsers((list) => syncUserInList(list, user));
+    setConversations((list) => syncUserInConversations(list, user, meId));
+    setMessages((all) => syncUserInMessages(all, user));
+  }, [meId]);
 
   useEffect(() => {
     background(refreshConversations(), '刷新会话列表');
@@ -355,7 +379,13 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     },
     onTyping: (conversationId, isTyping) => setTyping((t) => ({ ...t, [conversationId]: isTyping })),
     onConversationCreated: () => background(refreshConversations(), '刷新会话列表'),
-    onUserChanged: () => background(refreshUsers(), '刷新联系人'),
+    // 改名 / 换头像 / 停用：事件里带着完整的一份 user，够把界面上那些拷贝就地改掉了。
+    // 只有 user-created（新开通的账号，走的是同一个回调）名单里还没有这个人，才值得
+    // 为它多拉一次联系人列表 —— 名单的顺序是服务端定的，不在前端擅自插行。
+    onUserChanged: (user) => {
+      applyUserUpdate(user);
+      if (!usersRef.current.some((u) => u.id === user.id)) background(refreshUsers(), '刷新联系人');
+    },
     onPresence: () => background(refreshUsers(), '刷新联系人'),
     // 别人点了回应，我这边立刻跟着变。服务端按人各发一份，mine 已经是我这一份。
     onReaction: (conversationId, messageId, reactions) => applyReactions(conversationId, messageId, reactions),
@@ -542,7 +572,8 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             );
           })}
           <button type="button" className="sidebar__me" title="个人资料" onClick={() => setModal('profile')}>
-            {me.avatarUrl ? <img src={me.avatarUrl} alt={me.name} /> : initialOf(me.name)}
+            {/* 头像回源要凭据，和别处一样得走 attachmentUrl 补上 token，否则这里只会是张裂图。 */}
+            {me.avatarUrl ? <img src={attachmentUrl(me.avatarUrl)} alt={me.name} /> : initialOf(me.name)}
             <span className="sidebar__me-dot" />
           </button>
         </nav>
@@ -665,11 +696,9 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
           notifyPermission={notify.permission}
           onToggleNotify={() => void notify.toggle()}
           onClose={() => setModal(null)}
-          onUpdated={(user) => {
-            setMe(user);
-            background(refreshUsers(), '刷新联系人');
-            background(refreshConversations(), '刷新会话列表');
-          }}
+          // 改自己的名字 / 头像走的是同一条对齐路径：本地立刻就位，不等 SSE 那一份广播
+          // 绕回来（也不再为此整份重拉会话列表——会把滚动位置和翻页游标冲掉）。
+          onUpdated={applyUserUpdate}
           onSignOut={handleSignOut}
         />
       ) : null}
