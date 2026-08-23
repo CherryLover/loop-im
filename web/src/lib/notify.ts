@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { previewOf } from './messages';
+import { ensurePushSubscription, notifyRegistration, unsubscribePush } from './push';
 import type { Conversation, Message } from './types';
 
 /**
@@ -212,29 +213,83 @@ export function notifyTitle(message: Message, conversation?: Conversation): stri
 }
 
 /**
- * 真正弹一条。返回有没有弹出去，方便调用方和测试判断。
- * 任何异常都就地咽掉：这是在 SSE 回调里跑的，抛出去会把新消息的处理一起带崩。
+ * 弹一条通知的**唯一入口**。前台本地通知和后台推送因此走同一条路：
+ * 有 Service Worker registration 就 `registration.showNotification()`，否则退回
+ * `new Notification()`。
+ *
+ * 为什么统一到 showNotification 这一侧：
+ * - iOS 上**只有**它 —— 主屏 App 里 `new Notification()` 构造函数是不能用的
+ *   （Notification 存在，但只有 `permission` / `requestPermission` 那几个静态成员）；
+ * - 两套弹通知的代码迟早会漂移。tag 是最典型的：SW 那边（public/sw.js）用
+ *   `loop-im:${conversationId}`，这边也必须一模一样，同一个会话的本地通知和推送通知
+ *   才会互相覆盖而不是堆成两摞。一个入口，就没有第二处要记着改。
+ *
+ * 桌面 Chrome / Firefox 上两条路都有，优先 SW 那条：这样点通知的处理也统一走
+ * SW 的 `notificationclick`（→ postMessage → AppShell），而不是这里的 `onclick`。
+ *
+ * `registration` 是启动时异步取好缓存下来的（见 lib/push.ts 的 primeServiceWorker）——
+ * 这个函数是在 SSE 回调里同步调用的，当场 await 不了。
+ *
+ * @returns 有没有弹出去。任何异常都就地咽掉：这是在 SSE 回调里跑的，
+ *          抛出去会把新消息的处理一起带崩。
  */
-export function notifyMessage(input: IncomingNotice): boolean {
-  if (!shouldNotifyMessage(input)) return false;
-  if (notifyPermission() !== 'granted') return false;         // 含「浏览器不支持」这一档
+function showNotice(
+  title: string,
+  options: { body: string; tag: string; conversationId?: string | null },
+  onClick?: () => void,
+): boolean {
+  const registration = notifyRegistration();
+  if (registration && typeof registration.showNotification === 'function') {
+    try {
+      // showNotification 是异步的，但它不返回通知对象，点击只能靠 SW 的
+      // notificationclick 事件接住 —— 所以 onClick 在这条路上不挂，
+      // 由 SW postMessage 回页面来完成同样的跳转（AppShell 里接的）。
+      void Promise.resolve(
+        registration.showNotification(title, {
+          body: options.body,
+          tag: options.tag,
+          data: { conversationId: options.conversationId ?? null },
+        }),
+      ).catch((err) => console.warn('[loop-im] showNotification 失败', err));
+      return true;
+    } catch (err) {
+      // 同步就抛说明这条路根本走不通（比如权限在这一瞬间被撤），落到下面的构造函数。
+      console.warn('[loop-im] showNotification 调用失败，退回通知构造函数', err);
+    }
+  }
+
   try {
-    const notice = new Notification(notifyTitle(input.message, input.conversation), {
-      body: previewOf(input.message.body),
-      // 同一个会话只保留最新一条，连着来十条消息不会堆十个通知。
-      tag: `loop-im:${input.message.conversationId}`,
-    });
+    const notice = new Notification(title, { body: options.body, tag: options.tag });
     notice.onclick = () => {
       // 聚焦窗口可能被浏览器拒绝（比如通知来自另一个 tab），不影响后面的跳转。
       try { window.focus(); } catch { /* 忽略 */ }
       notice.close();
-      input.onClick();
+      onClick?.();
     };
     return true;
   } catch (err) {
     console.warn('[loop-im] 桌面通知弹出失败', err);
     return false;
   }
+}
+
+/**
+ * 真正弹一条。返回有没有弹出去，方便调用方和测试判断。
+ */
+export function notifyMessage(input: IncomingNotice): boolean {
+  if (!shouldNotifyMessage(input)) return false;
+  if (notifyPermission() !== 'granted') return false;         // 含「浏览器不支持」这一档
+  return showNotice(
+    notifyTitle(input.message, input.conversation),
+    {
+      body: previewOf(input.message.body),
+      // 同一个会话只保留最新一条，连着来十条消息不会堆十个通知。
+      // ⚠️ 这个串必须和 public/sw.js 里推送通知用的完全一致。
+      tag: `loop-im:${input.message.conversationId}`,
+      conversationId: input.message.conversationId,
+    },
+    input.onClick,
+  );
 }
 
 export const NOTIFY_ENABLED_TITLE = '桌面通知已开启';
@@ -251,20 +306,7 @@ export const NOTIFY_ENABLED_BODY = '切到别的标签页或别的应用时，�
  */
 export function notifyEnabledConfirmation(): boolean {
   if (notifyPermission() !== 'granted') return false;
-  try {
-    const notice = new Notification(NOTIFY_ENABLED_TITLE, {
-      body: NOTIFY_ENABLED_BODY,
-      tag: 'loop-im:enabled',
-    });
-    notice.onclick = () => {
-      try { window.focus(); } catch { /* 忽略 */ }
-      notice.close();
-    };
-    return true;
-  } catch (err) {
-    console.warn('[loop-im] 确认通知弹出失败', err);
-    return false;
-  }
+  return showNotice(NOTIFY_ENABLED_TITLE, { body: NOTIFY_ENABLED_BODY, tag: 'loop-im:enabled' });
 }
 
 export interface DesktopNotify {
@@ -282,16 +324,27 @@ export function useDesktopNotify(): DesktopNotify {
     if (enabled) {
       setEnabled(false);
       saveNotifyEnabled(false);
+      // ⚠️ 开关的语义变了：从「本地弹不弹窗」变成「这台设备收不收通知」。
+      // 关掉必须**真的退订**，否则服务端不知道，照样往这台设备推 ——
+      // 用户会看到一个「已关闭」的开关和一屏还在冒的锁屏通知，而这一次他是对的。
+      // 不 await：退订是网络往返，开关的视觉状态不该等它（失败也是自愈的，见 push.ts）。
+      void unsubscribePush();
       return;
     }
+    // 权限申请必须发生在**真实的用户手势**里，所以这一步只能在这条 onClick 路径上。
     const next = await requestNotifyPermission();
     setPermission(next);
     // 权限没拿到就别把开关显示成「已开启」：开着却永远不弹，比关着更让人摸不着头脑。
     const on = next === 'granted';
     setEnabled(on);
     saveNotifyEnabled(on);
-    // 开成功了就立刻弹一条确认，别让用户对着一个「已开启」的开关猜它到底通没通。
-    if (on) notifyEnabledConfirmation();
+    if (on) {
+      // 开成功了就立刻弹一条确认，别让用户对着一个「已开启」的开关猜它到底通没通。
+      notifyEnabledConfirmation();
+      // 再把订阅交给服务端。同样不 await：订阅失败只是这台设备暂时收不到推送，
+      // 下次启动 AppShell 还会再试一遍（见 push.ts 文件头第 1 条）。
+      void ensurePushSubscription();
+    }
   }, [enabled]);
 
   return { enabled, permission, toggle };

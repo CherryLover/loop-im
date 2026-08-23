@@ -20,6 +20,7 @@ import {
   syncUserInConversations, syncUserInList, syncUserInMessages,
 } from './lib/user-sync';
 import { notifyMessage, useDesktopNotify } from './lib/notify';
+import { applyAppBadge, ensurePushSubscription } from './lib/push';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
 import type { AiPublicInfo, Conversation, Message, MessageReaction, ReadState, User } from './lib/types';
@@ -231,6 +232,21 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     background(refreshConversations(), '刷新会话列表');
     background(refreshUsers(), '刷新联系人');
   }, [refreshConversations, refreshUsers, background]);
+
+  /**
+   * 每次应用启动都无条件重新订阅一次推送。
+   *
+   * 「本地存过就跳过」在这里是**错的**，不是优化：iOS 不支持 `pushsubscriptionchange`
+   * 事件，订阅失效（endpoint 轮换、系统清理）时我们收不到任何通知，唯一的补救就是
+   * 每次启动重来一遍。`subscribe()` 对已有订阅幂等，服务端也是 upsert，重复调没有代价。
+   *
+   * 这一句还顺带把 `notify.ts` 要的 SW registration 缓存喂上（见 push.ts 的
+   * primeServiceWorker）—— 前台通知也要走 `showNotification`。
+   *
+   * 不 await、不看返回值：没权限 / 服务端没配 VAPID / 环境不支持，它都只返回 false，
+   * 不抛。推送不到，网页照样是个能用的 IM。
+   */
+  useEffect(() => { void ensurePushSubscription(); }, []);
 
   /**
    * 心跳：一边把自己续成在线，一边把别人的在线状态收回来。
@@ -565,6 +581,53 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     }
   }, [refreshConversations, selectConversation]);
 
+  /**
+   * 点推送通知回到那个会话。
+   *
+   * SW 的 notificationclick 不能直接操作页面，它只能 `postMessage` 过来（见
+   * public/sw.js 的降级链：matchAll → focus → postMessage）。这里接住，走的是和
+   * `notifyMessage` 的 onClick **完全相同**的两句 —— 一条路径，不会漂移。
+   *
+   * 三层守卫都是必要的：jsdom / 老浏览器没有 `navigator.serviceWorker`；
+   * 消息是从 SW 来的、内容不受我们控制，字段要逐个验；conversationId 可能是 null
+   *（payload 坏掉时 SW 会弹一条没有会话的兜底通知），那就只切到会话页，不选中谁。
+   */
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; conversationId?: string | null } | null;
+      if (!data || data.type !== 'open-conversation') return;
+      setTab('chat');
+      if (typeof data.conversationId === 'string' && data.conversationId) {
+        selectConversation(data.conversationId);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [selectConversation]);
+
+  /**
+   * 冷启动那一档：一个窗口都没开时，SW 只能 `openWindow('/?c=<id>')`。
+   * 这里把这个参数认下来，然后**立刻从地址栏抹掉** —— 不抹的话用户之后每次刷新
+   * 都会被弹回那个会话，而他早就翻到别处去了。
+   */
+  useEffect(() => {
+    let target: string | null = null;
+    try {
+      target = new URLSearchParams(window.location.search).get('c');
+    } catch {
+      /* 没有 location / URLSearchParams 的环境（测试）：当作没带参数 */
+    }
+    if (!target) return;
+    setTab('chat');
+    selectConversation(target);
+    try {
+      window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+    } catch {
+      /* replaceState 不可用就留着，顶多刷新时再跳一次 */
+    }
+  }, [selectConversation]);
+
   const navItems = useMemo(() => {
     const items: { key: Tab; label: string; short: string; icon: typeof MessageCircle }[] = [
       { key: 'chat', label: '会话', short: '会话', icon: MessageCircle },
@@ -577,6 +640,11 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   const activeMessages = activeId ? messages[activeId] || [] : [];
   const activeReads = activeId ? reads[activeId] || [] : [];
   const totalUnread = conversations.reduce((n, c) => n + (c.unread || 0), 0);
+  // 主屏图标上的未读角标，跟着全站未读总数走。和 SW push handler 里那份角标是
+  // 两条独立的路：这条管「应用开着的时候」，那条管「应用没开的时候」，写的是同一个数
+  //（服务端 payload 的 badge 也是未读总数），所以不会打架。
+  // Badging API 不存在时 applyAppBadge 自己静默跳过，这里不必再判一次。
+  useEffect(() => { applyAppBadge(totalUnread); }, [totalUnread]);
   // 总徽标也要体现「有 @ 我」这一档：不然点进会话列表前根本看不出有人在叫我。
   const totalMentions = conversations.reduce((n, c) => n + (c.mentionsUnread || 0), 0);
   const unreadBadge = (
