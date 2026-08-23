@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CornerUpLeft, FileText, Paperclip, X } from 'lucide-react';
+import { CornerUpLeft, FileText, Film, Paperclip, X } from 'lucide-react';
 import { Avatar } from './Avatar';
-import { api, MAX_UPLOAD_MB } from '../lib/api';
+import { api, MAX_UPLOAD_MB, MAX_VIDEO_UPLOAD_MB } from '../lib/api';
 import type { AttachmentKind, Conversation, ReplyTarget } from '../lib/types';
 
 interface MentionOption {
@@ -17,14 +17,28 @@ interface Attachment {
   url: string | null;
   previewUrl: string;
   uploading: boolean;
-  /** image 才会内联渲染成图片；file 一律拼成普通链接，只能下载（见 issue #22）。 */
+  /**
+   * image 内联渲染成图片，video 内联成播放器；file 一律拼成普通链接，
+   * 只能下载（见 issue #22）。
+   */
   kind: AttachmentKind;
   error?: string;
 }
 
 // 上传前只能按浏览器给的 type 猜一下，用来决定预览要不要显示缩略图。
 // 真正算数的是服务端按真实字节给出的 kind，落地时会覆盖这里的猜测。
-const guessKind = (file: File): AttachmentKind => (file.type.startsWith('image/') ? 'image' : 'file');
+const guessKind = (file: File): AttachmentKind => (
+  file.type.startsWith('image/') ? 'image'
+    : file.type.startsWith('video/') ? 'video'
+      : 'file'
+);
+
+/** 附件条上的说明文案。 */
+const KIND_HINT: Record<AttachmentKind, string> = {
+  image: '已上传，将作为图片附件发送',
+  video: '已上传，将作为视频发送，可在聊天里直接播放',
+  file: '已上传，将作为文件附件发送',
+};
 
 /** 一个会话暂存下来的输入状态。 */
 interface DraftEntry {
@@ -208,10 +222,19 @@ export function Composer({
     }
   }
 
+  /**
+   * 发送。文字和附件**各发一条消息**，文字在前、媒体在后。
+   *
+   * 产品决定不做图文混排：聊天里图归图、字归字，一条消息一个气泡。所以这里不再把两者
+   * 拼成一段正文，而是顺序发两次 —— 也因此多了「一条成了一条没成」这种中间态，见下面。
+   */
   async function submit() {
     const text = draft.trim();
     if (attachment?.uploading) return;
-    // 图片拼成 Markdown 图片（会内联渲染），普通文件拼成普通链接（渲染成文件卡片，只能下载）。
+    // 图片拼成 Markdown 图片（会内联渲染），视频和普通文件拼成普通链接。
+    // 视频用链接写法而不是图片写法：它本来就不是图片，而且这样在任何不认识视频的地方
+    // （老客户端、纯文本摘要）都会降级成一条能点开的附件链接。真正决定「渲染成播放器
+    // 还是文件卡片」的是服务端给的扩展名，不是这里选了哪种语法，见 lib/md.ts。
     // 方括号会撑破 Markdown 的链接语法，从显示名里去掉，不影响服务端存的那份原名。
     const label = attachment ? attachment.filename.replace(/[[\]]/g, '') : '';
     const embed = attachment?.url
@@ -230,22 +253,55 @@ export function Composer({
     setAttachment(null);
     setReplyTo(null);
     setMentionQuery(null);
-    try {
-      const payload = [text, embed].filter(Boolean).join(text && embed ? '\n\n' : '');
+
+    // 三个还原动作各自独立，失败时只调用对应的那一个 —— 这就是「只还原失败的那部分」。
+    // 全都只在用户没有重新输入时才还原，别覆盖掉他在等待期间的新内容。
+    const restoreText = () => writeDraft(sentId, (current) => (current ? current : sentDraft));
+    const restoreAttachment = () => writeAttachment(sentId, (current) => {
+      if (!current) return sentAttachment;
+      revokePreview(sentAttachment);             // 已经有新附件了，旧预览留着也没人看
+      return current;
+    });
+    const restoreReply = () => writeReply(sentId, (current) => current ?? sentReply);
+
+    // 引用挂在**第一条**上：有文字就挂文字那条，只有附件时才挂附件那条。
+    // 一次回复只该产生一个引用块，挂两条会在对话里显示成引用了两遍。
+    const replyOnText = Boolean(text);
+    const send = (body: string, carriesReply: boolean) => (
       // 不引用时不传第二个参数：既有调用方（和它们的用例）看到的调用形态一点没变。
-      await (sentReply ? onSend(payload, sentReply.id) : onSend(payload));
-      revokePreview(sentAttachment);             // 发出去的是服务端 url，预览图可以释放了
-    } catch {
-      // 只在用户没有重新打字时还原，别覆盖掉他在等待期间输入的新内容。
-      writeDraft(sentId, (current) => (current ? current : sentDraft));
-      writeAttachment(sentId, (current) => {
-        if (!current) return sentAttachment;
-        revokePreview(sentAttachment);           // 已经有新附件了，旧预览留着也没人看
-        return current;
-      });
-      // 引用态同样还给发送时的那个会话，而且不覆盖用户等待期间新选的引用。
-      writeReply(sentId, (current) => current ?? sentReply);
+      sentReply && carriesReply ? onSend(body, sentReply.id) : onSend(body)
+    );
+
+    if (text) {
+      try {
+        await send(text, replyOnText);
+      } catch {
+        // 文字这条没发出去，附件那条**不再发**：两条本来是一组，顺序是文字在前，
+        // 只把媒体发出去会让对面先看到图再看不到说明。整组退回输入框，用户原样重试即可。
+        restoreText();
+        restoreAttachment();
+        restoreReply();
+        return;
+      }
     }
+
+    if (embed) {
+      try {
+        await send(embed, !replyOnText);
+        revokePreview(sentAttachment);           // 发出去的是服务端 url，预览图可以释放了
+      } catch {
+        // 关键的一档：文字（如果有）已经发出去了，只还原附件这一部分。
+        // 绝不能连文字一起退回输入框 —— 那条消息真的已经在对话里了，退回去等于让用户
+        // 以为它没发出去，重试一次就会发重。
+        restoreAttachment();
+        if (!replyOnText) restoreReply();        // 引用挂在附件那条上时才跟着退回
+      }
+      return;
+    }
+
+    // 只有文字。附件槽位里可能还留着一个上传失败的（没有 url，发不出去），
+    // 它已经随着乐观清空被丢掉了，预览图跟着释放。
+    revokePreview(sentAttachment);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -334,17 +390,20 @@ export function Composer({
 
       {attachment ? (
         <div className="attach">
-          <span className={`attach__thumb${attachment.kind === 'file' ? ' attach__thumb--file' : ''}`}>
-            {/* 只有确认过是图片的那一档才内联显示，其余一律给个文件图标。 */}
+          <span className={`attach__thumb${attachment.kind === 'image' ? '' : ' attach__thumb--file'}`}>
+            {/* 只有确认过是图片的那一档才内联显示缩略图，视频给胶片图标，其余给文件图标。
+                这里刻意不为待发的视频做一个 <video> 预览：会白白解一遍码，而这条附件条
+                本来就只是「选了什么」的提示。 */}
             {attachment.kind === 'image'
               ? <img src={attachment.previewUrl} alt={attachment.filename} />
-              : <FileText size={16} />}
+              : attachment.kind === 'video' ? <Film size={16} />
+                : <FileText size={16} />}
           </span>
           <span className="attach__name">{attachment.filename}</span>
           <span className="attach__state">
             {attachment.error ? attachment.error
               : attachment.uploading ? '上传中…'
-                : attachment.kind === 'image' ? '已上传，将作为图片附件发送' : '已上传，将作为文件附件发送'}
+                : KIND_HINT[attachment.kind]}
           </span>
           <button
             type="button"
@@ -364,7 +423,7 @@ export function Composer({
         <button
           type="button"
           className="composer__plus"
-          title={`从本地选择文件（图片或任意文件，不超过 ${MAX_UPLOAD_MB}MB）`}
+          title={`从本地选择文件（图片、视频或任意文件；视频不超过 ${MAX_VIDEO_UPLOAD_MB}MB，其余不超过 ${MAX_UPLOAD_MB}MB）`}
           onClick={() => fileRef.current?.click()}
         >
           <Paperclip size={18} />

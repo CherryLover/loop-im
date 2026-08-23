@@ -50,6 +50,7 @@ const pick = (container: HTMLElement, file: File) =>
 
 const pdf = () => new File(['%PDF-1.4'], '发版清单.pdf', { type: 'application/pdf' });
 const png = () => new File(['fake'], 'shot.png', { type: 'image/png' });
+const mp4 = () => new File(['fake'], '晨会录屏.mp4', { type: 'video/mp4' });
 
 describe('非图片文件附件', () => {
   it('选文件的入口不再限制成图片', () => {
@@ -132,6 +133,49 @@ describe('非图片文件附件', () => {
     await act(async () => { await Promise.resolve(); });
 
     expect(onSend).toHaveBeenCalledWith('[会议纪要终版.docx](/uploads/9f3a.bin)');
+  });
+});
+
+describe('视频附件', () => {
+  it('选文件的入口本来就不限类型，视频能选进来', () => {
+    // 没有 accept 属性 = 什么都收，视频自然也在内（这条在 issue #22 就定下了）。
+    const { container } = render(<Composer conversation={group} meId="u_lin" onSend={vi.fn()} />);
+    expect(fileInput(container).getAttribute('accept')).toBeNull();
+  });
+
+  it('附件条给的是视频的说明，缩略图位置放胶片图标而不是 <img>', async () => {
+    serverReturns({ url: '/uploads/9f3a.mp4', filename: '晨会录屏.mp4', kind: 'video', storage: 'local' });
+    const { container } = render(<Composer conversation={group} meId="u_lin" onSend={vi.fn()} />);
+    pick(container, mp4());
+
+    expect(await screen.findByText('已上传，将作为视频发送，可在聊天里直接播放')).toBeInTheDocument();
+    expect(screen.getByText('晨会录屏.mp4')).toBeInTheDocument();
+    // 不给待发的视频做 <video> 预览：白解一遍码，附件条本来只是「选了什么」的提示。
+    expect(container.querySelector('.attach__thumb img')).toBeNull();
+    expect(container.querySelector('.attach__thumb video')).toBeNull();
+  });
+
+  it('视频拼成普通链接发出去，渲染成播放器由 md.ts 按后缀决定', async () => {
+    serverReturns({ url: '/uploads/9f3a.mp4', filename: '晨会录屏.mp4', kind: 'video', storage: 'local' });
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(<Composer conversation={group} meId="u_lin" onSend={onSend} />);
+    pick(container, mp4());
+    await screen.findByText('已上传，将作为视频发送，可在聊天里直接播放');
+
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await act(async () => { await Promise.resolve(); });
+
+    // 用链接写法不用图片写法：视频本来就不是图片，而且在任何不认识视频的地方
+    // （老客户端、纯文本摘要）都会降级成一条能点开的附件链接。
+    expect(onSend).toHaveBeenCalledWith('[晨会录屏.mp4](/uploads/9f3a.mp4)');
+  });
+
+  it('以服务端的 kind 为准：浏览器说是视频、服务端判成文件时，按文件发', async () => {
+    serverReturns({ url: '/uploads/9f3a.bin', filename: '晨会录屏.mp4', kind: 'file', storage: 'local' });
+    const { container } = render(<Composer conversation={group} meId="u_lin" onSend={vi.fn()} />);
+    pick(container, mp4());
+
+    expect(await screen.findByText('已上传，将作为文件附件发送')).toBeInTheDocument();
   });
 });
 

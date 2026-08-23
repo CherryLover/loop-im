@@ -122,9 +122,10 @@ export interface Conversation {
 /**
  * 附件走的是哪条通道（服务端按真实字节判定，见 server/src/attachments.js）：
  * image = PNG/JPEG/GIF/WebP，可以内联渲染成图片；
+ * video = MP4/WebM，可以用浏览器原生播放器内联播放；
  * file  = 其余任意文件，只能下载，永远不内联。
  */
-export type AttachmentKind = 'image' | 'file';
+export type AttachmentKind = 'image' | 'video' | 'file';
 
 /** POST /api/uploads 的返回。kind/mime 是 issue #22 之后新增的，老服务端不带。 */
 export interface UploadResult {

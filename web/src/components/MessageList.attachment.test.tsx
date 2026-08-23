@@ -53,8 +53,26 @@ describe('消息里的附件', () => {
   });
 
   it('正文和附件可以同时出现', () => {
+    // 输入框现在会把正文和附件拆成两条消息发（见 Composer.split.test.tsx），
+    // 但历史消息里拼在一起的那种正文仍然在库里，渲染这一层要继续认。
     const { container } = view('这版的清单在附件里\n\n[发版清单.pdf](/uploads/9f3a.bin)');
     expect(container.textContent).toContain('这版的清单在附件里');
     expect(container.querySelector('a.filecard')).not.toBeNull();
+  });
+
+  // jsdom 里 <video> 的 play()/canPlayType 都是桩，这里只能确认气泡里长出了正确的元素和
+  // 属性。「点下去真的能播、拖进度条真的发 Range 请求」要靠真实浏览器，单测覆盖不到。
+  it('视频附件内联成原生播放器，不是文件卡片', () => {
+    const { container } = view('[晨会录屏.mp4](/uploads/9f3a.mp4)');
+    const video = container.querySelector('.bubble video') as HTMLVideoElement;
+    expect(video).not.toBeNull();
+    expect(video.getAttribute('src')).toBe('/uploads/9f3a.mp4');
+    expect(video.hasAttribute('controls')).toBe(true);
+    expect(video.getAttribute('preload')).toBe('metadata');
+    expect(video.hasAttribute('playsinline')).toBe(true);
+
+    expect(container.querySelector('a.filecard')).toBeNull();
+    // 没有引入任何播放器库，气泡里也没有多出别的容器。
+    expect(container.querySelector('iframe, object, embed, script')).toBeNull();
   });
 });

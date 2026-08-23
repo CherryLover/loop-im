@@ -43,6 +43,31 @@ export const MAX_UPLOAD_MB = 8;
 export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 export const OVERSIZED_MESSAGE = `文件大小不能超过 ${MAX_UPLOAD_MB}MB`;
 
+// 视频单独一档：一段能看的录屏动辄几十 MB，8MB 这一档根本发不出去。
+// 图片和普通文件仍然是上面那一档，语义没有变。
+export const MAX_VIDEO_UPLOAD_MB = 100;
+export const MAX_VIDEO_UPLOAD_BYTES = MAX_VIDEO_UPLOAD_MB * 1024 * 1024;
+export const VIDEO_OVERSIZED_MESSAGE = `视频大小不能超过 ${MAX_VIDEO_UPLOAD_MB}MB`;
+
+/** 本地预检该按哪一档卡体积。 */
+export interface UploadLimit {
+  bytes: number;
+  message: string;
+}
+
+/**
+ * 上传前的体积分档。
+ *
+ * 这里只能看浏览器给的 MIME —— 它是可以谎报的，所以这个判断**不是**安全边界，
+ * 只是「别让用户白等一趟」的预检。真正算数的仍然是服务端：它按真实字节判定通道，
+ * 谎称 video/mp4 的大文件到了服务端照样会被拒。
+ */
+export const uploadLimitFor = (file: File): UploadLimit => (
+  /^video\//i.test(file.type)
+    ? { bytes: MAX_VIDEO_UPLOAD_BYTES, message: VIDEO_OVERSIZED_MESSAGE }
+    : { bytes: MAX_UPLOAD_BYTES, message: OVERSIZED_MESSAGE }
+);
+
 export class ApiError extends Error {
   status: number;
   /**
@@ -67,8 +92,8 @@ export class ApiError extends Error {
  * 服务端 multer 的 limits.fileSize 因此写成 MAX_UPLOAD_BYTES + 1（busboy 是「不得达到」语义），
  * 否则这一档会前端放行、服务端 413，白跑一趟——正是本地拦截要避免的。见 issue #15。
  */
-function checkSize(file: File) {
-  if (file.size > MAX_UPLOAD_BYTES) throw new ApiError(413, OVERSIZED_MESSAGE);
+function checkSize(file: File, limit: UploadLimit = { bytes: MAX_UPLOAD_BYTES, message: OVERSIZED_MESSAGE }) {
+  if (file.size > limit.bytes) throw new ApiError(413, limit.message);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -204,9 +229,10 @@ export const api = {
       `/conversations/${conversationId}/messages/${messageId}/reactions?emoji=${encodeURIComponent(emoji)}`,
       { method: 'DELETE' },
     ),
-  // 图片和普通文件走同一个入口，由服务端按真实字节判定 kind（image 可内联、file 只能下载）。
+  // 图片、视频和普通文件走同一个入口，由服务端按真实字节判定 kind
+  //（image 可内联、video 可内联播放、file 只能下载）。体积上限按类型分档，见 uploadLimitFor。
   upload: (file: File) => {
-    checkSize(file);
+    checkSize(file, uploadLimitFor(file));
     const form = new FormData();
     form.append('file', file);
     return request<UploadResult>('/uploads', { method: 'POST', body: form });

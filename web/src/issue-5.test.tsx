@@ -7,8 +7,9 @@ import { CreateGroupModal } from './modals/CreateGroupModal';
 import type { Conversation, User } from './lib/types';
 
 vi.mock('./lib/api', () => ({
-  // #9 之后 Composer 会读这个常量来做本地大小校验，mock 里要一并提供。
+  // #9 之后 Composer 会读这两个常量来做本地大小校验，mock 里要一并提供。
   MAX_UPLOAD_MB: 8,
+  MAX_VIDEO_UPLOAD_MB: 100,
   api: {
     aiContext: vi.fn(async () => ({ line: '' })),
     createGroup: vi.fn(async () => {

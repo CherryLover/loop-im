@@ -1,7 +1,10 @@
 // api 层：这一轮新增的接口调用是否按约定拼请求。
 // 这些方法之前没有直接测试，路径或方法拼错只有跑起来才发现。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, clearToken, setToken } from './api';
+import {
+  api, clearToken, setToken,
+  MAX_UPLOAD_BYTES, MAX_VIDEO_UPLOAD_BYTES, OVERSIZED_MESSAGE, VIDEO_OVERSIZED_MESSAGE, uploadLimitFor,
+} from './api';
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -64,6 +67,58 @@ describe('表情回应', () => {
   it('带变体选择符的表情同样被完整转义，不会被截成半个', async () => {
     await api.removeReaction('c1', 'm_1', '❤️');
     expect(lastCall().url).toBe('/api/conversations/c1/messages/m_1/reactions?emoji=%E2%9D%A4%EF%B8%8F');
+  });
+});
+
+// 体积上限按类型分档：图片和普通文件仍是 8MB，视频单独一档 100MB
+//（8MB 装不下一段能看的录屏）。
+describe('上传体积分档', () => {
+  /** 造一个指定体积的文件，不真的分配那么多内存。 */
+  const sized = (name: string, type: string, bytes: number) => {
+    const file = new File(['x'], name, { type });
+    Object.defineProperty(file, 'size', { value: bytes });
+    return file;
+  };
+
+  it('视频这一档是 100MB，且比通用那一档大', () => {
+    expect(MAX_VIDEO_UPLOAD_BYTES).toBe(100 * 1024 * 1024);
+    expect(MAX_VIDEO_UPLOAD_BYTES).toBeGreaterThan(MAX_UPLOAD_BYTES);
+  });
+
+  it('uploadLimitFor 按 MIME 分档', () => {
+    expect(uploadLimitFor(sized('a.mp4', 'video/mp4', 1)).bytes).toBe(MAX_VIDEO_UPLOAD_BYTES);
+    expect(uploadLimitFor(sized('a.webm', 'video/webm', 1)).bytes).toBe(MAX_VIDEO_UPLOAD_BYTES);
+    expect(uploadLimitFor(sized('a.png', 'image/png', 1)).bytes).toBe(MAX_UPLOAD_BYTES);
+    expect(uploadLimitFor(sized('a.pdf', 'application/pdf', 1)).bytes).toBe(MAX_UPLOAD_BYTES);
+    expect(uploadLimitFor(sized('a.bin', '', 1)).bytes).toBe(MAX_UPLOAD_BYTES);
+  });
+
+  // 本地这道拦截是同步抛的（在发请求之前），所以这里断言 throw 而不是 rejects。
+  it('20MB 的视频放行（换成图片就会被拦下）', async () => {
+    const bytes = 20 * 1024 * 1024;
+    await api.upload(sized('录屏.mp4', 'video/mp4', bytes));
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    fetchMock.mockClear();
+    expect(() => api.upload(sized('大图.png', 'image/png', bytes))).toThrow(OVERSIZED_MESSAGE);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('超过 100MB 的视频本地就拦下，提示是视频那一档的文案', () => {
+    expect(() => api.upload(sized('录屏.mp4', 'video/mp4', MAX_VIDEO_UPLOAD_BYTES + 1)))
+      .toThrow(VIDEO_OVERSIZED_MESSAGE);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('正好卡在上限上要放行（文案是「不超过」）', async () => {
+    await api.upload(sized('录屏.mp4', 'video/mp4', MAX_VIDEO_UPLOAD_BYTES));
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('头像那条路不受影响，仍然是通用的 8MB 一档', () => {
+    expect(() => api.uploadAvatar(sized('头像.mp4', 'video/mp4', MAX_UPLOAD_BYTES + 1)))
+      .toThrow(OVERSIZED_MESSAGE);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
