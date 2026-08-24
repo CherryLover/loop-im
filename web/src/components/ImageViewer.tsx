@@ -241,8 +241,15 @@ export function ImageViewer({ images, index, onIndex, onClose, hasOlder = false 
           // 图可能在 React 挂上 onLoad 之前就已经好了（浏览器缓存，或者本地 blob:
           // 基本是同步的），那一次 load 事件早就过去了。complete 是补这一次判定用的：
           // src 非空且 complete 时，naturalWidth 是 0 就说明「加载完了，但失败了」。
+          //
+          // 这是个内联函数，每次渲染 React 都会当成「新 ref」重新调这个回调 ——
+          // 图片一旦 complete 就会一直是 complete，若不做幂等判断，每次调用都
+          // setLoad 出一个新对象、触发重渲染、重渲染又把这个回调再跑一遍，
+          // 死循环到 React 报「Maximum update depth exceeded」。命中同款 src/state
+          // 就把 prev 原样传回去，让 setState 因为引用没变而跳过这次渲染。
           if (img?.getAttribute('src') && img.complete) {
-            setLoad({ src: current.src, state: img.naturalWidth > 0 ? 'ready' : 'error' });
+            const next = img.naturalWidth > 0 ? 'ready' : 'error';
+            setLoad((prev) => (prev.src === current.src && prev.state === next ? prev : { src: current.src, state: next }));
           }
         }}
       />
