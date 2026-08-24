@@ -4,6 +4,8 @@ import { logError, logEvent, logWarn } from './log.js';
 import { startOrphanSweeper } from './attachment-access.js';
 import { ensureStoreReady, getDriver } from './storage.js';
 import { sweepStaleTemp } from './upload-temp.js';
+import { logVapidStatus, vapidConfig } from './vapid-config.js';
+import { setPushConfigProvider } from './routes/push.js';
 
 const PORT = Number(process.env.PORT || 4000);
 
@@ -43,6 +45,34 @@ startOrphanSweeper();
 // 这一下只为进程被 kill -9 在上传半路时留下的残骸。删的是我们自己的中间产物，
 // 不是用户的附件，所以不像孤儿清理那样需要开关；只删超过 6 小时没动过的，宁可漏删。
 sweepStaleTemp().catch((err) => logWarn('upload.temp_sweep_failed', { message: err.message }));
+
+/**
+ * 推送（Web Push）的启动自检。
+ *
+ * 和上面附件存储那一档**故意不一样**：这里不 exit。附件是核心路径，坏了就该整个不启动；
+ * 推送不是 —— 不配 VAPID，聊天、SSE、附件一切照旧，只是手机上不响。
+ * 所以这里对齐的是 UPLOAD_ORPHAN_SWEEP 那一档：不配就是关闭，打一行说清楚，服务照常起。
+ *
+ * 之所以要在这里主动打这一行（而不是等第一条推送失败再说）：推送是发射后不管的旁路，
+ * 失败既没人看着、也不会有响应码回到用户面前。配错了的真实症状是几天后有人说
+ * 「怎么收不到通知」，而在此之前日志里一个字都没有。判定规则见 src/vapid-config.js。
+ *
+ * 运维一条命令看推送是开是关：
+ *   docker compose logs loop-im | grep -E 'push\.(enabled|disabled)'
+ */
+logVapidStatus();
+
+// 把自检结果接进 GET /api/push/config —— 前端要靠它决定「通知开关能不能点」，
+// 以及 subscribe() 要用的那把公钥。
+//
+// 这一步单独存在是有原因的：routes/push.js 的默认实现是「没启用」，接不上时前端
+// 看到 enabled: false，开关显示成「服务端未启用推送」——是个说得通的降级。所以**漏掉
+// 这一行不会有任何报错，只会让推送整个功能安静地不存在**。合并这一批时它就漏了，
+// 六个包各自全绿，谁都没发现。下面那条用例（push-config-wiring.test.js）就是为它加的。
+setPushConfigProvider(() => {
+  const config = vapidConfig();
+  return { enabled: config.enabled, publicKey: config.publicKey };
+});
 
 createApp().listen(PORT, () => {
   logEvent('server.started', { port: PORT, env: process.env.NODE_ENV || 'development' });

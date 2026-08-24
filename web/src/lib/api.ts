@@ -252,6 +252,22 @@ export const api = {
   setUserDisabled: (userId: string, disabled: boolean) =>
     request<{ user: User }>(`/users/${userId}/${disabled ? 'disable' : 'enable'}`, { method: 'POST' }),
 
+  // ── Web Push ────────────────────────────────────────────────────────────
+  // 公钥必须在运行时问服务端要，不能编译进前端：每套部署的 VAPID 密钥都不一样。
+  // 服务端没配 VAPID 时返回 { enabled: false, publicKey: null }，前端据此整条路径跳过，
+  // 而不是让用户点了开关之后对着一个永远失败的订阅发呆。
+  pushConfig: () => request<{ enabled: boolean; publicKey: string | null }>('/push/config'),
+  // upsert 语义：同一个 endpoint 反复上报只会有一行，所以前端可以每次启动都无脑调一次
+  //（iOS 收不到 pushsubscriptionchange，只能靠这个兜住失效的订阅，见 lib/push.ts）。
+  pushSubscribe: (payload: {
+    deviceId: string;
+    subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
+  }) => request<{ ok: true }>('/push/subscribe', { method: 'POST', body: JSON.stringify(payload) }),
+  // 退订走请求体带 endpoint 的 DELETE。服务端只删自己名下那条（WHERE endpoint AND user_id），
+  // 否则谁都能拿别人的 endpoint 把别人的推送关掉。成功是 204，没有响应体。
+  pushUnsubscribe: (endpoint: string) =>
+    request<Record<string, never>>('/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
+
   aiSettings: () => request<AiSettings>('/ai/settings'),
   saveAiSettings: (patch: Record<string, unknown>) =>
     request<AiSettings>('/ai/settings', { method: 'PUT', body: JSON.stringify(patch) }),

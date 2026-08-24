@@ -56,8 +56,13 @@ const isAttachment = (url: string) => /^\/uploads\//i.test(url);
  * `[x](/uploads/a.bin?v=.mp4)` 这种写法会让一个非视频对象被渲染成 <video>。
  * 那不是安全问题（服务端对 .bin 仍然是 octet-stream + attachment + nosniff，
  * <video> 解不了也执行不了），但会显示成一个坏掉的播放器，不如直接当附件。
+ *
+ * 导出是因为 lib/messages.ts 的摘要（引用块 / 桌面通知 / 会话列表最后一条）也要认视频，
+ * 好把它折成 `[视频]`。那边一度自己抄了一份判据 —— 而这个文件顶上早就写过
+ * 「别再各抄一遍正则」，然后前端的摘要还是和服务端漂掉了（`/uploads/` 原始路径被
+ * 抖进了引用块）。同一条规则在这个仓库里只留一份，这就是那一份。
  */
-const isVideoAttachment = (url: string) =>
+export const isVideoAttachment = (url: string) =>
   isAttachment(url) && /\.(mp4|webm)$/i.test(url.replace(/[?#].*$/, ''));
 
 export function renderMarkdown(source: string): string {

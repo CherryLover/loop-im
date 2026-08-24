@@ -5,6 +5,7 @@ import {
   resetPasswordFor,
 } from '../auth.js';
 import { disconnect, emitAll } from '../events.js';
+import { deleteSubscriptionsForUser } from '../push-store.js';
 import { uid } from '../db.js';
 import { logEvent } from '../log.js';
 
@@ -98,6 +99,13 @@ router.post('/:id/disable', requireAdmin, (req, res) => {
   logEvent('admin.user.disabled', { reqId: req.id, actorId: req.user.id, targetId: target.id });
   // 已经建好的 SSE 连接不会再过一次 authenticate，得显式掐掉（见 events.js 的 disconnect）。
   disconnect(target.id);
+  // 推送订阅是**另一条完全独立的通道**：disconnect 掐掉的只是这台服务器上的 SSE 连接，
+  // 推送是苹果/谷歌的服务器直接投到用户手机上的，我们这边停不停用它都收得到。
+  // 不一起清的话，被停用的人会继续在锁屏上看到消息标题和摘要 —— 这是数据泄露，不是体验问题。
+  //
+  // 改密码那条路径（auth.js 的 resetPasswordFor）**故意不删**订阅：改密码只作废凭据，
+  // 人还是他自己，为此让他在每台设备上重开一次通知开关不合理。停用不一样，语义就是「立刻失效」。
+  deleteSubscriptionsForUser(target.id);
   const user = publicUser(get('SELECT * FROM users WHERE id = ?', target.id));
   // 在线点当场灭掉；名单上的「已停用」标记也要立刻铺到所有人的界面上。
   emitAll('presence', { userId: target.id, online: false });

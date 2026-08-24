@@ -14,6 +14,7 @@ import { router as uploadRoutes } from './routes/uploads.js';
 import { router as uploadFileRoutes } from './routes/upload-files.js';
 import { router as searchRoutes } from './routes/search.js';
 import { router as aiRoutes } from './routes/ai.js';
+import { router as pushRoutes } from './routes/push.js';
 import { logError } from './log.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -68,6 +69,10 @@ export function createApp({ serveClient = true, clientDist } = {}) {
   app.use('/uploads', uploadFileRoutes);
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+  // `?device=` 由 events.js 的 subscribe 自己从查询串上读（见那边的 deviceOf）。
+  // 这里**不再解析一遍**：同一份「怎么从请求里认出设备」的规则写两处，迟早漂
+  // —— 这一批就修过一个同源的 bug（前端摘要和服务端的 previewOf 抄了两份，
+  // 结果前端把 /uploads/ 原始路径抖进了引用块）。
   app.get('/api/stream', authenticate, (req, res) => subscribe(req.user.id, res));
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
@@ -75,6 +80,7 @@ export function createApp({ serveClient = true, clientDist } = {}) {
   app.use('/api/messages', searchRoutes);
   app.use('/api/uploads', uploadRoutes);
   app.use('/api/ai', aiRoutes);
+  app.use('/api/push', pushRoutes);
 
   // Serve the built frontend when it exists, so `npm start` is enough in production.
   const dist = clientDist || join(here, '..', '..', 'web', 'dist');

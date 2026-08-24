@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useStream, type StreamHandlers } from './useStream';
 import { clearToken, setToken } from './api';
+import { deviceId } from './push';
 
 type Listener = (e: MessageEvent) => void;
 
@@ -46,13 +47,34 @@ const mount = (handlers: StreamHandlers = {}, enabled = true) =>
 describe('连接', () => {
   it('把凭据放进查询串（EventSource 不能自定义请求头）', () => {
     mount();
-    expect(latest().url).toBe('/api/stream?token=tok-abc');
+    expect(latest().url).toMatch(/^\/api\/stream\?token=tok-abc(&|$)/);
   });
 
   it('凭据里的特殊字符会被转义', () => {
     setToken('a/b c');
     mount();
-    expect(latest().url).toBe('/api/stream?token=a%2Fb%20c');
+    expect(latest().url).toMatch(/^\/api\/stream\?token=a%2Fb%20c(&|$)/);
+  });
+
+  /**
+   * device：这条 SSE 是哪台设备连的。服务端的推送判定按**设备**算在线，而不是按人 ——
+   * 桌面挂着网页的时候，手机上那台照样该响，而那正是最需要手机响的时候。
+   *
+   * 这条单拎出来断言，是因为漏掉这个参数**不会报任何错**：服务端会把所有连接都当成
+   * 「没有设备标识」，于是谁都不算在线、连你正在用的那台也一起推。合并这一批时它就漏了
+   * —— useStream.ts 没有分配给任何一个任务包，六个包各自全绿，谁都没碰它。
+   */
+  it('带上 device：推送判定要靠它区分「这个人在线」和「这个人的这一台在线」', () => {
+    mount();
+    const device = new URL(latest().url, 'http://x').searchParams.get('device');
+    expect(device, 'SSE 没有带 device，服务端会把所有设备都当离线').toBeTruthy();
+    expect(device).toBe(deviceId());
+  });
+
+  it('device 也要转义 —— 它来自 localStorage，不能假定内容安全', () => {
+    window.localStorage.setItem('loop-im-device', 'a/b c');
+    mount();
+    expect(latest().url).toContain('device=a%2Fb%20c');
   });
 
   it('没有凭据时不连', () => {
