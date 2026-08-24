@@ -27,8 +27,8 @@ vi.mock('./api', () => ({
 import { api } from './api';
 import {
   applyAppBadge, base64UrlToBytes, deviceId, ensurePushSubscription,
-  notifyRegistration, primeServiceWorker, resetPushStateForTest, serializeSubscription,
-  unsubscribePush,
+  notifyRegistration, primeServiceWorker, pushSubscribed, resetPushStateForTest,
+  serializeSubscription, unsubscribePush,
 } from './push';
 import { notifyEnabledConfirmation, NOTIFY_ENABLED_TITLE } from './notify';
 
@@ -302,6 +302,97 @@ describe('ensurePushSubscription：拿公钥 → subscribe → 上报', () => {
 
 // ── 退订 ────────────────────────────────────────────────────────────────────
 
+/**
+ * 「这台设备有没有推送订阅」这个缓存，决定的是**页面切到后台之后本地还弹不弹通知**：
+ * 有订阅就交给推送（否则同一条消息两条通知），没有就本地照弹。
+ *
+ * 所以它的每一条错法都很贵：
+ * - 该 false 却 true → 切到后台后推送不来、本地也不弹 → **什么都收不到**；
+ * - 该 true 却 false → 多一条通知，只是打扰。
+ * 下面每条失败路径都单独钉一遍「必须是 false」。
+ */
+describe('pushSubscribed：这台设备到底订上没有', () => {
+  it('一开始是 false —— 没问过就不能当成有', () => {
+    expect(pushSubscribed()).toBe(false);
+  });
+
+  it('订阅并上报成功之后才是 true', async () => {
+    readyWith(fakeRegistration());
+    expect(await ensurePushSubscription()).toBe(true);
+    expect(pushSubscribed()).toBe(true);
+  });
+
+  it('没有 Service Worker（jsdom / 老浏览器）→ false', async () => {
+    expect(await ensurePushSubscription()).toBe(false);
+    expect(pushSubscribed()).toBe(false);
+  });
+
+  it('没有通知权限 → false', async () => {
+    readyWith(fakeRegistration());
+    stubNotificationPermission('denied');
+    expect(await ensurePushSubscription()).toBe(false);
+    expect(pushSubscribed()).toBe(false);
+  });
+
+  it('服务端没配 VAPID → false', async () => {
+    readyWith(fakeRegistration());
+    mockApi.pushConfig.mockResolvedValue({ enabled: false, publicKey: null });
+    expect(await ensurePushSubscription()).toBe(false);
+    expect(pushSubscribed()).toBe(false);
+  });
+
+  it('subscribe() 被浏览器拒 → false', async () => {
+    const reg = fakeRegistration();
+    reg.pushManager.subscribe.mockRejectedValue(new Error('权限刚被撤'));
+    readyWith(reg);
+    expect(await ensurePushSubscription()).toBe(false);
+    expect(pushSubscribed()).toBe(false);
+  });
+
+  it('⚠️ 上报给服务端失败 → false（浏览器那边订上了，但服务端不知道，不会推）', async () => {
+    // 这一条最容易写错：本地确实有一份 PushSubscription，看起来「订上了」。
+    // 但服务端没收到，就不会给这台设备推 —— 本地通知必须继续顶上。
+    readyWith(fakeRegistration());
+    mockApi.pushSubscribe.mockRejectedValue(new Error('服务端挂了'));
+    expect(await ensurePushSubscription()).toBe(false);
+    expect(pushSubscribed()).toBe(false);
+  });
+
+  it('先成功、后来一次失败 → 回到 false，不会一直挂着上次的 true', async () => {
+    readyWith(fakeRegistration());
+    await ensurePushSubscription();
+    expect(pushSubscribed()).toBe(true);
+
+    mockApi.pushConfig.mockResolvedValue({ enabled: false, publicKey: null });
+    await ensurePushSubscription();
+    expect(pushSubscribed()).toBe(false);
+  });
+
+  it('退订之后立刻是 false —— 本地通知要马上接管', async () => {
+    const reg = fakeRegistration();
+    reg.pushManager.getSubscription.mockResolvedValue(fakeSubscription());
+    readyWith(reg);
+    await ensurePushSubscription();
+    expect(pushSubscribed()).toBe(true);
+
+    await unsubscribePush();
+    expect(pushSubscribed()).toBe(false);
+  });
+
+  it('退订的两步都失败了，缓存照样是 false（用户已经说了不要）', async () => {
+    const sub = fakeSubscription();
+    sub.unsubscribe = vi.fn(async () => { throw new Error('退不掉'); });
+    const reg = fakeRegistration();
+    reg.pushManager.getSubscription.mockResolvedValue(sub);
+    readyWith(reg);
+    await ensurePushSubscription();
+    mockApi.pushUnsubscribe.mockRejectedValue(new Error('也报不上去'));
+
+    await unsubscribePush();
+    expect(pushSubscribed()).toBe(false);
+  });
+});
+
 describe('unsubscribePush：关掉开关要真的退订 + 通知服务端', () => {
   it('两件事都做：本地 unsubscribe()，并把 endpoint 报给服务端删除', async () => {
     const sub = fakeSubscription();
@@ -518,6 +609,34 @@ const brokenData = { json: () => { throw new SyntaxError('Unexpected token < in 
 describe('sw.js：push handler —— 收到就弹，没有任何一条不弹的分支', () => {
   it('只注册了 install / activate / push / notificationclick 四个监听', () => {
     expect(loadSw().types.sort()).toEqual(['activate', 'install', 'notificationclick', 'push']);
+  });
+
+  /**
+   * ⚠️ 这一条守的是一个**很容易被顺手删掉**的东西。
+   *
+   * 服务端的推送标题这一版去掉了 `Loop IM · ` 前缀（iOS 会自动给主屏 Web App 的通知
+   * 附上一行 manifest short_name，我们再拼一遍就重复了）。sw.js 里的
+   * `FALLBACK_TITLE = 'Loop IM'` 看上去是同一回事 —— **不是**。
+   *
+   * 那是 payload 整个坏掉时的兜底：那时候连发送者名字都拿不到，应用名是仅剩的信息。
+   * 删掉它，用户会收到一条标题为空的通知，比「Loop IM」糟得多。
+   */
+  it('⚠️ 标题去掉应用名，不影响 sw.js 的兜底标题 —— 那是另一回事', async () => {
+    // 服务端给了正常 payload 时，标题里不该有应用名（这是这一版改的）。
+    const normal = loadSw();
+    await normal.fire('push', { data: pushData({ title: '陈子航 · 发版协作', body: 'x' }) });
+    expect(normal.showNotification.mock.calls[0][0]).toBe('陈子航 · 发版协作');
+    expect(normal.showNotification.mock.calls[0][0]).not.toMatch(/Loop IM/);
+
+    // payload 坏掉时仍然是「Loop IM」（这是**没有**改的）。
+    for (const data of [brokenData, null, pushData({ title: '' })]) {
+      const sw = loadSw();
+      await sw.fire('push', { data });
+      expect(
+        sw.showNotification.mock.calls[0][0],
+        'FALLBACK_TITLE 被顺手删了：payload 坏掉时通知会没有标题',
+      ).toBe('Loop IM');
+    }
   });
 
   it('payload 正常：标题、正文、tag、conversationId 都照 payload 来', async () => {

@@ -1,16 +1,20 @@
-// 「这台设备此刻在不在线」——SSE 侧的真实行为。
+// 「这台设备此刻在不在前台」——SSE 侧的真实行为。
 //
 // push-decide.test.js 验的是纯函数的判定；这里验的是喂给它的那个输入是不是真的对：
-// 起一个真的 app，建几条带不同 ?device= 的 SSE 连接，看 onlineDeviceIds 跟不跟得上。
-// 按**设备**判而不是按人判是整个 2C 存在的理由（§C.3），而这条链路上唯一可能出错的
-// 地方就是「连接 → deviceId」这层映射。
+// 起一个真的 app，建几条带不同 ?device= / ?stream= 的 SSE 连接、走真的
+// POST /api/push/visibility 报一下，看 foregroundDeviceIds 跟不跟得上。
+// 按**设备**判而不是按人判是整个 2C 存在的理由（§C.3）。
+//
+// ⚠️ 判据在这一版变了：从「这台设备连着 SSE」变成「这台设备上有页面报告了自己在前台」。
+//    连着 ≠ 在前台 —— iOS 冻结 PWA 时 TCP 不会断，服务端会一直以为它开着。
+//    真机病历和边界逐条见 push-visibility.test.js 和 src/events.js。
 import './helpers.js';
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer, waitFor } from './helpers.js';
 import { direct, group, member } from './fixtures.js';
 import { AI_ID } from '../src/ai.js';
-import { emitTo, onlineDeviceIds } from '../src/events.js';
+import { emitTo, foregroundDeviceIds } from '../src/events.js';
 import { setPushBridgeForTests } from '../src/push-decide.js';
 import { get } from '../src/db.js';
 import { pushForMessage, runAiTurn } from '../src/routes/conversations.js';
@@ -27,10 +31,14 @@ after(() => api.close());
 /**
  * 开一条真的 SSE 连接，把收到的字节攒下来。
  * 返回 close()（断开）和 text()（到目前为止收到的原始流）。
+ *
+ * `stream` 是「这台设备上的哪一个页面」。默认按 `<device>-tab` 生成，只有专门要验
+ * 「同一台设备两个标签页」的用例才需要自己指定。
  */
-async function openStream(token, device) {
+async function openStream(token, device, stream = device === undefined ? undefined : `${device}-tab`) {
   const ac = new AbortController();
-  const query = device === undefined ? '' : `&device=${device}`;
+  const query = (device === undefined ? '' : `&device=${device}`)
+    + (stream === undefined ? '' : `&stream=${stream}`);
   const res = await fetch(`${api.baseUrl}/api/stream?token=${token}${query}`, { signal: ac.signal });
   assert.equal(res.status, 200);
   const reader = res.body.getReader();
@@ -45,18 +53,34 @@ async function openStream(token, device) {
       }
     } catch { /* abort 时抛，正常 */ }
   })();
-  return { close: () => ac.abort(), text: () => text };
+  return { close: () => ac.abort(), text: () => text, device, stream };
 }
 
-describe('SSE 在线设备 · 按设备记，不按人记', () => {
-  it('两台设备各连一条，两个 deviceId 都在集合里', async () => {
+/** 走真的 HTTP 接口报一次可见性，不绕过鉴权和校验。 */
+const report = (token, device, stream, visible) =>
+  api.post('/api/push/visibility', { deviceId: device, streamId: stream, visible }, token);
+
+/**
+ * 开一条 SSE 连接**并报告这个页面在前台**——也就是「用户正开着这台设备上的网页」。
+ *
+ * 建连本身不再等于前台（见文件头 ⚠️），所以凡是想造出「这台设备在前台」这个状态的
+ * 用例，都得走这个函数，光 openStream 是不够的。
+ */
+async function openForeground(token, device, stream = `${device}-tab`) {
+  const s = await openStream(token, device, stream);
+  assert.equal((await report(token, device, stream, true)).status, 200);
+  return s;
+}
+
+describe('前台设备 · 按设备记，不按人记', () => {
+  it('两台设备各连一条、各报一次前台，两个 deviceId 都在集合里', async () => {
     const you = await member('尤两台');
     const token = await api.login(you.email);
-    const laptop = await openStream(token, 'laptop');
-    const phone = await openStream(token, 'phone');
+    const laptop = await openForeground(token, 'laptop');
+    const phone = await openForeground(token, 'phone');
     try {
-      await waitFor(() => onlineDeviceIds(you.id).size === 2);
-      assert.deepEqual([...onlineDeviceIds(you.id)].sort(), ['laptop', 'phone']);
+      await waitFor(() => foregroundDeviceIds(you.id).size === 2);
+      assert.deepEqual([...foregroundDeviceIds(you.id)].sort(), ['laptop', 'phone']);
     } finally {
       laptop.close();
       phone.close();
@@ -66,14 +90,14 @@ describe('SSE 在线设备 · 按设备记，不按人记', () => {
   it('断开其中一条，集合跟着少一个；另一条不受影响', async () => {
     const duan = await member('段掉一条');
     const token = await api.login(duan.email);
-    const laptop = await openStream(token, 'laptop');
-    const phone = await openStream(token, 'phone');
+    const laptop = await openForeground(token, 'laptop');
+    const phone = await openForeground(token, 'phone');
     try {
-      await waitFor(() => onlineDeviceIds(duan.id).size === 2);
+      await waitFor(() => foregroundDeviceIds(duan.id).size === 2);
       laptop.close();
       // 断开方向**不做任何宽限期**：连接一没，下一条消息就该推到那台设备上（§C.4）。
-      await waitFor(() => !onlineDeviceIds(duan.id).has('laptop'));
-      assert.deepEqual([...onlineDeviceIds(duan.id)], ['phone']);
+      await waitFor(() => !foregroundDeviceIds(duan.id).has('laptop'));
+      assert.deepEqual([...foregroundDeviceIds(duan.id)], ['phone']);
     } finally {
       phone.close();
     }
@@ -82,14 +106,14 @@ describe('SSE 在线设备 · 按设备记，不按人记', () => {
   it('全断开之后集合是空的', async () => {
     const quan = await member('全断了');
     const token = await api.login(quan.email);
-    const one = await openStream(token, 'laptop');
-    await waitFor(() => onlineDeviceIds(quan.id).size === 1);
+    const one = await openForeground(token, 'laptop');
+    await waitFor(() => foregroundDeviceIds(quan.id).size === 1);
     one.close();
-    await waitFor(() => onlineDeviceIds(quan.id).size === 0);
-    assert.deepEqual([...onlineDeviceIds(quan.id)], []);
+    await waitFor(() => foregroundDeviceIds(quan.id).size === 0);
+    assert.deepEqual([...foregroundDeviceIds(quan.id)], []);
   });
 
-  it('不带 device 的老客户端：连得上、收得到消息，但不进在线设备集合', async () => {
+  it('不带 device 的老客户端：连得上、收得到消息，但不进前台设备集合', async () => {
     // 这一条是兼容性底线。老页面不带 ?device= 就把它算成「没有已知设备」，
     // 于是它那台机器上的推送订阅（如果有）照推——宁可多推一条，不可漏推。
     const lao = await member('老客户端');
@@ -97,7 +121,7 @@ describe('SSE 在线设备 · 按设备记，不按人记', () => {
     const stream = await openStream(token, undefined);
     try {
       await waitFor(() => stream.text().includes(': connected'));
-      assert.deepEqual([...onlineDeviceIds(lao.id)], []);
+      assert.deepEqual([...foregroundDeviceIds(lao.id)], []);
       emitTo([lao.id], 'ping-test', { hello: 1 });
       await waitFor(() => stream.text().includes('event: ping-test'));
       assert.match(stream.text(), /"hello":1/);
@@ -112,20 +136,22 @@ describe('SSE 在线设备 · 按设备记，不按人记', () => {
     const stream = await openStream(token, 'a&device=b');
     try {
       await waitFor(() => stream.text().includes(': connected'));
-      assert.deepEqual([...onlineDeviceIds(guai.id)], []);
+      assert.deepEqual([...foregroundDeviceIds(guai.id)], []);
     } finally {
       stream.close();
     }
   });
 
   it('同一台设备重连两次（旧连接还没断）只算一台', async () => {
+    // 两条连接同一个 deviceId、不同的 streamId（两个标签页），各报各的前台。
+    // 集合是按**设备**去重的，所以还是一台。
     const chong = await member('重连的');
     const token = await api.login(chong.email);
-    const a = await openStream(token, 'same-phone');
-    const b = await openStream(token, 'same-phone');
+    const a = await openForeground(token, 'same-phone', 'tab-a');
+    const b = await openForeground(token, 'same-phone', 'tab-b');
     try {
-      await waitFor(() => onlineDeviceIds(chong.id).size === 1);
-      assert.deepEqual([...onlineDeviceIds(chong.id)], ['same-phone']);
+      await waitFor(() => foregroundDeviceIds(chong.id).size === 1);
+      assert.deepEqual([...foregroundDeviceIds(chong.id)], ['same-phone']);
     } finally {
       a.close();
       b.close();
@@ -135,12 +161,12 @@ describe('SSE 在线设备 · 按设备记，不按人记', () => {
   it('各人算各人的：甲的设备不会出现在乙的集合里', async () => {
     const jia = await member('甲设备');
     const yi = await member('乙设备');
-    const sa = await openStream(await api.login(jia.email), 'jia-phone');
-    const sb = await openStream(await api.login(yi.email), 'yi-phone');
+    const sa = await openForeground(await api.login(jia.email), 'jia-phone');
+    const sb = await openForeground(await api.login(yi.email), 'yi-phone');
     try {
-      await waitFor(() => onlineDeviceIds(jia.id).size === 1 && onlineDeviceIds(yi.id).size === 1);
-      assert.deepEqual([...onlineDeviceIds(jia.id)], ['jia-phone']);
-      assert.deepEqual([...onlineDeviceIds(yi.id)], ['yi-phone']);
+      await waitFor(() => foregroundDeviceIds(jia.id).size === 1 && foregroundDeviceIds(yi.id).size === 1);
+      assert.deepEqual([...foregroundDeviceIds(jia.id)], ['jia-phone']);
+      assert.deepEqual([...foregroundDeviceIds(yi.id)], ['yi-phone']);
     } finally {
       sa.close();
       sb.close();
@@ -148,22 +174,22 @@ describe('SSE 在线设备 · 按设备记，不按人记', () => {
   });
 
   it('没连过的人查出来是空集合，不是 undefined', async () => {
-    assert.deepEqual([...onlineDeviceIds('u_从来没连过')], []);
+    assert.deepEqual([...foregroundDeviceIds('u_从来没连过')], []);
   });
 });
 
-describe('SSE 改成 Map 之后，原有行为一个字都没变', () => {
+describe('连接表换了两轮之后，原有行为一个字都没变', () => {
   it('消息照样从 SSE 推到每一台连着的设备上', async () => {
-    // clients 从 Set<res> 换成了 Map<res, deviceId>，遍历写法跟着改了（要走 .keys()）。
-    // 这一条盯的就是那次改写：写漏一个 .keys() 的话，emitTo 会把 [res, deviceId]
-    // 这个数组当成 res 去 write，整个实时通道会静默地全废。
+    // clients 先从 Set<res> 换成 Map<res, deviceId>，这一版又把值换成了一个对象
+    //（deviceId + streamId + foreground）。遍历写法必须走 .keys()：写漏一个的话，
+    // emitTo 会把 [res, state] 这个数组当成 res 去 write，整个实时通道静默全废。
     const shou = await member('收消息的');
     const token = await api.login(shou.email);
     const dm = await direct(api, token, (await member('发消息的')).id);
-    const laptop = await openStream(token, 'laptop');
-    const phone = await openStream(token, 'phone');
+    const laptop = await openForeground(token, 'laptop');
+    const phone = await openForeground(token, 'phone');
     try {
-      await waitFor(() => onlineDeviceIds(shou.id).size === 2);
+      await waitFor(() => foregroundDeviceIds(shou.id).size === 2);
       const sent = await api.post(`/api/conversations/${dm.id}/messages`, { body: '两台都该收到' }, token);
       assert.equal(sent.status, 201);
       await waitFor(() => laptop.text().includes('两台都该收到') && phone.text().includes('两台都该收到'));
@@ -178,11 +204,11 @@ describe('SSE 改成 Map 之后，原有行为一个字都没变', () => {
   it('停用账号仍然当场掐断全部连接', async () => {
     const ting = await member('停用的');
     const token = await api.login(ting.email);
-    const stream = await openStream(token, 'phone');
-    await waitFor(() => onlineDeviceIds(ting.id).size === 1);
+    const stream = await openForeground(token, 'phone');
+    await waitFor(() => foregroundDeviceIds(ting.id).size === 1);
     assert.equal((await api.post(`/api/users/${ting.id}/disable`, {}, admin)).status, 200);
-    await waitFor(() => onlineDeviceIds(ting.id).size === 0);
-    assert.deepEqual([...onlineDeviceIds(ting.id)], []);
+    await waitFor(() => foregroundDeviceIds(ting.id).size === 0);
+    assert.deepEqual([...foregroundDeviceIds(ting.id)], []);
     stream.close();
   });
 });
@@ -251,11 +277,11 @@ describe('推送失败不许影响发消息', () => {
         id: 'ps_1', userId: zhen.id, deviceId: 'phone',
         endpoint: 'https://push.example.com/x', p256dh: 'p', auth: 'a',
       }],
-      onlineDevices: () => new Set(),
+      foregroundDevices: () => new Set(),
       send: async ({ payload }) => { payloads.push(JSON.parse(payload)); return { ok: true, status: 201 }; },
     });
     await waitFor(() => payloads.length === 1);
-    assert.equal(payloads[0].title, `Loop IM · ${sent.body.message.senderName} · 发版小组`);
+    assert.equal(payloads[0].title, `${sent.body.message.senderName} · 发版小组`);
     assert.equal(payloads[0].body, '[视频]');       // 不能是「[文件] 年会.mp4」
     assert.equal(payloads[0].conversationId, g.id);
   });
@@ -335,21 +361,21 @@ describe('发消息 → 真的推出去（把 2A / 2B 换成假的）', () => {
     await waitFor(() => sent.length === 2);
 
     assert.deepEqual(sent.map((s) => s.subscription.deviceId).sort(), ['ipad', 'phone']);
-    assert.equal(sent[0].payload.title, `Loop IM · ${res.body.message.senderName} · 端到端小组`);
+    assert.equal(sent[0].payload.title, `${res.body.message.senderName} · 端到端小组`);
     assert.equal(sent[0].payload.body, '明早十点评审');
     assert.equal(sent[0].payload.conversationId, g.id);
     assert.equal(sent[0].payload.tag, `loop-im:${g.id}`);
   });
 
-  it('收件人的一台设备挂着 SSE → 只推另一台（2C 存在的全部理由）', async () => {
-    const zai = await member('一台在线');
+  it('收件人的一台设备报了前台 → 只推另一台（2C 存在的全部理由）', async () => {
+    const zai = await member('一台在前台');
     const token = await api.login(zai.email);
-    const g = await group(api, admin, '在线判定组', [zai.id]);
+    const g = await group(api, admin, '前台判定组', [zai.id]);
     fakeBridge({ subscriptions: [subFor(zai, 'laptop'), subFor(zai, 'phone')] });
 
-    const laptop = await openStream(token, 'laptop');
+    const laptop = await openForeground(token, 'laptop');
     try {
-      await waitFor(() => onlineDeviceIds(zai.id).has('laptop'));
+      await waitFor(() => foregroundDeviceIds(zai.id).has('laptop'));
       assert.equal((await api.post(`/api/conversations/${g.id}/messages`, { body: '在不在' }, admin)).status, 201);
       await waitFor(() => sent.length === 1);
       await new Promise((r) => setTimeout(r, 100));   // 万一多推了，给它冒出来的时间

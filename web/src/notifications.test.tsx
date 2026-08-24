@@ -23,6 +23,14 @@ vi.mock('./lib/api', async (importOriginal) => {
   return { ...actual, api: mockApi };
 });
 
+// 「这台设备有没有推送订阅」决定切到后台之后本地还弹不弹（有订阅就交给推送）。
+// jsdom 里 ensurePushSubscription 永远订不上，所以这个值只能由用例自己拨。
+let subscribed = false;
+vi.mock('./lib/push', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/push')>();
+  return { ...actual, pushSubscribed: () => subscribed, ensurePushSubscription: async () => subscribed };
+});
+
 const ME: User = {
   id: 'u_lin', name: '林悦', email: 'lin@loop.dev', dept: '产品',
   role: 'admin', avatarUrl: null, isAI: false, online: true,
@@ -61,7 +69,7 @@ const API_METHODS = [
   'conversations', 'users', 'me', 'ping', 'messages', 'markRead', 'sendMessage',
   'addMembers', 'removeMember', 'renameConversation', 'leaveConversation',
   'openDirect', 'createGroup', 'addUser', 'aiContext', 'updateName',
-  'changePassword', 'upload', 'uploadAvatar', 'searchMessages',
+  'changePassword', 'upload', 'uploadAvatar', 'searchMessages', 'pushVisibility',
 ] as const;
 
 const mockApi = Object.fromEntries(API_METHODS.map((k) => [k, vi.fn()])) as
@@ -116,9 +124,18 @@ const openProfile = () => userEvent.click(screen.getByTitle('个人资料'));
 const incoming = async (over: Partial<Message> = {}) =>
   act(async () => { handlers.onMessage?.(message('m2', { createdAt: T0 + 1000, ...over })); });
 
-beforeEach(() => {
+/**
+ * 只能动态 import：这个文件里的 `vi.mock('./lib/api')` 工厂引用了下面才声明的 mockApi，
+ * 而 visibility.ts 会 import api —— 顶层静态 import 它会把那个工厂提前跑起来，
+ * 撞上「Cannot access 'mockApi' before initialization」。
+ */
+const resetVisibility = async () => (await import('./lib/visibility')).resetVisibilityForTest();
+
+beforeEach(async () => {
   handlers = {};
   shown = [];
+  subscribed = false;
+  await resetVisibility();
   requestPermission = vi.fn(async () => FakeNotification.permission);
   window.localStorage.clear();
   for (const fn of Object.values(mockApi)) fn.mockReset().mockResolvedValue({});
@@ -137,6 +154,7 @@ afterEach(() => {
   // 必须先卸载再还原 mock：反过来的话，残留组件卸载期间跑的 effect 会打到
   // 已被清空的桩上，抛出与本用例无关的 "api.xxx is not a function"。
   cleanup();
+  void resetVisibility();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.localStorage.clear();
@@ -629,5 +647,115 @@ describe('点通知回到对应会话', () => {
     await incoming({ id: 'm3' });
 
     expect(shown.map((n) => n.options.tag)).toEqual(['loop-im:c1', 'loop-im:c1']);
+  });
+});
+
+/**
+ * ── 切后台之后谁来通知：本地弹，还是交给推送 ────────────────────────────────
+ *
+ * 这一组是「切后台后立刻发的消息收不到推送」那个真机 bug 的前端一侧。两件事：
+ *
+ * 1. **上报**：页面切前台 / 切后台都要告诉服务端一声。服务端不再拿 SSE 连接在不在去猜
+ *    ——iOS 冻结 PWA 时 TCP 不会立刻断，猜出来是错的。
+ * 2. **交接**：有推送订阅的设备切到后台后，本地就不弹了（同一条消息两条通知，
+ *    tag 相同会互相覆盖，但手机会震两下）；**没有订阅的设备必须一切照旧**。
+ *
+ * 第 2 条的后半句是硬要求：没配 VAPID / 没授权 / 浏览器不支持推送的设备只有本地这一条路，
+ * 弄丢了就是「切到后台什么都收不到」。
+ */
+describe('页面可见性上报', () => {
+  const visibilityCalls = () => mockApi.pushVisibility.mock.calls.map((c) => c[0]);
+
+  it('页面一起来就报一次「我在前台」—— 不报的话服务端默认按后台算，开着页面也照收推送', async () => {
+    await mount();
+    await waitFor(() => expect(mockApi.pushVisibility).toHaveBeenCalled());
+    expect(visibilityCalls()[0]).toMatchObject({ visible: true });
+    expect(visibilityCalls()[0].deviceId).toBeTruthy();
+    expect(visibilityCalls()[0].streamId).toBeTruthy();
+  });
+
+  it('⚠️ 切到后台时报一次「我切后台了」—— 这一发就是本次修复的核心', async () => {
+    await mount();
+    await waitFor(() => expect(mockApi.pushVisibility).toHaveBeenCalled());
+
+    vi.spyOn(Object.getPrototypeOf(document), 'visibilityState' as never, 'get').mockReturnValue('hidden' as never);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+
+    await waitFor(() => expect(visibilityCalls().at(-1)).toMatchObject({ visible: false }));
+  });
+
+  it('切回前台再报一次 —— 少了它，回到前台还在收推送', async () => {
+    const state = vi.spyOn(Object.getPrototypeOf(document), 'visibilityState' as never, 'get');
+    state.mockReturnValue('visible' as never);
+    await mount();
+    await waitFor(() => expect(mockApi.pushVisibility).toHaveBeenCalled());
+
+    state.mockReturnValue('hidden' as never);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    state.mockReturnValue('visible' as never);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+
+    expect(visibilityCalls().at(-1)).toMatchObject({ visible: true });
+  });
+
+  it('SSE（重）连上时重报一遍：服务端把这个状态挂在连接上，换条连接就是一张白纸', async () => {
+    await mount();
+    await waitFor(() => expect(mockApi.pushVisibility).toHaveBeenCalled());
+    const before = mockApi.pushVisibility.mock.calls.length;
+
+    await act(async () => { handlers.onOpen?.(); });
+
+    expect(mockApi.pushVisibility.mock.calls.length).toBe(before + 1);
+    expect(visibilityCalls().at(-1)).toMatchObject({ visible: true });
+  });
+
+  it('上报接口报错不打断页面：消息照样进列表', async () => {
+    mockApi.pushVisibility.mockRejectedValue(new Error('网络抖了'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await mount();
+    await incoming();
+    expect(await screen.findByText('内容 m2')).toBeInTheDocument();
+  });
+});
+
+describe('有推送订阅时把后台通知交给推送', () => {
+  const mountHidden = async () => {
+    vi.spyOn(Object.getPrototypeOf(document), 'hidden' as never, 'get').mockReturnValue(true);
+    vi.spyOn(Object.getPrototypeOf(document), 'visibilityState' as never, 'get').mockReturnValue('hidden' as never);
+    stubNotification();
+    prefOn();
+    return mount();
+  };
+
+  it('有订阅 + 页面切走 → 本地不弹，交给推送（否则同一条消息震两下）', async () => {
+    subscribed = true;
+    await mountHidden();
+    await incoming();
+    expect(shown).toHaveLength(0);
+  });
+
+  it('⚠️ 没有订阅 + 页面切走 → 照旧弹（硬要求：不能回归成「切后台什么都收不到」）', async () => {
+    // 没配 VAPID、用户没授权、浏览器不支持推送的设备全落在这一档，本地是唯一的通道。
+    subscribed = false;
+    await mountHidden();
+    await incoming();
+    expect(shown).toHaveLength(1);
+    expect(shown[0].title).toBe('陈子航 · 发版协作');
+  });
+
+  it('⚠️ 有订阅但页面**开着**（人只是切到了联系人页）→ 照旧弹', async () => {
+    // 页面开着时这台设备报告的是「前台」，服务端**不会**推。这时候本地再不弹，
+    // 用户就什么都收不到了。判据是 document.hidden，不是「这条消息在不在眼前」。
+    subscribed = true;
+    stubNotification();
+    prefOn();
+    await mount();
+    await waitFor(() => expect(mockApi.markRead).toHaveBeenCalledTimes(1));
+
+    await userEvent.click(screen.getAllByRole('button', { name: '联系人' })[0]);
+    await screen.findByPlaceholderText('搜索姓名或邮箱');
+
+    await incoming();
+    expect(shown).toHaveLength(1);
   });
 });

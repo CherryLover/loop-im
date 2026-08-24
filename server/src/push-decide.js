@@ -14,11 +14,16 @@
  * | 2 | `senderId !== 收件人`             | 同                              |
  * | 3 | `kind !== 'system'`               | 同                              |
  * | 4 | 收件人没把这个会话设成免打扰        | `!conversation.muted`           |
- * | 5 | **那台设备**此刻没连着 SSE          | `!visible`（人正看着就不弹）      |
+ * | 5 | **那台设备**没报告自己在前台        | `!visible`（人正看着就不弹）      |
  *
  * 第 5 条是两边唯一形态不同的：前端能直接看到「这条消息此刻在不在屏幕上」，
- * 服务端看不到，改用「这台设备的 SSE 活着吗」来代替——SSE 活着说明这台设备上的网页
- * 正在跑，它自己会用本地通知处理；SSE 断了说明只有推送能触达它。见 §C.3。
+ * 服务端看不到，改用「这台设备上的页面报告自己在前台吗」来代替——报了前台说明那台
+ * 设备上的网页正被人看着，它自己会用本地通知处理；没报（含从来没报过）说明只有推送
+ * 能触达它。见 §C.3。
+ *
+ * ⚠️ 判据**不是**「那台设备连着 SSE」，这一条被真机推翻过，别改回去：iOS 冻结 PWA 时
+ *    TCP 不会立刻断，服务端好几分钟都以为它在线，于是切后台后立刻发的消息一条推送都
+ *    收不到。完整的病历在 `events.js` 的 `foregroundDeviceIds` 上面。
  *
  * ── 两条被明确否决的「优化」，谁都别再捡回来 ─────────────────────────────
  *
@@ -32,11 +37,8 @@
  *    方案文档 §E.1 Q3 倾向「只推给触发她的那个人」，**已被否决**——用户要的是规则统一。
  *    所以这个文件里一个 AI_ID 都不该出现；出现了就是有人在加特例。
  */
-import { onlineDeviceIds } from './events.js';
+import { foregroundDeviceIds } from './events.js';
 import { logError, logEvent } from './log.js';
-
-/** 应用名。推送标题的第一段，见 pushTitle。 */
-export const APP_NAME = 'Loop IM';
 
 /**
  * 同时在飞的出站推送请求上限。
@@ -50,7 +52,7 @@ export const PUSH_FANOUT_CONCURRENCY = 6;
 
 const toSet = (value) => (value instanceof Set ? value : new Set(value || []));
 
-/** onlineDevices 允许传 Map，也允许传普通对象（测试里写起来省事）。 */
+/** foregroundDevices 允许传 Map，也允许传普通对象（测试里写起来省事）。 */
 function toDeviceMap(value) {
   if (value instanceof Map) return value;
   const out = new Map();
@@ -68,7 +70,8 @@ function toDeviceMap(value) {
  *                      订阅，这一道是纯粹的兜底——推送带着消息摘要，宁可失败也不能发错人。
  * @param mutedBy       Set<userId>：把这个会话设成免打扰的人
  * @param subscriptions 这批人的全部订阅，`{ id, userId, deviceId, endpoint, p256dh, auth }`
- * @param onlineDevices Map<userId, Set<deviceId>>：此刻连着 SSE 的设备
+ * @param foregroundDevices Map<userId, Set<deviceId>>：此刻**报告了自己在前台**的设备。
+ *                      注意不是「连着 SSE 的设备」——那个判据被真机推翻了，见文件头 ⚠️。
  * @returns Array<Subscription>
  */
 export function targetsFor({
@@ -76,7 +79,7 @@ export function targetsFor({
   memberIds = [],
   mutedBy,
   subscriptions = [],
-  onlineDevices,
+  foregroundDevices,
 } = {}) {
   // 规则 3：系统消息（入群 / 改群名之类）一个都不推。放在最前面是因为它一票否决整条消息，
   // 后面那些 per-user 的判断连跑都不用跑。
@@ -84,7 +87,7 @@ export function targetsFor({
 
   const members = toSet(memberIds);
   const muted = toSet(mutedBy);
-  const online = toDeviceMap(onlineDevices);
+  const foreground = toDeviceMap(foregroundDevices);
 
   return subscriptions.filter((sub) => {
     // 规则 1 的另一半：一条没有 endpoint 的订阅推不出去，早点丢掉省一次注定失败的请求。
@@ -92,39 +95,40 @@ export function targetsFor({
     if (!members.has(sub.userId)) return false;
     if (sub.userId === message.senderId) return false;      // 规则 2：自己发的
     if (muted.has(sub.userId)) return false;                // 规则 4：免打扰，@我 也不例外
-    // 规则 5：这台设备的网页正开着（SSE 活着）→ 本地通知负责，这一台不推。
-    // 没有 deviceId 的订阅判不了在不在线，按「宁可多推一条，不可漏推」照推（§C.4）。
-    if (sub.deviceId && online.get(sub.userId)?.has(sub.deviceId)) return false;
+    // 规则 5：这台设备上有页面报告自己在前台 → 本地通知负责，这一台不推。
+    // 没有 deviceId 的订阅对不上任何一台设备，按「宁可多推一条，不可漏推」照推（§C.4）。
+    if (sub.deviceId && foreground.get(sub.userId)?.has(sub.deviceId)) return false;
     return true;
   });
 }
 
 /**
- * 推送标题：**应用名 + 发送者**，群聊再带上群名。
+ * 推送标题：**发送者**，群聊再带上群名。和前端 `notifyTitle()` 逐字一致。
  *
- *   单聊 / AI：`Loop IM · 张三`
- *   群聊：     `Loop IM · 张三 · 项目组`
+ *   单聊 / AI：`张三`
+ *   群聊：     `张三 · 项目组`
  *
- * 三段的理由，从后往前说：
- * - **群名必须在**。这是前端 `notifyTitle()` 早就定下的口径，理由一样成立：
- *   只看到一个人名，不知道这条消息是从哪个群冒出来的，而人往往同时在十几个群里。
- * - **发送者必须在**，锁屏上一眼看清是谁找我，这是通知的主要信息。
- * - **应用名是用户点名要的**。分隔符统一用 `·`，和前端保持同一个形状，
- *   两边同一条消息长得一样（§C.5 要求）。
+ * ── 为什么这里**没有**应用名（真机反馈，别再加回去）───────────────────────
  *
- * ⚠️ 真机上要确认一件事：**iOS 主屏 Web App 的通知头部可能已经自带应用名**，
- *    那样标题里再拼一遍就成了「Loop IM Loop IM · 张三」。用户明确要求带上，这里照做，
- *    但这一条要进真机验收清单实测（安卓与桌面上不存在这个问题）。
+ * 上一版拼的是「应用名 · 发送者」。真机上 iPhone 显示成：
  *
- * 另一个已知取舍：通知标题在各家系统上都是**从尾部截断**的，三段拼下来窄屏上最先被切掉的
- * 是群名。把应用名放最后能保住群名，但那不符合「应用名 + 发送者」这个要求，也不符合
- * 通知标题的通行写法（应用名在前）。先按用户定的来，真机上看着不行再调。
+ *     Loop IM · 测试人员
+ *     from Loop
+ *
+ * 那第二行是 **iOS 给主屏 Web App 的通知自动附上的 manifest `short_name`**，是系统外壳，
+ * 我们既去不掉也改不了。于是应用名一条通知里出现两遍，还把最该抢眼的发送者挤到了后面。
+ *
+ * 通知标题在各家系统上都是**从尾部截断**的：去掉这一段，窄屏上先保住的就是群名。
+ * 安卓和桌面上通知本来就带应用名的图标 / 来源行，同样不需要标题再重复一遍。
+ *
+ * ⚠️ `web/public/sw.js` 里的 `FALLBACK_TITLE = 'Loop IM'` 是**另一回事**，别顺手删：
+ *    那是 payload 坏掉、连发送者名字都拿不到时的兜底文案，那时应用名是仅剩的信息。
  */
 export function pushTitle(message, conversation) {
   const sender = message?.senderName || '新消息';
   return conversation?.type === 'group' && conversation.title
-    ? `${APP_NAME} · ${sender} · ${conversation.title}`
-    : `${APP_NAME} · ${sender}`;
+    ? `${sender} · ${conversation.title}`
+    : sender;
 }
 
 /**
@@ -245,9 +249,9 @@ async function forEachLimited(items, limit, worker) {
 export async function queuePush(ctx, deps = {}) {
   const { message, conversation, body, memberIds = [], mutedBy = new Set() } = ctx || {};
   const {
-    // 默认就是真的 SSE 在线表。**不要**把它的缺省值改成 null 之类的「空实现」：
-    // 那样任何一个忘了传的调用点都会静默地把推送发给正开着网页的设备。
-    onlineDevices: lookupOnline = onlineDeviceIds,
+    // 默认就是真的「前台设备表」。**不要**把它的缺省值改成 null 之类的「空实现」：
+    // 那样任何一个忘了传的调用点都会静默地把推送发给用户正看着的那台设备。
+    foregroundDevices: lookupForeground = foregroundDeviceIds,
     subscriptionsFor = null,
     send = null,
     forget = null,
@@ -273,10 +277,10 @@ export async function queuePush(ctx, deps = {}) {
     const subscriptions = (await list(audience)) || [];
     if (!subscriptions.length) return;
 
-    const online = new Map();
-    if (lookupOnline) for (const id of audience) online.set(id, toSet(lookupOnline(id)));
+    const foreground = new Map();
+    if (lookupForeground) for (const id of audience) foreground.set(id, toSet(lookupForeground(id)));
 
-    const targets = targetsFor({ message, memberIds, mutedBy, subscriptions, onlineDevices: online });
+    const targets = targetsFor({ message, memberIds, mutedBy, subscriptions, foregroundDevices: foreground });
     if (!targets.length) return;
 
     const payload = JSON.stringify(pushPayloadFor({ message, conversation, body }));

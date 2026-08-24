@@ -1,13 +1,15 @@
-// Web Push 的订阅接口。三条，全部要登录（router.use(authenticate)）：
+// Web Push 的订阅接口。四条，全部要登录（router.use(authenticate)）：
 //
 //   GET    /api/push/config      服务端有没有开推送、公钥是什么
 //   POST   /api/push/subscribe   上报（或更新）本设备的订阅
 //   DELETE /api/push/subscribe   退订本设备
+//   POST   /api/push/visibility  上报本页面此刻在不在前台（决定这台设备该不该收推送）
 //
 // 「合法的订阅长什么样」「同一个 endpoint 再报一次怎么办」都在 push-store.js，
 // 这里只负责鉴权、HTTP 状态码，以及**不把别人的信息泄露出去**。
 import { Router } from 'express';
 import { authenticate } from '../auth.js';
+import { clearDeviceVisibility, setDeviceVisibility } from '../events.js';
 import {
   deleteSubscriptionForUser, normalizeUa, upsertSubscription, validateSubscriptionInput,
 } from '../push-store.js';
@@ -82,4 +84,91 @@ router.delete('/subscribe', (req, res) => {
   if (!endpoint) return res.status(400).json({ error: '缺少 endpoint' });
   deleteSubscriptionForUser(endpoint, req.user.id);
   res.status(204).end();
+});
+
+// ── 页面可见性上报 ─────────────────────────────────────────────────────────
+//
+// 这一条接口的存在理由，是一个真机 bug：iPhone 上 PWA 还在前台 → 立即切后台 →
+// 马上让别人发消息 → 一条推送都收不到。根因是服务端拿「SSE 连接还在不在」去**推断**
+// 页面状态，而 iOS 冻结 PWA 时 TCP 不会立刻断（完整病历在 events.js 的
+// foregroundDeviceIds 上面）。所以改成页面**主动上报**，服务端不再猜。
+//
+// 挂在 /api/push 下而不是另起一个路由文件：这条上报唯一的用途就是决定「这台设备该不该
+// 收推送」，和订阅上报是同一件事的两半，共用同一个 `router.use(authenticate)`。
+
+/** 上报里的两个 id 都只是字典 key，长度按 UUID 留足，口径同 push-store 的 deviceId。 */
+const MAX_ID_LENGTH = 128;
+
+/** 非空、不超长、不含控制字符（它会被原样塞进日志和内存表的 key）。 */
+function normalizeId(value) {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw || raw.length > MAX_ID_LENGTH) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return null;
+  return raw;
+}
+
+/**
+ * 每台设备的上报限流。
+ *
+ * 为什么要限：`visibilitychange` 在某些浏览器上切一次窗口会连发好几次（切走、失焦、
+ * 再切回来各一发），而且这个接口是登录用户就能打的，不能让它变成一个免费的写循环。
+ * 前端那边已经做了去重（状态没变就不发，见 web/src/lib/visibility.ts），
+ * 这里是**兜底**，不是第一道防线。
+ *
+ * 窗口给得比任何正常操作都宽：正常用户切一次窗口最多带出两三发，20 次 / 10 秒够用了。
+ */
+const VISIBILITY_WINDOW_MS = 10_000;
+const VISIBILITY_MAX_REPORTS = 20;
+const visibilityHits = new Map();   // `${userId}|${deviceId}` -> number[]（上报时刻）
+
+/** 测试用：把窗口清空，免得用例之间互相影响。口径同 rate-limit.js 的 resetRateLimit。 */
+export const resetVisibilityLimit = () => visibilityHits.clear();
+
+/**
+ * 记一次上报，返回「这次是不是超限了」。
+ *
+ * ⚠️ 超限之后**不能只是把这次上报丢掉**。丢掉的如果正好是那一条「我切后台了」，
+ * 服务端就永远停在「前台」上，这台设备从此再也收不到推送——那正是这次要修的 bug。
+ * 所以超限的处理是「把这台设备一把踩成后台」（在下面的 handler 里做），
+ * 失败方向永远偏向多推。
+ */
+function overVisibilityLimit(key, now = Date.now()) {
+  const list = (visibilityHits.get(key) || []).filter((t) => t > now - VISIBILITY_WINDOW_MS);
+  list.push(now);
+  visibilityHits.set(key, list);
+  return list.length > VISIBILITY_MAX_REPORTS;
+}
+
+/**
+ * 上报「本页面此刻在不在前台」。
+ *
+ * 请求体 `{ deviceId, streamId, visible }`：
+ * - `deviceId`  这台设备（同 SSE 的 `?device=`、同推送订阅的 device_id）；
+ * - `streamId`  这台设备上的**哪一个页面**（同 SSE 的 `?stream=`）。桌面开两个标签页时
+ *               两条连接共用一个 deviceId，只能靠它区分是谁切走了；
+ * - `visible`   `document.visibilityState === 'visible'`，布尔。
+ *
+ * 归属一律取自 `req.user.id`，**不看请求体里的任何 userId**：这个接口只能改自己名下的
+ * 连接。setDeviceVisibility 是按 `(userId, deviceId, streamId)` 三元组精确命中的，
+ * 拿到别人的 deviceId 也改不动别人——那个 userId 根本对不上。
+ *
+ * 命中不了任何连接（页面还没建 SSE、连接刚断、streamId 对不上）不是错误：返回 200 和
+ * `connections: 0`。这个方向天然安全——没有连接报告前台 = 这台设备算后台 = 照推。
+ */
+router.post('/visibility', (req, res) => {
+  const deviceId = normalizeId(req.body?.deviceId);
+  const streamId = normalizeId(req.body?.streamId);
+  if (!deviceId || !streamId) return res.status(400).json({ error: 'deviceId / streamId 不合法' });
+  if (typeof req.body?.visible !== 'boolean') return res.status(400).json({ error: 'visible 必须是布尔值' });
+
+  if (overVisibilityLimit(`${req.user.id}|${deviceId}`)) {
+    // 见 overVisibilityLimit 的 ⚠️：被限流的设备一律当作「状态不明」，而状态不明就推。
+    clearDeviceVisibility(req.user.id, deviceId);
+    return res.status(429).json({ error: '上报过于频繁' });
+  }
+
+  const connections = setDeviceVisibility(req.user.id, { deviceId, streamId, visible: req.body.visible });
+  res.json({ ok: true, connections });
 });

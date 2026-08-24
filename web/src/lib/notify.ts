@@ -185,6 +185,16 @@ export interface IncomingNotice {
   visible: boolean;
   /** 用户在设置里把桌面通知打开了没有。 */
   enabled: boolean;
+  /**
+   * 整个页面此刻是不是被切走了（`document.hidden`）。
+   *
+   * 注意它和上面的 `visible` **不是一回事**，两个都得有：`visible` 说的是「这条消息所在
+   * 的会话正摊在屏幕上」，页面开着但人在联系人页时它是 false 而 `documentHidden` 也是
+   * false。这一档必须继续弹本地通知——见下面 pushSubscribed 那条规则。
+   */
+  documentHidden?: boolean;
+  /** 这台设备有没有一条已经报上去的推送订阅（`lib/push.ts` 的 `pushSubscribed()`）。 */
+  pushSubscribed?: boolean;
   /** 点通知之后跳到这个会话去。 */
   onClick: () => void;
 }
@@ -199,12 +209,29 @@ export function shouldNotifyMessage(input: Omit<IncomingNotice, 'onClick'>): boo
   if (input.message.senderId === input.meId) return false;    // 自己发的
   if (input.message.kind === 'system') return false;          // 入群/改群名之类的提示
   if (input.conversation?.muted === true) return false;       // 会话已设为免打扰
+  // 页面切走了、而且这台设备有推送订阅 → 交给推送，本地这一条不弹。
+  //
+  // 两个条件缺一不可，这个「与」是整条规则的关键：
+  // - 少了 pushSubscribed：没配 VAPID / 用户没授权 / 浏览器不支持的设备会退化成
+  //   「切到后台什么都收不到」—— 那是把现有能力弄丢了，是硬性不许出现的回归；
+  // - 少了 documentHidden：页面开着、人只是切到了联系人页（visible=false 但页面没隐藏）
+  //   时也会被吞掉。而那种情况服务端**不会**推（这台设备报告了自己在前台），
+  //   于是同样什么都收不到。
+  //
+  // 换句话说，这两个条件合起来恰好等于服务端那条「会推给这台设备吗」——
+  // 服务端判据是「这台设备没报告前台」，而页面报后台的时刻就是 documentHidden 的时刻
+  //（见 lib/visibility.ts）。两边必须一起改，改一边就会出现「两条通知」或「一条都没有」。
+  if (input.documentHidden === true && input.pushSubscribed === true) return false;
   return true;
 }
 
 /**
  * 通知标题：群聊得带群名，不然只看到一个人名，不知道是从哪个群冒出来的。
  * 单聊 / AI 会话的标题就是发送者本人。
+ *
+ * ⚠️ 服务端的 `pushTitle()`（server/src/push-decide.js）**必须和这里逐字一致**，
+ * 同一条消息在本地通知和推送通知里才长得一样。两边都不带应用名：iOS 会自动给主屏
+ * Web App 的通知附上 manifest 的 `short_name`，我们再拼一遍就重复了。
  */
 export function notifyTitle(message: Message, conversation?: Conversation): string {
   return conversation?.type === 'group'
