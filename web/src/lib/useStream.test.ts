@@ -5,6 +5,7 @@ import { renderHook } from '@testing-library/react';
 import { useStream, type StreamHandlers } from './useStream';
 import { clearToken, setToken } from './api';
 import { deviceId } from './push';
+import { pageStreamId, resetVisibilityForTest } from './visibility';
 
 type Listener = (e: MessageEvent) => void;
 
@@ -32,6 +33,7 @@ class FakeEventSource {
 const latest = () => FakeEventSource.instances.at(-1)!;
 
 beforeEach(() => {
+  resetVisibilityForTest();
   FakeEventSource.instances = [];
   vi.stubGlobal('EventSource', FakeEventSource);
   setToken('tok-abc');
@@ -39,6 +41,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   clearToken();
+  resetVisibilityForTest();
 });
 
 const mount = (handlers: StreamHandlers = {}, enabled = true) =>
@@ -75,6 +78,38 @@ describe('连接', () => {
     window.localStorage.setItem('loop-im-device', 'a/b c');
     mount();
     expect(latest().url).toContain('device=a%2Fb%20c');
+  });
+
+  /**
+   * stream：这条 SSE 是这台设备上的**哪一个页面**开的。
+   *
+   * 服务端把「这个页面在不在前台」挂在这条连接上，靠 streamId 认领。漏掉这个参数
+   * 同样**不会报错**：可见性上报会一条都命中不了，这台设备永远算后台，于是用户开着
+   * 页面也一直收推送。所以和 device 一样单拎出来盯着。
+   */
+  it('带上 stream：可见性上报要靠它认领「是哪个标签页切走了」', () => {
+    mount();
+    const stream = new URL(latest().url, 'http://x').searchParams.get('stream');
+    expect(stream, 'SSE 没有带 stream，可见性上报会命中不了任何连接').toBeTruthy();
+    expect(stream).toBe(pageStreamId());
+  });
+
+  it('device 和 stream 是两个不同的值 —— 一个认设备，一个认标签页', () => {
+    mount();
+    const q = new URL(latest().url, 'http://x').searchParams;
+    expect(q.get('device')).not.toBe(q.get('stream'));
+  });
+
+  it('onOpen：连上（含断线重连）就通知调用方，好把可见性重报一遍', () => {
+    // 服务端的可见性状态是**连接级**的，换了一条连接就是一张白纸（默认按后台算）。
+    // 少了这个回调，服务端重启之后一个明明开着的页面会被一直当成后台，白收一堆推送。
+    const onOpen = vi.fn();
+    mount({ onOpen });
+    expect(onOpen).not.toHaveBeenCalled();
+    latest().emit('open', {});
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    latest().emit('open', {});          // 重连
+    expect(onOpen).toHaveBeenCalledTimes(2);
   });
 
   it('没有凭据时不连', () => {

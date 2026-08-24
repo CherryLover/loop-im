@@ -7,7 +7,6 @@ import './helpers.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  APP_NAME,
   PUSH_FANOUT_CONCURRENCY,
   pushPayloadFor,
   pushTitle,
@@ -132,33 +131,33 @@ describe('推送判定 · 六条规则各自', () => {
     assert.deepEqual(out.map((s) => s.userId), ['u_b']);
   });
 
-  it('规则 5 反向：这台设备的 SSE 活着就不推它', () => {
+  it('规则 5 反向：这台设备报告了自己在前台，就不推它', () => {
     const out = targetsFor({
       message: msg(),
       memberIds: ['u_send', 'u_a'],
       subscriptions: [sub('u_a', 'phone')],
-      onlineDevices: { u_a: ['phone'] },
+      foregroundDevices: { u_a: ['phone'] },
     });
     assert.deepEqual(out, []);
   });
 
-  it('规则 5 正向：在线的是别人的设备，不影响我这台', () => {
+  it('规则 5 正向：报前台的是别人的设备，不影响我这台', () => {
     const out = targetsFor({
       message: msg(),
       memberIds: ['u_send', 'u_a', 'u_b'],
       subscriptions: [sub('u_a', 'phone'), sub('u_b', 'phone')],
       // 同一个 deviceId 字符串，但挂在别人名下——按人 + 设备两维一起判，不能只看设备。
-      onlineDevices: { u_b: ['phone'] },
+      foregroundDevices: { u_b: ['phone'] },
     });
     assert.deepEqual(out.map((s) => s.userId), ['u_a']);
   });
 
-  it('规则 5 兜底：订阅没有 deviceId 时判不了在线，按「宁可多推」照推', () => {
+  it('规则 5 兜底：订阅没有 deviceId 时对不上任何一台设备，按「宁可多推」照推', () => {
     const out = targetsFor({
       message: msg(),
       memberIds: ['u_send', 'u_a'],
       subscriptions: [{ ...sub('u_a'), deviceId: null }],
-      onlineDevices: { u_a: ['phone', 'laptop'] },
+      foregroundDevices: { u_a: ['phone', 'laptop'] },
     });
     assert.equal(out.length, 1);
   });
@@ -185,7 +184,7 @@ describe('推送判定 · 六条规则各自', () => {
 });
 
 describe('推送判定 · 按设备判而不是按人判', () => {
-  it('同一个人两台设备，一台在线一台不在 → 只推不在线那台', () => {
+  it('同一个人两台设备，一台报了前台一台没报 → 只推没报的那台', () => {
     // 这是整个 2C 存在的理由（§C.3）：桌面挂着网页 + 手机 PWA 关着，
     // 按人判会判成「他在线」→ 一条都不发 → 手机永远静默，
     // 而「人不在电脑前」正是最需要手机响的时候。
@@ -193,27 +192,27 @@ describe('推送判定 · 按设备判而不是按人判', () => {
       message: msg(),
       memberIds: ['u_send', 'u_a'],
       subscriptions: [sub('u_a', 'laptop'), sub('u_a', 'phone')],
-      onlineDevices: { u_a: ['laptop'] },
+      foregroundDevices: { u_a: ['laptop'] },
     });
     assert.deepEqual(out.map((s) => s.deviceId), ['phone']);
   });
 
-  it('三台设备两台在线 → 只推剩下那台', () => {
+  it('三台设备两台报了前台 → 只推剩下那台', () => {
     const out = targetsFor({
       message: msg(),
       memberIds: ['u_send', 'u_a'],
       subscriptions: [sub('u_a', 'laptop'), sub('u_a', 'phone'), sub('u_a', 'ipad')],
-      onlineDevices: { u_a: ['laptop', 'ipad'] },
+      foregroundDevices: { u_a: ['laptop', 'ipad'] },
     });
     assert.deepEqual(out.map((s) => s.deviceId), ['phone']);
   });
 
-  it('三台设备全在线 → 一条都不推', () => {
+  it('三台设备全报了前台 → 一条都不推', () => {
     const out = targetsFor({
       message: msg(),
       memberIds: ['u_send', 'u_a'],
       subscriptions: [sub('u_a', 'laptop'), sub('u_a', 'phone'), sub('u_a', 'ipad')],
-      onlineDevices: { u_a: ['laptop', 'phone', 'ipad'] },
+      foregroundDevices: { u_a: ['laptop', 'phone', 'ipad'] },
     });
     assert.deepEqual(out, []);
   });
@@ -225,24 +224,24 @@ describe('推送判定 · 按设备判而不是按人判', () => {
       message: msg(),
       memberIds: ['u_send', 'u_a'],
       subscriptions: [sub('u_a', 'safari-tab'), sub('u_a', 'home-screen')],
-      onlineDevices: { u_a: ['safari-tab'] },
+      foregroundDevices: { u_a: ['safari-tab'] },
     });
     assert.deepEqual(out.map((s) => s.deviceId), ['home-screen']);
   });
 
-  it('五个人的群、三个人在线 → 只推另外两个', () => {
+  it('五个人的群、三个人报了前台 → 只推另外两个', () => {
     const out = targetsFor({
       message: msg({ senderId: 'u_1' }),
       memberIds: ['u_1', 'u_2', 'u_3', 'u_4', 'u_5'],
       subscriptions: ['u_2', 'u_3', 'u_4', 'u_5'].map((u) => sub(u, 'only')),
-      onlineDevices: { u_2: ['only'], u_3: ['only'] },
+      foregroundDevices: { u_2: ['only'], u_3: ['only'] },
     });
     assert.deepEqual(out.map((s) => s.userId), ['u_4', 'u_5']);
   });
 });
 
 describe('推送判定 · 规则组合', () => {
-  it('六条一起上：只剩「有订阅、不是自己、非系统消息、没免打扰、那台设备离线」的', () => {
+  it('六条一起上：只剩「有订阅、不是自己、非系统消息、没免打扰、那台设备没报前台」的', () => {
     const out = targetsFor({
       message: msg({ senderId: 'u_send' }),
       memberIds: ['u_send', 'u_muted', 'u_online', 'u_multi', 'u_nosub'],
@@ -250,12 +249,12 @@ describe('推送判定 · 规则组合', () => {
       subscriptions: [
         sub('u_send', 'own-phone'),      // 规则 2：自己发的
         sub('u_muted', 'm-phone'),       // 规则 4：免打扰
-        sub('u_online', 'o-laptop'),     // 规则 5：这台在线
-        sub('u_multi', 'x-laptop'),      // 规则 5：这台在线
+        sub('u_online', 'o-laptop'),     // 规则 5：这台报了前台
+        sub('u_multi', 'x-laptop'),      // 规则 5：这台报了前台
         sub('u_multi', 'x-phone'),       // ✅ 唯一该推的
         sub('u_outsider', 'out'),        // 不是成员
       ],
-      onlineDevices: { u_online: ['o-laptop'], u_multi: ['x-laptop'], u_send: ['own-phone'] },
+      foregroundDevices: { u_online: ['o-laptop'], u_multi: ['x-laptop'], u_send: ['own-phone'] },
     });
     assert.deepEqual(endpoints(out), ['https://push.example.com/u_multi/x-phone']);
   });
@@ -294,12 +293,12 @@ describe('推送判定 · Aria（AI）不做特例', () => {
     assert.deepEqual(out.map((s) => s.userId), ['u_asker']);
   });
 
-  it('Aria 的回复同样按设备判在线', () => {
+  it('Aria 的回复同样按设备判前台', () => {
     const out = targetsFor({
       message: aria(),
       memberIds: ['ai', 'u_asker'],
       subscriptions: [sub('u_asker', 'laptop'), sub('u_asker', 'phone')],
-      onlineDevices: { u_asker: ['laptop'] },
+      foregroundDevices: { u_asker: ['laptop'] },
     });
     assert.deepEqual(out.map((s) => s.deviceId), ['phone']);
   });
@@ -314,25 +313,55 @@ describe('推送判定 · Aria（AI）不做特例', () => {
   });
 });
 
-describe('推送标题', () => {
-  it('单聊：应用名 + 发送者', () => {
-    assert.equal(pushTitle(msg(), { type: 'dm' }), `${APP_NAME} · 张三`);
+// ⚠️ 这一组是真机反馈改过的：标题里**不带应用名**。
+//
+// 带的时候 iPhone 上显示成：
+//     Loop IM · 测试人员
+//     from Loop                ← iOS 自动附上的 manifest short_name，去不掉
+// 应用名一条通知里出现两遍，还把最该抢眼的发送者挤到了后面。
+//
+// 谁想把 `Loop IM · ` 加回来，先去真机上看一眼那行 from Loop。
+describe('推送标题 · 不带应用名（iOS 自己会附一行）', () => {
+  it('单聊：标题就是发送者本人，一个字都不多', () => {
+    assert.equal(pushTitle(msg(), { type: 'dm' }), '张三');
   });
 
-  it('群聊：应用名 + 发送者 + 群名，缺了群名就不知道消息从哪个群冒出来', () => {
-    assert.equal(pushTitle(msg(), { type: 'group', title: '发版小组' }), `${APP_NAME} · 张三 · 发版小组`);
+  it('群聊：发送者 · 群名，缺了群名就不知道消息从哪个群冒出来', () => {
+    assert.equal(pushTitle(msg(), { type: 'group', title: '发版小组' }), '张三 · 发版小组');
   });
 
   it('AI 会话按单聊排：标题就是 Aria 本人', () => {
-    assert.equal(pushTitle(msg({ senderName: 'Aria' }), { type: 'ai' }), `${APP_NAME} · Aria`);
+    assert.equal(pushTitle(msg({ senderName: 'Aria' }), { type: 'ai' }), 'Aria');
   });
 
-  it('群没有标题时退回两段，不留一个空荡荡的「· 」尾巴', () => {
-    assert.equal(pushTitle(msg(), { type: 'group', title: null }), `${APP_NAME} · 张三`);
+  it('群没有标题时退回一段，不留一个空荡荡的「· 」尾巴', () => {
+    assert.equal(pushTitle(msg(), { type: 'group', title: null }), '张三');
   });
 
   it('会话对象没传（理论上不该发生）也不能崩', () => {
-    assert.equal(pushTitle(msg(), undefined), `${APP_NAME} · 张三`);
+    assert.equal(pushTitle(msg(), undefined), '张三');
+  });
+
+  it('发送者名字也没有时退回「新消息」，而不是空标题', () => {
+    assert.equal(pushTitle(msg({ senderName: '' }), { type: 'dm' }), '新消息');
+  });
+
+  it('标题里不出现应用名 —— 单聊、群聊、AI 三种都查一遍', () => {
+    // 上面四条是逐字断言，这一条是**兜底**：换个分隔符、换个拼法都逃不掉。
+    // 单看逐字断言的话，有人把它们连同实现一起改回带应用名的版本仍然会全绿。
+    for (const conversation of [{ type: 'dm' }, { type: 'group', title: '发版小组' }, { type: 'ai' }]) {
+      const title = pushTitle(msg(), conversation);
+      assert.doesNotMatch(title, /Loop/i, `标题里混进了应用名：${title}`);
+    }
+  });
+
+  it('和前端 notifyTitle 是同一个形状：`发送者` / `发送者 · 群名`', () => {
+    // web/src/lib/notify.ts 的 notifyTitle 就是这两句。两边长得不一样的话，
+    // 同一条消息在桌面本地通知和手机推送上会是两个标题（§C.5 明确要求一致）。
+    const notifyTitle = (m, c) => (c?.type === 'group' && c.title ? `${m.senderName} · ${c.title}` : m.senderName);
+    for (const conversation of [{ type: 'dm' }, { type: 'group', title: '发版小组' }, { type: 'ai' }]) {
+      assert.equal(pushTitle(msg(), conversation), notifyTitle(msg(), conversation));
+    }
   });
 });
 
@@ -340,7 +369,7 @@ describe('推送 payload', () => {
   it('tag 和前端桌面通知同一个口径，同一个会话的通知会互相覆盖而不是堆一摞', () => {
     const payload = pushPayloadFor({ message: msg(), conversation: { type: 'dm' }, body: '晚上七点开会' });
     assert.deepEqual(payload, {
-      title: `${APP_NAME} · 张三`,
+      title: '张三',
       body: '晚上七点开会',
       tag: 'loop-im:c_1',
       conversationId: 'c_1',
@@ -414,7 +443,7 @@ describe('queuePush · 扇出与隔离', () => {
   const wiring = (over = {}) => ({
     subscriptionsFor: async () => [sub('u_a', 'phone')],
     send: async () => ({ ok: true, status: 201, gone: false }),
-    onlineDevices: () => new Set(),
+    foregroundDevices: () => new Set(),
     ...over,
   });
 
@@ -433,7 +462,7 @@ describe('queuePush · 扇出与隔离', () => {
     assert.equal(sent.length, 1);
     assert.equal(sent[0].subscription.deviceId, 'phone');
     assert.deepEqual(JSON.parse(sent[0].payload), {
-      title: `${APP_NAME} · 张三 · 发版小组`,
+      title: '张三 · 发版小组',
       body: '晚上七点开会',
       tag: 'loop-im:c_1',
       conversationId: 'c_1',
@@ -457,10 +486,10 @@ describe('queuePush · 扇出与隔离', () => {
     assert.deepEqual(asked, ['u_a']);
   });
 
-  it('全场都在线时一条请求都不发', async () => {
+  it('全场都报了前台时一条请求都不发', async () => {
     let sends = 0;
     await queuePush(ctx(), wiring({
-      onlineDevices: () => new Set(['phone']),
+      foregroundDevices: () => new Set(['phone']),
       send: async () => { sends += 1; return { ok: true, status: 201 }; },
     }));
     assert.equal(sends, 0);

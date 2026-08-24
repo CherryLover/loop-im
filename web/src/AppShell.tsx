@@ -20,7 +20,8 @@ import {
   syncUserInConversations, syncUserInList, syncUserInMessages,
 } from './lib/user-sync';
 import { notifyMessage, useDesktopNotify } from './lib/notify';
-import { applyAppBadge, ensurePushSubscription } from './lib/push';
+import { applyAppBadge, ensurePushSubscription, pushSubscribed } from './lib/push';
+import { documentVisible, reportVisibility, startVisibilityReporting } from './lib/visibility';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
 import type { AiPublicInfo, Conversation, Message, MessageReaction, ReadState, User } from './lib/types';
@@ -249,6 +250,20 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   useEffect(() => { void ensurePushSubscription(); }, []);
 
   /**
+   * 页面切前台 / 切后台就告诉服务端一声。
+   *
+   * 这是「切后台后立刻发的消息收不到推送」那个真机 bug 的修法：服务端以前拿 SSE 连接
+   * 在不在去猜页面状态，而 iOS 冻结 PWA 时 TCP 不会立刻断，猜出来是错的。改成页面主动
+   * 报（iOS 冻结之前一定会先触发 visibilitychange，这一发发得出去）。
+   *
+   * 单独一个 effect、deps 是空数组：它和已读上报共用同一个浏览器事件，但两件事的生命
+   * 周期不一样 —— 已读那个要跟着 markRead 重挂，而这个必须从进页面挂到离开页面，
+   * 中间一次都不能断。挂在一起的话，每次 markRead 变化都会摘掉再装回去，
+   * 正好错过那一瞬间的 visibilitychange 就等于漏报一次。
+   */
+  useEffect(() => startVisibilityReporting(), []);
+
+  /**
    * 心跳：一边把自己续成在线，一边把别人的在线状态收回来。
    *
    * 这一路不能省 —— 「关掉标签页就走了」没有任何事件可发（服务端只在登录 / 退出 /
@@ -403,6 +418,10 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
   // 退出一开始就断开实时连接：等待退出接口返回的这段时间里，再进来的事件只会引出
   // 一串注定 401 的请求（issue #21）。
   useStream(!signingOut, {
+    // 连上（含断线重连）就把可见性重报一遍：服务端把这个状态挂在**这条连接**上，
+    // 换了一条连接就是一张白纸。不重报的话，服务端重启之后一个明明开着的页面会被
+    // 一直当成后台，白收一堆推送。force 是必须的——本地状态没变，去重会把它拦掉。
+    onOpen: () => reportVisibility(documentVisible(), { force: true }),
     onMessage: (message) => {
       appendMessage(message);
       // 桌面通知和已读上报共用 messageVisibleNow：看得见就只标已读、不通知，
@@ -414,6 +433,15 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
         meId: me.id,
         visible: messageVisibleNow(message.conversationId),
         enabled: notify.enabled,
+        // 页面整个被切走、而且这台设备有推送订阅时，这一条交给推送，本地不再弹 ——
+        // 否则同一条消息两条通知（tag 相同会互相覆盖，但手机会震两下）。
+        // 没有订阅的设备（没配 VAPID / 没授权 / 浏览器不支持）必须保持原样照弹，
+        // 那是硬要求：不能回归成「切后台什么都收不到」。判断都在 shouldNotifyMessage 里。
+        //
+        // 这里读 document 的实时值而不是 pageVisible 那个 state：这一句跑在 SSE 回调里，
+        // 而 state 要等一轮渲染才更新，切后台的那一瞬间它还是旧的。
+        documentHidden: !documentVisible(),
+        pushSubscribed: pushSubscribed(),
         onClick: () => {
           setTab('chat');
           selectConversation(message.conversationId);

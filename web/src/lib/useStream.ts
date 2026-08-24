@@ -1,9 +1,18 @@
 import { useEffect, useRef } from 'react';
 import { getToken } from './api';
 import { deviceId } from './push';
+import { pageStreamId } from './visibility';
 import type { Message, MessageReaction, User } from './types';
 
 export interface StreamHandlers {
+  /**
+   * 连上了（含 EventSource 自己重连成功）。
+   *
+   * 存在的理由只有一个：服务端把「这个页面在不在前台」挂在**这条连接**上，连接一换就是
+   * 一张白纸（默认按后台算）。服务端重启或网络抖一下之后，一个明明开着的页面会被当成
+   * 后台一直白收推送 —— 除非重连时把可见性重报一遍。这就是那一遍。
+   */
+  onOpen?: () => void;
   onMessage?: (message: Message) => void;
   onTyping?: (conversationId: string, typing: boolean) => void;
   onConversationCreated?: (conversationId: string) => void;
@@ -31,10 +40,18 @@ export function useStream(enabled: boolean, handlers: StreamHandlers) {
     // 不带这个参数不会报错，只会让服务端把所有连接都当成「没有设备标识」，
     // 于是谁都不算在线、连你正在用的那台也照推。**这是个不会报错的失效**，
     // 所以 useStream.device.test.ts 专门盯着它。
+    //
+    // stream：这条 SSE 是这台设备上的**哪一个页面**开的。可见性上报（lib/visibility.ts）
+    // 带着同一个值，服务端才能把「我切后台了」精确记在这一个标签页上，而不是一把盖掉
+    // 同一台机器上另一个还开着的标签页 —— 那会让人正看着的页面也开始收推送。
     const es = new EventSource(
-      `/api/stream?token=${encodeURIComponent(token)}&device=${encodeURIComponent(deviceId())}`,
+      `/api/stream?token=${encodeURIComponent(token)}`
+      + `&device=${encodeURIComponent(deviceId())}`
+      + `&stream=${encodeURIComponent(pageStreamId())}`,
     );
     const json = <T,>(e: MessageEvent): T => JSON.parse(e.data) as T;
+
+    es.addEventListener('open', () => ref.current.onOpen?.());
 
     es.addEventListener('message', (e) => ref.current.onMessage?.(json<{ message: Message }>(e).message));
     es.addEventListener('ai-typing', (e) => {

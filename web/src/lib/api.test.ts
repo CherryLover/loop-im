@@ -199,3 +199,34 @@ describe('通用行为', () => {
     window.removeEventListener('loop-im:signed-out', onSignedOut);
   });
 });
+
+/**
+ * 可见性上报。这条请求有两个「不这么写就安静坏掉」的点，各一条用例钉住。
+ * 服务端那一侧的契约见 server/src/routes/push.js 的 POST /visibility。
+ */
+describe('可见性上报', () => {
+  it('POST /push/visibility，三个字段原样带上', async () => {
+    await api.pushVisibility({ deviceId: 'd1', streamId: 's1', visible: false });
+    const { url, method, body } = lastCall();
+    expect(url).toBe('/api/push/visibility');
+    expect(method).toBe('POST');
+    expect(body).toEqual({ deviceId: 'd1', streamId: 's1', visible: false });
+  });
+
+  it('⚠️ 必须带 keepalive —— 「我切后台了」这一发是在页面即将被冻结时发出去的', () => {
+    // 没有 keepalive，页面一冻结这条请求就被丢掉，服务端还以为你在前台，
+    // 那台设备从此漏推 —— 正是本次要修的 bug 本身。
+    return api.pushVisibility({ deviceId: 'd1', streamId: 's1', visible: false }).then(() => {
+      expect(lastCall().init.keepalive).toBe(true);
+    });
+  });
+
+  it('⚠️ 带得上 Authorization —— 这就是不能用 sendBeacon 的原因', async () => {
+    // navigator.sendBeacon 同样能在页面离开时把请求送出去，但它**带不了自定义请求头**，
+    // 而这个接口要鉴权。用它的话每一发都是 401，安静地什么都没改。
+    setToken('tok-abc');
+    await api.pushVisibility({ deviceId: 'd1', streamId: 's1', visible: true });
+    const headers = lastCall().init.headers as Headers;
+    expect(headers.get('Authorization')).toBe('Bearer tok-abc');
+  });
+});

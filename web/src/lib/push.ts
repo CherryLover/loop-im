@@ -88,6 +88,27 @@ export function notifyRegistration(): ServiceWorkerRegistration | null {
 }
 
 /**
+ * 这台设备**当前确实有一条报上去的推送订阅**。
+ *
+ * 用途只有一个：页面切到后台之后，服务端会给这台设备推一条，前端就不该再自己弹一条
+ * 本地通知了 —— 同一条消息两条通知，`tag` 相同虽然会互相覆盖，但手机会震两下
+ * （见 notify.ts 的 shouldNotifyMessage）。
+ *
+ * **默认 false，而且只在上报成功之后才置 true。** 这个方向是刻意的：不确定有没有订阅
+ * 时按「没有」处理，于是本地通知照弹 —— 最坏是多一条通知，而反过来（以为有订阅、
+ * 其实没有）就是用户切到后台之后什么都收不到，那是功能失效。
+ *
+ * 启动时 `ensurePushSubscription()` 是异步的，在它跑完之前这里一直是 false，
+ * 那一小段时间里本地通知照旧工作 —— 同样是安全的那一侧。
+ */
+let cachedPushSubscribed = false;
+
+/** 同步读缓存。`AppShell` 在 SSE 回调里当场要用，来不及 await。 */
+export function pushSubscribed(): boolean {
+  return cachedPushSubscribed;
+}
+
+/**
  * 拿到 SW registration 并缓存起来。应用启动时调一次。
  *
  * 和订阅分开，是因为它俩的前提不一样：前台通知（showNotification）只要有 SW 就能用，
@@ -115,6 +136,7 @@ export async function primeServiceWorker(): Promise<ServiceWorkerRegistration | 
 /** 只给测试用：把缓存清干净，免得用例之间互相串。 */
 export function resetPushStateForTest(): void {
   cachedRegistration = null;
+  cachedPushSubscribed = false;
 }
 
 /**
@@ -200,6 +222,15 @@ function bytesToBase64Url(buffer: ArrayBuffer | null): string {
  * @returns 订阅并上报成功才是 true。其余一律 false，不抛。
  */
 export async function ensurePushSubscription(): Promise<boolean> {
+  // 成败一律落到同一个缓存上（见 pushSubscribed 的注释）。**必须包在外面统一赋值**：
+  // 下面那个函数有六条 return false 的路径，漏掉任何一条，都会让「其实没订上」的设备
+  // 以为自己有订阅，于是切到后台后本地通知不弹、推送也不来 —— 什么都收不到。
+  const ok = await subscribeAndReport();
+  cachedPushSubscribed = ok;
+  return ok;
+}
+
+async function subscribeAndReport(): Promise<boolean> {
   const reg = await primeServiceWorker();
   if (!reg || !reg.pushManager) return false;
 
@@ -249,6 +280,11 @@ export async function ensurePushSubscription(): Promise<boolean> {
  * 两条都是自愈的，所以这里不需要重试，也不需要把失败抛给界面。
  */
 export async function unsubscribePush(): Promise<void> {
+  // 第一件事就是把缓存清掉，排在所有可能失败的步骤**之前**：用户已经表示不要推送了，
+  // 从这一刻起本地通知就得重新接管，不能因为退订请求慢了一步或者失败了，
+  // 让这台设备落进「推送不来、本地也不弹」的夹缝里。
+  cachedPushSubscribed = false;
+
   const reg = await primeServiceWorker();
   if (!reg || !reg.pushManager) return;
 

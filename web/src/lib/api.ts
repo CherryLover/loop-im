@@ -267,6 +267,22 @@ export const api = {
   // 否则谁都能拿别人的 endpoint 把别人的推送关掉。成功是 204，没有响应体。
   pushUnsubscribe: (endpoint: string) =>
     request<Record<string, never>>('/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
+  /**
+   * 上报「本页面此刻在不在前台」。服务端靠它决定这台设备该不该收推送 ——
+   * **不再**拿 SSE 连接在不在去猜（iOS 冻结 PWA 时 TCP 不会立刻断，猜出来是错的）。
+   *
+   * `keepalive: true` 是这条请求的**要害**，不是优化：它专为「页面正在离开 / 即将被
+   * 冻结」设计，请求交给浏览器的网络栈，页面冻住也照样发完。而「我切后台了」这一发
+   * 恰恰就是在页面即将被冻结的那一刻发出去的 —— 少了它，最该送到的那一条最先丢。
+   *
+   * ⚠️ 不要改成 `navigator.sendBeacon`：它带不了 `Authorization` 头，这个接口要鉴权。
+   */
+  pushVisibility: (payload: { deviceId: string; streamId: string; visible: boolean }) =>
+    request<{ ok: true; connections: number }>('/push/visibility', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }),
 
   aiSettings: () => request<AiSettings>('/ai/settings'),
   saveAiSettings: (patch: Record<string, unknown>) =>
