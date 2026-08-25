@@ -58,7 +58,25 @@ vi .env                       # 再填 ADMIN_EMAIL / ADMIN_PASSWORD
 （超时给到 120 秒是因为现在要多等 MinIO 健康检查加主程序自检那几秒。）
 它是幂等的，重复执行没有副作用；健康检查不过时不会把失败当成功。
 
-## 从远端一条命令部署
+## 从开发机一条命令部署
+
+`remote-deploy.sh` 替你完成「SSH 过去执行 deploy.sh + 从公网侧验证健康接口」，
+参数与服务器端一一对应：
+
+```bash
+cp deploy/.deploy.env.example deploy/.deploy.env   # 首次：填服务器连接信息（不进 git）
+./deploy/remote-deploy.sh              # 更新到 latest
+./deploy/remote-deploy.sh v1.2.0       # 部署指定版本
+./deploy/remote-deploy.sh --rollback   # 回滚
+./deploy/remote-deploy.sh --status     # 看状态
+./deploy/remote-deploy.sh --logs       # 跟日志
+```
+
+密码登录需要本机装 `sshpass`；用密钥 / agent 的话 `.deploy.env` 里不填密码即可。
+仓库是公开的，服务器地址与凭据只能待在 `.deploy.env` 里，别写进任何会提交的文件。
+（用 Claude Code 的话，仓库里带了一个 `deploy` skill，说「部署 / 更新线上」就会走这套。）
+
+不想用脚本也可以手动：
 
 ```bash
 ssh user@your-server '/opt/loop-im/deploy.sh'

@@ -18,6 +18,10 @@ coverage/
 # agent 工作用的临时 worktree
 .claude/worktrees/
 
+# 远程部署的连接信息（服务器地址/账号/密码）。仓库是公开的，这份绝不能进 git，
+# 模板见 deploy/.deploy.env.example
+deploy/.deploy.env
+
 # 针对已部署环境的浏览器验证产物（截图与 trace）
 e2e/deployed/.artifacts/
 e2e/.tmp-data/
