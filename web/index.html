@@ -3,8 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <!-- viewport-fit=cover 不是排版偏好：不加它，iOS 上 env(safe-area-inset-*) 恒为 0，
-         styles.css 里那套安全区适配一行都不生效。改这里之前先看 web/src/styles.css。 -->
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+         styles.css 里那套安全区适配一行都不生效。改这里之前先看 web/src/styles.css。
+
+         interactive-widget=resizes-content 是 Android 那一半的软键盘适配：Chrome 108 起
+         默认键盘只「盖住」页面不改布局视口，聊天输入框会整个压在键盘底下。加了这段，
+         键盘弹起时布局视口跟着缩，flex 布局自然把输入框顶到键盘上沿。iOS 不认识这个
+         关键字（静默忽略），它那一半靠 lib/keyboard.ts 的 visualViewport 追踪。
+
+         maximum-scale=1 治的是 iOS 的输入框自动放大（真机反馈）：字号小于 16px 的
+         输入框一获得焦点，Safari 就把整页放大约两成，而且失焦**不缩回**——用户看到的
+         就是「页面比屏幕大一圈，得手动捏合缩小」；这个残留倍率还会把键盘高度追踪的
+         坐标全部带偏。加上限后自动放大整个消失。代价经过权衡：iOS 出于无障碍考虑，
+         用户的双指缩放会无视这个上限（照常能放大），真正被禁掉手动缩放的只有 Android，
+         而 App 型界面不靠整页缩放、系统级放大手势也还在，可以接受。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>Loop IM</title>
 
     <!-- ---------- PWA ----------

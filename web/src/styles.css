@@ -418,7 +418,9 @@ input, textarea { font-family: inherit; }
   flex: none; border-top: 1px solid var(--border); background: var(--surface);
   padding: 10px 14px 12px; position: relative;
 }
-.composer__row { display: flex; gap: 8px; align-items: center; }
+/* flex-end 而不是 center：输入框长到多行后，「+」和「发送」要钉在最后一行文字旁边
+   （所有 IM 的通行做法），居中对齐会让两个按钮悬在半空。单行时两种对齐没有区别。 */
+.composer__row { display: flex; gap: 8px; align-items: flex-end; }
 .composer__plus {
   border: 1px solid var(--border2); background: var(--surface); color: var(--muted);
   border-radius: 11px; width: 40px; height: 40px; cursor: pointer; flex: none;
@@ -428,16 +430,33 @@ input, textarea { font-family: inherit; }
 /* min-width: 0 是必需的：textarea 的内在宽度按 cols=20 算，随字体可以到 300px 以上，
    而 flex item 默认 min-width: auto 不肯收缩到内在宽度以下。缺了它，390px 的手机
    视口上这一行会被撑开，把 flex: none 的「发送」按钮整个推出右边界。 */
+/* ---- 输入框高度自适应 ----------------------------------------------------
+   以前是 height: 40px 一口价，textarea 固定 20px：多行内容只露第一行，写一段话
+   等于蒙着眼写。现在盒子只定 min-height，实际高度由 textarea 决定 —— Composer 里
+   的 layoutEffect 每次内容变化都把 textarea 的 height 写成 scrollHeight。
+
+   各数值的来历（全局 box-sizing: border-box）：
+     盒子 40px = 1px 边框 ×2 + 内容 38px；
+     textarea 单行 38px = 20px 行高 + 9px 上下内边距 —— 和旧版 40px 盒子像素级一致；
+     max-height 218px = 10 行 ×20px + 18px 内边距，到顶之后转为内部滚动。
+   手机上限收小到 5 行（见下面的媒体查询）：软键盘已经占掉半屏，再让输入框
+   长到 10 行，消息区就没了。 */
 .composer__box {
-  flex: 1; min-width: 0; height: 40px; border: 1px solid var(--border2); border-radius: 11px;
-  background: var(--bg); padding: 0 10px; display: flex; align-items: center; gap: 8px;
+  flex: 1; min-width: 0; min-height: 40px; border: 1px solid var(--border2); border-radius: 11px;
+  background: var(--bg); padding: 0 10px; display: flex; align-items: flex-end; gap: 8px;
 }
 .composer__box:focus-within { border-color: var(--accent); }
 .composer__input {
-  flex: 1; min-width: 0; height: 20px; border: none; background: transparent; color: var(--text);
-  resize: none; outline: none; font-size: 13.5px; line-height: 20px; padding: 0;
+  flex: 1; min-width: 0; border: none; background: transparent; color: var(--text);
+  resize: none; outline: none; font-size: 13.5px; line-height: 20px; padding: 9px 0;
+  min-height: 38px; max-height: 218px; overflow-y: auto;
 }
-.composer__md { font-size: 10.5px; color: var(--faint); font-family: 'JetBrains Mono', monospace; }
+/* line-height 38px 让「MD」角标在自己的一行里垂直居中：单行时和旧版的居中完全一样，
+   多行时跟着 align-items: flex-end 钉在最后一行旁边，不会浮到半空。 */
+.composer__md { font-size: 10.5px; color: var(--faint); font-family: 'JetBrains Mono', monospace; line-height: 38px; }
+@media (max-width: 720px) {
+  .composer__input { max-height: 118px; }   /* 5 行 ×20px + 18px 内边距 */
+}
 .composer__send {
   border: none; background: var(--accent); color: #fff; border-radius: 11px; padding: 0 18px;
   height: 40px; font-size: 13.5px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow-sm); flex: none;
@@ -1150,8 +1169,21 @@ input, textarea { font-family: inherit; }
 /* iOS 上 height:100% 会跟着地址栏收放上下跳；dvh 是动态视口单位，独立模式下更稳。
    上面 .app 的 height:100% 留着当老浏览器的兜底（不认识 dvh 的整条声明被忽略）。
    桌面上 html/body/#root 都是 height:100%、body margin:0，100dvh 与 100% 等值，
-   所以这条在桌面上不产生任何差异。 */
-.app { min-height: 100dvh; }
+   所以这条在桌面上不产生任何差异。
+
+   --vv-bottom 是软键盘适配的 iOS 那一半（lib/keyboard.ts 往根元素上写）：它是
+   「可视区域底边」在布局坐标里的位置，键盘弹起时 .app 直接把底边钉在那里，
+   输入框贴着键盘上沿。为什么是钉底边而不是「100dvh 减键盘高度」：减法的三个
+   来源取样时机不同步，真机上出过 .app 比可视区还矮、Tab 栏下漏出背景色空带的
+   事故，细节见 lib/keyboard.ts。dvh 不会自己扣掉键盘（它只跟踪浏览器工具栏），
+   所以必须靠这个变量。min() 保证变量缺席或异常偏大时都退回整屏高度；
+   Android 靠 viewport meta 的 interactive-widget 缩布局视口，此时两个值相等，
+   两套机制不叠加。height 和 min-height 一起定死：只写 height 的话，上面那条
+   min-height: 100% 派生的约束会在键盘弹起时把壳又撑回去。 */
+.app {
+  height: min(100dvh, var(--vv-bottom, 100dvh));
+  min-height: min(100dvh, var(--vv-bottom, 100dvh));
+}
 
 /* 横屏时安全区在左右两侧（iPhone 横放、iPad 分屏、灵动岛横置）。
    加在 .app__body 上而不是 .app 上：.app 还要托住 .tabbar 那条通栏背景，

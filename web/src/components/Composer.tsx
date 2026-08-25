@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CornerUpLeft, FileText, Film, Paperclip, X } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { api, MAX_UPLOAD_MB, MAX_VIDEO_UPLOAD_MB } from '../lib/api';
@@ -62,6 +62,15 @@ const KIND_HINT: Record<AttachmentKind, string> = {
 /** 附件的本地 id。进程内自增就够用，不需要全局唯一。 */
 let attachmentSeq = 0;
 const nextAttachmentId = () => `att_${++attachmentSeq}`;
+
+/** 把输入框高度写成内容的实际高度（上限交给 CSS 的 max-height）。 */
+function autosize(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = 'auto';
+  // 量不出来（jsdom 天生如此；display:none 里也是 0）就保持 auto，让 CSS 的
+  // min-height 兜底，绝不把 0px 写上去。等元素真正可见时宽度监听会补量一次。
+  if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`;
+}
 
 /** 一个会话暂存下来的输入状态。 */
 interface DraftEntry {
@@ -134,6 +143,33 @@ export function Composer({
   const [index, setIndex] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // 输入框高度跟着内容走：一行起步，写多行就长高，上限之后内部滚动（上限在 CSS 的
+  // max-height 里，桌面和手机各一档）。量高度的办法是先把 height 打回 auto 再读
+  // scrollHeight —— 不打回去的话，删行之后 scrollHeight 永远等于旧高度，缩不回来。
+  // 挂在 layoutEffect 上而不是 onChange 里：draft 的来路不止打字一条 —— 选中 @ 补全、
+  // 发送后清空、发送失败还原、切会话恢复草稿，全都要跟着重新量一次。
+  useLayoutEffect(() => {
+    autosize(inputRef.current);
+  }, [draft, conversation.id]);
+
+  // 内容没变但**宽度**变了，换行点就全变了，高度同样要重量：窗口缩放、成员面板
+  // 开合、手机上从「会话列表」切回聊天（display:none 里量出来的高度是 0，白量）。
+  // 只认宽度变化就够了 —— 高度变化是上面自己写出来的，跟着它再量会原地打转。
+  const measuredWidth = useRef(-1);
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    // jsdom 没有 ResizeObserver：宽度不会变，跳过即可。
+    if (!el || typeof ResizeObserver !== 'function') return;
+    const ro = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      if (width === measuredWidth.current) return;
+      measuredWidth.current = width;
+      autosize(el);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // 每个会话各存一份草稿：切走时暂存，切回来时恢复。
   // 没有用 <Composer key={active.id}>，因为那样切走就等于卸载，草稿会被一并丢掉；

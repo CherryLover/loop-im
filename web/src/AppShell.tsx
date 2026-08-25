@@ -22,6 +22,7 @@ import {
 import { notifyMessage, useDesktopNotify } from './lib/notify';
 import { applyAppBadge, ensurePushSubscription, pushSubscribed } from './lib/push';
 import { documentVisible, reportVisibility, startVisibilityReporting } from './lib/visibility';
+import { startKeyboardInsetTracking } from './lib/keyboard';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
 import type { AiPublicInfo, Conversation, Message, MessageReaction, ReadState, User } from './lib/types';
@@ -262,6 +263,10 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
    * 正好错过那一瞬间的 visibilitychange 就等于漏报一次。
    */
   useEffect(() => startVisibilityReporting(), []);
+
+  // iOS 软键盘适配：把可视区域底边写进 CSS 变量，让 .app 把底边钉在键盘上沿。
+  // 为什么、以及 Android 为什么不走这条路，见 lib/keyboard.ts 开头的注释。
+  useEffect(() => startKeyboardInsetTracking(), []);
 
   /**
    * 心跳：一边把自己续成在线，一边把别人的在线状态收回来。

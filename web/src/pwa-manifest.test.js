@@ -155,6 +155,22 @@ describe('index.html 的 PWA 标签', () => {
     expect(match[1]).toContain('viewport-fit=cover');
   });
 
+  it('viewport 含 interactive-widget=resizes-content —— Android 软键盘适配的全部', () => {
+    // Chrome 108 起键盘默认只盖住页面、不缩布局视口：少了这段，Android 上键盘
+    // 弹起会把输入框整个压在底下。iOS 不认识这个关键字（那一半在 lib/keyboard.ts），
+    // 静默忽略，所以这里只增不减、没有兼容代价。
+    const match = html().match(/<meta[^>]*name="viewport"[^>]*content="([^"]+)"/);
+    expect(match[1]).toContain('interactive-widget=resizes-content');
+  });
+
+  it('viewport 含 maximum-scale=1 —— 关掉 iOS 点输入框的自动放大（真机事故）', () => {
+    // 字号 < 16px 的输入框一获得焦点，iOS 就把整页放大约两成且失焦不缩回：
+    // 页面从此「比屏幕大一圈」，残留倍率还会把 lib/keyboard.ts 的坐标带偏。
+    // iOS 出于无障碍会无视这个上限放行用户的双指缩放，所以不伤手动缩放。
+    const match = html().match(/<meta[^>]*name="viewport"[^>]*content="([^"]+)"/);
+    expect(match[1]).toContain('maximum-scale=1');
+  });
+
   it('有 apple-mobile-web-app-capable —— 16.4 之前靠它进独立模式', () => {
     expect(html()).toMatch(/<meta[^>]*name="apple-mobile-web-app-capable"[^>]*content="yes"/);
   });

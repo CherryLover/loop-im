@@ -256,13 +256,49 @@ export function MessageList({
     if (typing) endRef.current?.scrollIntoView({ block: 'end' });
   }, [typing]);
 
+  // 视线贴底时，容器变矮也要跟着贴底。容器变矮有两个来路：输入框写到多行长高了、
+  // 手机上软键盘弹起把整个壳压扁了。浏览器在容器缩水时保持的是 scrollTop 而不是
+  // 「距底部的距离」，于是最新那几条消息刚好被吃掉 —— 恰恰是正在打字的人最需要
+  // 看着的内容。只有本来就贴底才追（阈值 48px ≈ 一条短消息），正在翻历史的人
+  // 不能被拽回来。
+  //
+  // 「本来就贴底」必须按**变化之前**的几何来判，不能读现场：容器缩水的瞬间，
+  // WebKit 会先派发一个由缩水引起的 scroll 事件，那一刻 clientHeight 已经变小、
+  // scrollTop 还是旧的，现算「距底部」必然超阈值 —— iOS 模拟器上实测就是这样
+  // 把贴底判丢的。所以 scroll 里只在 clientHeight 没变时才记账（用户真的在滚），
+  // clientHeight 变了的那些滚动属于 resize 的余波，留给 ResizeObserver 用
+  // 变化前的账本裁决。
+  const lastStable = useRef({ top: 0, height: 0, client: 0 });
+  const noteScroll = (el: HTMLElement) => {
+    if (el.clientHeight === lastStable.current.client) {
+      lastStable.current = { top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight };
+    }
+  };
+  useEffect(() => {
+    const el = scrollRef.current;
+    // jsdom 没有 ResizeObserver（也量不出布局），跳过即可，真浏览器都有。
+    if (!el || typeof ResizeObserver !== 'function') return;
+    lastStable.current = { top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight };
+    const ro = new ResizeObserver(() => {
+      const prev = lastStable.current;
+      if (prev.height - prev.top - prev.client < 48) el.scrollTop = el.scrollHeight;
+      lastStable.current = { top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight };
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   let lastDay = '';
 
   return (
     <div
       className="chat__scroll"
       ref={scrollRef}
-      onScroll={(e) => { if (e.currentTarget.scrollTop < 80) requestOlder(); }}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        noteScroll(el);
+        if (el.scrollTop < 80) requestOlder();
+      }}
     >
       {hasOlder ? (
         <button type="button" className="chat__older" onClick={requestOlder} disabled={loadingOlder}>

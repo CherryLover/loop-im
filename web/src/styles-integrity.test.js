@@ -231,13 +231,21 @@ describe('styles.css 安全区适配', () => {
     }
   });
 
-  it('.app 必须同时有 min-height: 100dvh 和兜底的 height: 100%', () => {
+  it('.app 高度必须钉在 min(100dvh, --vv-bottom)，且保留 height: 100% 兜底', () => {
     // dvh 是动态视口单位，iOS 上比 100% 稳（100% 会跟着地址栏收放跳）；
     // height: 100% 那条必须留着当老浏览器的兜底 —— 不认识 dvh 的整条声明被忽略。
+    //
+    // --vv-bottom 是和 lib/keyboard.ts 的契约（iOS 软键盘适配）：键盘弹起时它把
+    // 可视区域底边写进这个变量，.app 的底边直接钉在那里。必须是 min()（变量缺席
+    // 或异常偏大时退回整屏），且 min-height 要跟着一起 —— 不跟的话键盘弹起时
+    // 会把壳又撑回去，所以两个都查。
     const appRules = plainRules().filter((b) => b.selector === '.app' && b.ancestors.length === 0);
-    const dvh = appRules.filter((b) => /min-height:\s*100dvh/.test(b.body));
+    const pin = /min\(100dvh, var\(--vv-bottom, 100dvh\)\)/;
+    const h = appRules.filter((b) => new RegExp(`[^-]height:\\s*${pin.source}`).test(b.body));
+    const minH = appRules.filter((b) => new RegExp(`min-height:\\s*${pin.source}`).test(b.body));
     const pct = appRules.filter((b) => /height:\s*100%/.test(b.body));
-    expect(dvh.length, '顶层 .app 里找不到 min-height: 100dvh').toBeGreaterThan(0);
+    expect(h.length, '顶层 .app 里找不到 height: min(100dvh, var(--vv-bottom, 100dvh))').toBeGreaterThan(0);
+    expect(minH.length, '顶层 .app 里找不到同样钉底的 min-height').toBeGreaterThan(0);
     expect(pct.length, '顶层 .app 的 height: 100% 兜底没了，老浏览器会塌成 0 高').toBeGreaterThan(0);
   });
 });
