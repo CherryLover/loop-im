@@ -311,15 +311,20 @@ describe('蒙版的焦点与背景滚动', () => {
     expect(document.activeElement).toBe(box);
   });
 
-  it('只有一张图时，Tab 出不去这一层（能聚焦的就剩关闭按钮）', () => {
+  it('只有一张图时，Tab 出不去这一层（在下载和关闭两个按钮之间打转）', () => {
     // 两个箭头这时候压根没渲染，焦点陷阱查的是 button:not([disabled])，
-    // 循环里只剩关闭按钮一个，Tab 一按就回到它自己。
+    // 循环里只剩下载和关闭两个，Tab 在它们之间转圈，出不去这一层。
     const { container } = view('![图](/uploads/9f3a.png)');
     fireEvent.click(imageOf(container));
     const close = screen.getByRole('button', { name: '关闭图片预览' });
+    const download = screen.getByRole('button', { name: '下载图片' });
     close.blur();
     fireEvent.keyDown(window, { key: 'Tab' });
+    expect(document.activeElement).toBe(download);
+    fireEvent.keyDown(window, { key: 'Tab' });
     expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(window, { key: 'Tab' });
+    expect(document.activeElement).toBe(download);
   });
 
   it('多张图时 Tab 在这一层里循环，不会跑到背后的消息列表上', () => {

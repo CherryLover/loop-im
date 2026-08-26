@@ -1017,14 +1017,19 @@ input, textarea { font-family: inherit; }
   /* 上下留出关闭按钮和底部指示器的位置，图不会被它们压住。 */
   padding: 60px 68px 72px;
   background: rgba(0, 0, 0, .82);
-  animation: pop .14s ease-out;
-  /* 横划翻页是我们自己处理的。交给浏览器的话，在移动端会变成「左右滑 = 后退/前进」
-     或者页面横向橡皮筋，手势会被抢走。pan-y 保留竖向（长图还要能拖）。 */
-  touch-action: pan-y;
+  /* 背景只淡入。大图有自己的入场（从缩略图的位置长出来，见 ImageViewer 里的 FLIP），
+     整层再 pop 一下就是两套动画打架。 */
+  animation: imgviewIn .18s ease-out;
+  /* 手势全归我们：横划翻页、捏合缩放、双触、放大后单指平移。任何一样交给浏览器
+     都会被抢走（左右滑 = 后退/前进、捏合 = 整页缩放、双触 = 页面放大）。 */
+  touch-action: none;
+  /* 平移 / 缩放时大图会探出层外，别冒出滚动条。 */
+  overflow: hidden;
   /* 大图是 <img>，长按/拖拽会触发浏览器自带的拖图和选中，划动时很碍事。 */
   -webkit-user-select: none;
   user-select: none;
 }
+@keyframes imgviewIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* 大图**不裁切**：缩略图那份是 object-fit: cover 切过的方格，
    点开就是为了看完整的画面，所以这里必须 contain，等比缩到框里为止。 */
@@ -1037,7 +1042,15 @@ input, textarea { font-family: inherit; }
   border-radius: 8px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
   -webkit-user-drag: none;
+  /* 长按走我们自己的保存菜单，别和 iOS 系统的图片弹层撞在一起。 */
+  -webkit-touch-callout: none;
+  /* 缩放平移全在 transform 上做，提前告诉合成器。 */
+  will-change: transform;
+  cursor: zoom-in;
 }
+/* 放大之后光标改成「能拖」，和放大前的「能放大」区分开。 */
+.imgview__img[data-zoomed="true"] { cursor: grab; }
+.imgview__img[data-zoomed="true"]:active { cursor: grabbing; }
 /* 还没加载好 / 加载失败时先别把半张图或者浏览器的碎图图标露出来，
    位置由旁边的 .imgview__status 顶着说明。 */
 .imgview__img[data-state="loading"] { opacity: 0; }
@@ -1124,10 +1137,88 @@ input, textarea { font-family: inherit; }
 .imgview__close:hover { background: rgba(0, 0, 0, .72); }
 .imgview__close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
-/* 关掉动效偏好：蒙版的高光和大图的入场都停掉，静态形态本身已经说明了状态。 */
+/* 顶栏的下载按钮：长按是触屏的路，桌面和键盘用户得有个看得见的入口。
+   和关闭按钮同款同排，挨着放。 */
+.imgview__download {
+  position: absolute;
+  top: 14px;
+  right: 58px;
+  width: 34px;
+  height: 34px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, .28);
+  background: rgba(0, 0, 0, .5);
+  color: #fff;
+  cursor: pointer;
+}
+.imgview__download:hover:not(:disabled) { background: rgba(0, 0, 0, .72); }
+.imgview__download:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.imgview__download:disabled { opacity: .5; cursor: default; }
+
+/* 保存失败的提示。放顶部中间：底部被指示器占着，长按菜单也开在底下。 */
+.imgview__saveerr {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: rgba(120, 30, 30, .92);
+  color: #fff;
+  font-size: 13px;
+}
+
+/* ---------- 长按保存的操作菜单（底部小面板） ---------- */
+
+/* 菜单自己的挡板：透明、盖满整层。开着菜单时点到哪儿都只是关菜单，
+   不会穿透下去误触「点背景关闭预览」。 */
+.imgview__sheetback {
+  position: absolute;
+  inset: 0;
+}
+.imgview__sheet {
+  position: absolute;
+  left: 50%;
+  bottom: max(14px, env(safe-area-inset-bottom, 14px));
+  transform: translateX(-50%);
+  width: min(92vw, 340px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 16px;
+  background: rgba(28, 28, 30, .96);
+  border: 1px solid rgba(255, 255, 255, .12);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .5);
+  animation: sheetIn .16s ease-out;
+}
+@keyframes sheetIn {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.imgview__sheet button {
+  height: 44px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .08);
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+}
+.imgview__sheet button:hover:not(:disabled) { background: rgba(255, 255, 255, .16); }
+.imgview__sheet button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.imgview__sheet button:disabled { opacity: .5; cursor: default; }
+.imgview__sheet .imgview__sheet-cancel { background: transparent; color: rgba(255, 255, 255, .7); }
+
+/* 关掉动效偏好：蒙版的高光、背景淡入、菜单滑入都停掉，静态形态本身已经说明了状态。
+   （大图的展开/缩放过渡在 JS 里同样看这个偏好，见 ImageViewer 的 prefersReducedMotion。） */
 @media (prefers-reduced-motion: reduce) {
   .md .mdimg[data-state="loading"]::before { animation: none; }
   .imgview { animation: none; }
+  .imgview__sheet { animation: none; }
 }
 
 @media (max-width: 720px) {

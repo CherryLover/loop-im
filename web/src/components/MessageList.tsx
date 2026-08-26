@@ -3,7 +3,7 @@ import { CornerUpLeft, SmilePlus } from 'lucide-react';
 import { Avatar, AiBadge } from './Avatar';
 import { MarkdownBody } from './MarkdownBody';
 import { ImageViewer } from './ImageViewer';
-import type { GalleryImage } from './ImageViewer';
+import type { GalleryImage, ViewerOrigin } from './ImageViewer';
 import { clock, dayLabel } from '../lib/format';
 import { REACTION_EMOJIS } from '../lib/reactions';
 import type { Message, ReadState } from '../lib/types';
@@ -110,9 +110,11 @@ export function MessageList({
    * 放在气泡里的话点第二张就会叠出两层。
    *
    * 存的不只是被点的那一张，而是**打开那一刻整条会话里的全部图片 + 落在第几张**，
-   * 这样蒙版里才能前后翻。
+   * 这样蒙版里才能前后翻。origin 是被点缩略图当时在视口里的位置 ——
+   * 预览的入场动画从那个框长出来；量不到（jsdom、或者极端的布局时机）就是 null，
+   * ImageViewer 会退回纯淡入。
    */
-  const [viewing, setViewing] = useState<{ images: GalleryImage[]; index: number } | null>(null);
+  const [viewing, setViewing] = useState<{ images: GalleryImage[]; index: number; origin: ViewerOrigin | null } | null>(null);
 
   /**
    * 点开某张缩略图，顺手把整条会话的图片收成一个画廊。
@@ -141,6 +143,11 @@ export function MessageList({
    * 放进画廊只会让人翻到一张坏图，还把「共 n 张」这个数撑大。
    */
   function openImage(src: string, alt: string, clicked: HTMLImageElement) {
+    // 被点那一刻缩略图的位置，交给预览层做「从这里长出来」的入场动画。
+    const r = clicked.getBoundingClientRect();
+    const origin = r.width > 0 && r.height > 0
+      ? { x: r.left, y: r.top, width: r.width, height: r.height }
+      : null;
     const root = scrollRef.current;
     const all = Array.from(root?.querySelectorAll<HTMLImageElement>('img.mdimg__img') ?? [])
       .filter((img) => img.closest('button.mdimg')?.getAttribute('data-state') !== 'error');
@@ -148,7 +155,7 @@ export function MessageList({
     // 收不到（理论上不会：能点开就说明它在列表里）就退回「只看这一张」，
     // 总比开出一个空画廊强。
     if (at < 0) {
-      setViewing({ images: [{ src, alt }], index: 0 });
+      setViewing({ images: [{ src, alt }], index: 0, origin });
       return;
     }
     setViewing({
@@ -157,6 +164,7 @@ export function MessageList({
         alt: img.getAttribute('alt') || '',
       })),
       index: at,
+      origin,
     });
   }
 
@@ -394,6 +402,7 @@ export function MessageList({
           onIndex={(index) => setViewing((v) => (v ? { ...v, index } : v))}
           onClose={() => setViewing(null)}
           hasOlder={hasOlder}
+          origin={viewing.origin}
         />
       ) : null}
     </div>
