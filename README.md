@@ -67,6 +67,26 @@ DEMO_PASSWORD=只在本地用的密码
 - 群聊右栏显示成员、在线状态与「AI 掌握的上下文」摘要。
 - 新消息、AI 输入中、在线状态通过 SSE (`/api/stream`) 实时推送。
 
+**消息互动**
+- 表情回应：气泡上用白名单内的 emoji 回应，同一个人对同一条消息同种表情只算一次，实时同步。
+- 引用回复：任意消息可引用后回复，气泡带原文摘要，点引用块跳回原消息。
+- 消息搜索：按关键词搜自己可见的消息，权限隔离（搜不到自己不在的会话），游标翻页。
+- 会话可置顶、可免打扰：只影响自己那一份列表；免打扰的会话不弹通知、徽标弱化。
+
+**通知与推送（PWA）**
+- 桌面通知：在个人资料里手动开启（不进门就弹权限框）。切走时来消息才弹，正看着的会话不弹，
+  免打扰的不弹；点通知聚焦窗口并直接回到那个会话。
+- 可安装：手机上「添加到主屏幕」后以独立窗口运行，带自己的图标、启动画面与刘海/指示条安全区适配。
+- 真离线推送：iOS（16.4+ 主屏 App）与 Android 走标准 Web Push（VAPID 签名 + RFC 8291 端到端加密，
+  推送服务只见密文）。应用完全关掉也能收到，点通知回到对应会话。「该不该推」按**设备**判定：
+  电脑开着网页不影响手机收推送；自己发的、免打扰的、群成员变动这类系统提示不推。
+- 应用图标角标（Badging）显示未读总数（支持的平台上）。
+- 方案、真机验收清单与已知平台限制全部记录在 [docs/PWA-与推送改造方案.md](docs/PWA-与推送改造方案.md)。
+
+**防滥用**
+- 登录失败、发消息、@AI、上传、建群分档限流；@Aria 单独更严一档（每次都真实计费）。
+  触发时提示里写明几点几分可以再试，限流日志一个窗口只记一条且不含正文。
+
 **原生 AI（Aria）**
 - 群聊里静默读取全部上下文；被 `@Aria` 时必定回复，`@全员` 是否触发可在配置里开关。
 - 成员可与 AI 一对一私聊（可由管理员关闭）。
@@ -159,23 +179,29 @@ docker run -d -p 4000:4000 \
 
 - [12 个 issue 的修复报告](docs/issue-fixes-2026-08.md)（2026-08）：逐条根因、修法、回归用例，
   以及升级注意事项与仍未覆盖的三项。
+- [PWA 与推送改造](docs/PWA-与推送改造方案.md)（2026-08）：可安装 + iOS/Android 真离线推送，
+  分 PR1（外壳）/ PR2（Web Push）两步落地，真机验收清单与已知平台限制都在方案里。
+- 主题「跟随系统」修复（2026-08-26）：旧版首次加载会把系统颜色当成手动选择存下来，
+  之后系统切深浅色应用不再跟随；现在没手动选过就实时跟随，手动切换过才记忆。
 
 ## 测试与 CI
 
 ```bash
-npm run test          # 后端 56 个接口用例 + 前端 28 个单元用例
+npm run test          # 后端 940 条 + 前端 905 条（约 1 分钟）
 npm run test:server   # node:test，跑在临时 SQLite 库上，不碰 server/data
 npm run test:web      # vitest（jsdom + testing-library）
-npm run test:e2e      # 构建前端后用 Playwright 跑真实浏览器冒烟
+npm run test:e2e      # 构建前端后用 Playwright 跑 13 条真实浏览器冒烟
+npm run test:deployed # 对跑起来的部署再跑 22 条真实浏览器验证（要传测试账号，见 e2e/deployed/）
 ```
 
-覆盖范围：
+覆盖范围（2026-08-26 实测数字，用例总账见 [docs/测试用例.md](docs/测试用例.md)）：
 
 | 层次 | 用例 | 覆盖内容 |
 | --- | --- | --- |
-| 后端 `server/test` | 56 | 登录与 token、密码哈希、角色权限（成员拿不到管理接口）、会话可见性与成员排序、建群 2–3 人校验、Markdown 消息收发、@Aria 必回 / 未被 @ 静默 / @全员 跟随开关、AI 私聊开关、未配置凭据时降级、AI 配置不回传 API Key、画像与统计、图片上传与非图片拒绝、安全默认值（缺 `JWT_SECRET` 拒绝启动、没配管理员就不造账号、日志不打印密码） |
-| 前端 `web/src/**/*.test.*` | 28 | Markdown 渲染与 XSS 转义（`javascript:` 链接、属性注入）、时间格式、消息合并排序与乐观发送去重、输入框 Enter/Shift+Enter、@ 提及气泡的 ↑↓ 选择与过滤 |
-| 端到端 `e2e` | 4 | 登录 → 群聊 @Aria 拿到回复；联系人 / 建群 / AI 管理二级页 / AI 配置；普通成员无管理入口且能私聊 AI；深色主题与移动端布局 |
+| 后端 `server/test` | 940（58 文件） | 登录 / 权限 / 限流 / 会话与群管理 / 消息与 @ 机制 / 已读回执 / 表情回应 / 引用回复 / 搜索 / 附件安全（嗅探、鉴权、Range）/ 对象存储 / Web Push（加密、订阅、该不该推）/ AI 全流程 / 安全默认值与日志脱敏 |
+| 前端 `web/src/**/*.test.*` | 905（75 文件） | Markdown 渲染与 XSS 转义 / 乐观发送与合并排序 / 输入框与 @ 提及 / 通知状态机 / 推送订阅与 sw.js 源码约束 / 主题跟随系统与手动记忆 / 各组件交互 |
+| 端到端 `e2e` | 13 | 登录 → 建群 → @Aria 全链路、移动端布局与跳转、Toast 不挡按钮、深色主题、主题跟随系统 |
+| 部署后 `e2e/deployed` | 22 | 对真实部署跑：附件、已读回执、搜索、表情回应、个人资料、AI 管理二级页 |
 
 GitHub Actions（`.github/workflows/ci.yml`）在每次 push 与 PR 上跑三个 job：
 后端测试（Node 22 与 24）、前端类型检查 + 单元测试 + 构建、以及依赖前两者的 Playwright 冒烟。
@@ -197,12 +223,17 @@ server/                Express + node:sqlite 后端
   src/s3-sign.js        AWS SigV4 签名（只够 PUT/GET/DELETE 单个对象，不引第三方 SDK）
   src/attachment-access.js  附件下载鉴权（按会话成员判定）与孤儿对象定期清理
   src/events.js         SSE 推送
-  src/routes/           auth / users / conversations / uploads / upload-files / ai
+  src/push-decide.js    「该不该推」的五条规则（按设备判定，与前端 notify 逻辑对齐）
+  src/push-store.js     推送订阅的存取（含设备可见性状态）
+  src/web-push.js       Web Push 协议：VAPID 签名 + RFC 8291 payload 加密（不引第三方 SDK）
+  src/routes/           auth / users / conversations / uploads / upload-files / ai / push / search
 web/                   Vite + React + TypeScript 前端
+  public/               PWA 外壳：manifest.webmanifest、图标、sw.js（只做推送，永不缓存页面）
   src/styles.css        设计 token（浅色/深色）与全部组件样式
-  src/lib/              api 客户端、Markdown 渲染、时间格式、主题、SSE hook
+  src/lib/              api 客户端、Markdown 渲染、时间格式、主题、通知与推送、SSE hook
   src/pages/            登录、聊天、联系人、AI 管理
   src/modals/           建群、添加联系人、个人资料
+docs/                  方案与测试文档：PWA 与推送改造方案、测试用例集、issue 修复报告
 deploy/                部署：docker-compose.yml、deploy.sh、.env.example
 Dockerfile             多阶段构建：构建前端 → 装后端生产依赖 → 单镜像同时托管 API 与静态文件
 project/               原始设计原型（Claude Design 导出）
@@ -216,6 +247,7 @@ chats/                 设计过程的对话记录
 | POST | `/api/auth/login` | 邮箱密码登录，返回 15 天 token |
 | GET | `/api/auth/me` | 当前用户 + AI 公共信息 |
 | POST | `/api/auth/ping` | 心跳（维持在线状态），返回全员在线状态 |
+| POST | `/api/auth/logout` | 主动退出：结束本会话，该账号无其他设备在线时立刻广播离线 |
 | PATCH | `/api/auth/me` | 改昵称 |
 | POST | `/api/auth/me/avatar` | 上传头像 |
 | POST | `/api/auth/me/password` | 改密码 |
@@ -223,6 +255,7 @@ chats/                 设计过程的对话记录
 | POST | `/api/users` | 管理员开通新成员 |
 | POST | `/api/users/:id/disable` | 管理员停用账号（所有设备立刻失效，聊天记录保留） |
 | POST | `/api/users/:id/enable` | 管理员恢复账号 |
+| POST | `/api/users/:id/reset-password` | 管理员重置成员密码，返回新的初始密码 |
 | GET | `/api/conversations` | 我的会话列表 |
 | POST | `/api/conversations/group` | 管理员建群（至少 1 人，AI 默认加入） |
 | POST | `/api/conversations/direct` | 打开/创建一对一（含 AI 私聊） |
@@ -232,9 +265,14 @@ chats/                 设计过程的对话记录
 | GET/POST | `/api/conversations/:id/messages` | 读取（游标分页）/ 发送消息 |
 | POST | `/api/conversations/:id/read` | 上报已读位置 |
 | PATCH | `/api/conversations/:id/prefs` | 置顶 / 免打扰（个人设置，只改自己那一份） |
+| POST/DELETE | `/api/conversations/:id/messages/:messageId/reactions` | 加 / 取消表情回应 |
+| GET | `/api/messages/search` | 搜索自己可见的消息（关键词 + 游标翻页） |
 | GET | `/api/conversations/:id/ai-context` | 群内 AI 上下文摘要 |
 | POST | `/api/uploads` | 附件上传（图片 / 视频按真实字节嗅探，其余作为只能下载的文件）。返回 `kind` 为 `image` / `video` / `file` |
 | GET | `/api/stream` | SSE：新消息 / AI 输入中 / 在线状态 / 已读回执 |
+| GET | `/api/push/config` | Web Push 公钥与开关状态 |
+| POST/DELETE | `/api/push/subscribe` | 注册 / 注销本设备的推送订阅 |
+| POST | `/api/push/visibility` | 上报本设备是否在前台（服务端按设备决定该不该推） |
 | GET/PUT | `/api/ai/settings` | AI 配置（管理员） |
 | POST | `/api/ai/test` | 测试连通性（管理员） |
 | GET | `/api/ai/overview` | AI 管理列表与统计（管理员） |

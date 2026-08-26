@@ -127,3 +127,34 @@ test('深色主题与移动端布局', async ({ page }) => {
   await page.locator('.convo').first().click();
   await expect(page.locator('.chat__back')).toBeVisible();
 });
+
+test('主题跟随系统：没手动选过就实时跟随，手动选过才固定', async ({ page }) => {
+  // 旧 bug：首次加载把「按系统算出的颜色」写进 localStorage，从第二次访问起系统再怎么
+  // 切换都纹丝不动。所以这条用例的关键不是首屏颜色对不对，而是「切换 + 刷新」之后还跟不跟。
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+  // 页面开着时系统切浅色 → 实时跟上
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+
+  // 刷新（= 第二次访问）后依然跟随系统，而不是被首次的结果钉死
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+  // 手动切换过之后就固定：系统再变也不跟随，刷新后记忆还在
+  await signIn(page, ADMIN);
+  await page.locator('.sidebar__me').click();
+  await page.locator('.appearance button').click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.keyboard.press('Escape');
+
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.waitForTimeout(200);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.reload();
+  await expect(page.locator('.sidebar')).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});
