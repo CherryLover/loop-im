@@ -69,6 +69,24 @@ function longPress() {
   vi.useRealTimers();
 }
 
+/** 把环境伪装成触屏设备：(pointer: coarse) 命中，其余查询（如 reduced-motion）不命中。 */
+function mockCoarsePointer() {
+  vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+    matches: query === '(pointer: coarse)',
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  })));
+}
+
+/** 把环境伪装成支持 Web Share 分享文件，返回 share 的桩以便断言。 */
+function mockFileShare(share: (data: unknown) => Promise<void> = async () => {}) {
+  const shareSpy = vi.fn(share);
+  Object.defineProperty(navigator, 'share', { configurable: true, value: shareSpy });
+  Object.defineProperty(navigator, 'canShare', { configurable: true, value: () => true });
+  return shareSpy;
+}
+
 describe('顶栏的下载按钮', () => {
   it('取回原图、按「alt + 实际 MIME」起名触发下载', async () => {
     const fetchSpy = stubFetchOk('image/jpeg');
@@ -93,6 +111,63 @@ describe('顶栏的下载按钮', () => {
     open();
     fireEvent.click(screen.getByRole('button', { name: '下载图片' }));
     expect(await screen.findByText('图片保存失败，稍后再试')).toBeInTheDocument();
+  });
+});
+
+describe('手机上的顶栏保存按钮（触屏 + 支持分享文件）', () => {
+  it('按钮变成「保存图片」，点了交给系统分享面板（iOS 从这里存相册）', async () => {
+    mockCoarsePointer();
+    const shareSpy = mockFileShare();
+    stubFetchOk('image/png');
+
+    open();
+    // 走分享的路，就不该再自称「下载」
+    expect(screen.queryByRole('button', { name: '下载图片' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '保存图片' }));
+
+    await waitFor(() => expect(shareSpy).toHaveBeenCalled());
+    const shared = (shareSpy.mock.calls[0] as unknown[])[0] as { files: File[] };
+    expect(shared.files[0]?.name).toBe('发版流程.png');
+  });
+
+  it('分享面板起不来（NotAllowedError）就退回下载，这一按不能什么都没发生', async () => {
+    mockCoarsePointer();
+    mockFileShare(async () => {
+      throw Object.assign(new Error('denied'), { name: 'NotAllowedError' });
+    });
+    stubFetchOk('image/jpeg');
+    mockObjectUrl();
+    let captured: string | null = null;
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      captured = this.download;
+    });
+
+    open();
+    fireEvent.click(screen.getByRole('button', { name: '保存图片' }));
+
+    await waitFor(() => expect(captured).toBe('发版流程.jpg'));
+    expect(screen.queryByText('图片保存失败，稍后再试')).toBeNull();
+  });
+
+  it('用户自己划掉分享面板不算失败：不报错，按钮恢复可点', async () => {
+    mockCoarsePointer();
+    const shareSpy = mockFileShare(async () => {
+      throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+    });
+    stubFetchOk('image/png');
+
+    open();
+    fireEvent.click(screen.getByRole('button', { name: '保存图片' }));
+
+    await waitFor(() => expect(shareSpy).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存图片' })).toBeEnabled());
+    expect(screen.queryByText('图片保存失败，稍后再试')).toBeNull();
+  });
+
+  it('触屏但系统分享不了文件：按钮保持「下载图片」，仍走下载', () => {
+    mockCoarsePointer();
+    open();
+    expect(screen.getByRole('button', { name: '下载图片' })).toBeInTheDocument();
   });
 });
 

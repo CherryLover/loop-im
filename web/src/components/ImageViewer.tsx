@@ -81,6 +81,15 @@ function supportsFileShare() {
   }
 }
 
+/**
+ * 主输入是不是手指（粗指针）。桌面的 Safari / Chrome 同样支持分享文件，
+ * 只看 supportsFileShare 会把桌面用户也拽进分享面板 —— 得再加一道「这是触屏设备」。
+ * jsdom 没有 matchMedia，缺失时当桌面处理。
+ */
+function isCoarsePointer() {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+}
+
 interface ZoomState { scale: number; tx: number; ty: number }
 const ZOOM_RESET: ZoomState = { scale: 1, tx: 0, ty: 0 };
 
@@ -122,10 +131,16 @@ type Gesture =
  * 数学都以「布局中心 + translate + scale」为模型，锚点（手指中点 / 光标 / 双击落点）
  * 在缩放前后指着图上同一个位置。
  *
- * ## 长按保存
+ * ## 保存
  *
  * 在大图上按住 500ms 弹操作菜单：系统分享（能存相册，见 supportsFileShare）
- * 和直接下载。顶栏另有常驻的下载按钮 —— 长按是触屏的路，桌面和键盘用户得有看得见的入口。
+ * 和直接下载。顶栏另有常驻的保存按钮 —— 长按是触屏的路，桌面和键盘用户得有看得见的入口。
+ *
+ * 顶栏按钮在**触屏且支持分享文件**的环境（约等于手机）直接走系统分享，不走下载：
+ * iOS 上浏览器下载只会落进「文件」App，用户想要的是相册，而网页进相册只有分享面板里
+ * 「存储图像」这一条路。桌面反过来，直接下载才是预期，弹分享面板是多一步打扰。
+ * 分享面板本身起不来（取图太慢、Safari 认定已出了手势时效之类）就退回下载兜底 ——
+ * 图都取到手了，这一按不能什么都没发生。
  * 图先 fetch 成 Blob 再交出去：src 可能带 ?token=，也可能是 blob:，两种 fetch 都吃。
  *
  * ## 关掉的三条路
@@ -170,6 +185,11 @@ export function ImageViewer({ images, index, onIndex, onClose, hasOlder = false,
 
   const count = images.length;
   const current = images[index] ?? { src: '', alt: '' };
+  /**
+   * 顶栏保存按钮走哪条路：触屏 + 系统能分享文件（约等于手机）→ 系统分享，
+   * 能进相册；否则（桌面）→ 直接下载。见文件头「保存」。
+   */
+  const shareSave = supportsFileShare() && isCoarsePointer();
   const atFirst = index <= 0;
   const atLast = index >= count - 1;
 
@@ -657,7 +677,13 @@ export function ImageViewer({ images, index, onIndex, onClose, hasOlder = false,
     return { blob, name: imageFileName(current.alt, current.src, blob.type) };
   }
 
-  /** 走系统分享（iOS 存相册的唯一网页途径）。分享面板被用户自己划掉不算失败。 */
+  /**
+   * 走系统分享（iOS 存相册的唯一网页途径，面板里选「存储图像」）。
+   * 分享面板被用户自己划掉（AbortError）不算失败；分享本身起不来 ——
+   * 拿到 File 之后 canShare 反悔，或者 share 抛 NotAllowedError（取图太慢，
+   * Safari 认定已经不在用户手势里了）—— 就退回下载：图都取到手了，
+   * 这一按至少要落下点什么。
+   */
   async function shareImage() {
     if (saveState === 'busy') return;
     setSaveState('busy');
@@ -665,18 +691,22 @@ export function ImageViewer({ images, index, onIndex, onClose, hasOlder = false,
       const { blob, name } = await fetchCurrentBlob();
       const file = new File([blob], name, { type: blob.type || 'image/png' });
       if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file] });
+        try {
+          await navigator.share({ files: [file] });
+        } catch (err) {
+          if ((err as DOMException)?.name === 'AbortError') {
+            setSaveState('idle');
+            return;
+          }
+          triggerDownload(blob, name);
+        }
       } else {
-        triggerDownload(blob, name);   // 拿到具体文件后系统又说不能分享：退回下载
+        triggerDownload(blob, name);
       }
       setSaveState('idle');
       setMenuOpen(false);
-    } catch (err) {
-      if ((err as DOMException)?.name === 'AbortError') {
-        setSaveState('idle');
-        return;
-      }
-      setSaveState('error');
+    } catch {
+      setSaveState('error');   // 取图就失败了：手里没有东西，只能报错
     }
   }
 
@@ -795,10 +825,10 @@ export function ImageViewer({ images, index, onIndex, onClose, hasOlder = false,
       <button
         type="button"
         className="imgview__download"
-        onClick={downloadImage}
+        onClick={shareSave ? shareImage : downloadImage}
         disabled={saveState === 'busy'}
-        aria-label="下载图片"
-        title="下载图片"
+        aria-label={shareSave ? '保存图片' : '下载图片'}
+        title={shareSave ? '保存图片' : '下载图片'}
       >
         <Download size={18} />
       </button>
