@@ -86,7 +86,8 @@ jobs:
             | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
           test -n "$token"
 
-          curl -fsS http://127.0.0.1:4000/api/users -H "Authorization: Bearer $token" | grep -q Aria
+          # Aria 退役后系统里默认只有刚建的管理员：联系人接口能拿到它即视为账号链路通。
+          curl -fsS http://127.0.0.1:4000/api/users -H "Authorization: Bearer $token" | grep -q 'smoke@example.test'
           curl -fsS http://127.0.0.1:4000/ | grep -q '<div id="root">'
           test -f smoke-data/loop.db || (echo "数据没有落到挂载目录" && exit 1)
 
