@@ -6,7 +6,6 @@ import {
 } from '../auth.js';
 import { AVATAR_NOT_IMAGE, inspectUpload } from '../attachments.js';
 import { putObjectFromFile } from '../storage.js';
-import { AI_NAME, providerOf, settings } from '../ai.js';
 import { MAX_UPLOAD_BYTES, OVERSIZED_MESSAGE, upload } from '../upload-middleware.js';
 import { discardTemp, readSniffHead } from '../upload-temp.js';
 import { emitAll } from '../events.js';
@@ -15,17 +14,6 @@ import { limitUsage } from '../usage-limit.js';
 import { logEvent, logWarn } from '../log.js';
 
 export const router = Router();
-
-// AI facts every member may see; the full configuration stays in /api/ai (admin only).
-const aiPublicInfo = () => {
-  const s = settings();
-  return {
-    name: AI_NAME,
-    providerLabel: providerOf(s.provider).label,
-    silentRead: !!s.silent_read,
-    allowDm: !!s.allow_dm,
-  };
-};
 
 router.post('/login', (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
@@ -69,7 +57,6 @@ router.post('/login', (req, res) => {
     token: signToken(user, { remember, sessionId }),
     tokenDays: tokenDaysFor(remember),
     user: publicUser({ ...user, last_seen_at: now() }),
-    ai: aiPublicInfo(),
   });
 });
 
@@ -86,7 +73,7 @@ router.post('/logout', authenticate, (req, res) => {
 });
 
 router.get('/me', authenticate, (req, res) => {
-  res.json({ user: publicUser(req.user), ai: aiPublicInfo() });
+  res.json({ user: publicUser(req.user) });
 });
 
 // Heartbeat: keeps the 在线/离线 dot honest without a socket per tab.

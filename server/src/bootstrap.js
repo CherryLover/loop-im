@@ -2,24 +2,20 @@
 // 本地想要一批联系人时用 DEMO_USERS 描述，两者都写在未入库的 .env 里。
 import bcrypt from 'bcryptjs';
 import { get, run, now, uid } from './db.js';
-import { AI_ID, AI_NAME } from './ai.js';
 import { isEncryptionConfigured } from './secret-box.js';
 
-const AI_EMAIL = 'aria@system';
+// 退役的 Aria 在老库里的固定 id。新装的库不会再有这一行。
+const LEGACY_AI_ID = 'ai';
 
-/** Aria 是系统账号：没有密码，也无法登录，只作为会话成员存在。 */
-export function ensureAiAccount() {
-  const name = process.env.AI_NAME || AI_NAME;
-  const existing = get('SELECT * FROM users WHERE id = ?', AI_ID);
-  if (existing) {
-    if (existing.name !== name) run('UPDATE users SET name = ? WHERE id = ?', name, AI_ID);
-    return false;
-  }
-  run(
-    `INSERT INTO users (id, name, email, dept, role, password_hash, last_seen_at, created_at)
-     VALUES (?, ?, ?, '系统 AI', 'ai', NULL, 0, ?)`,
-    AI_ID, name, AI_EMAIL, now(),
-  );
+/**
+ * Aria 退役（docs/hapi-Agent-接入方案.md §F）：老库里它那一行**保留但永久停用**——
+ * 历史消息、群成员记录都外键着它，删行会把历史一起带走。停用后它自然从联系人
+ * 列表、拉人名单、在线统计里消失，历史消息里名字头像照常显示。幂等，每次启动跑。
+ */
+export function retireLegacyAi() {
+  const existing = get('SELECT * FROM users WHERE id = ?', LEGACY_AI_ID);
+  if (!existing || existing.disabled_at) return false;
+  run('UPDATE users SET disabled_at = ?, last_seen_at = 0 WHERE id = ?', now(), LEGACY_AI_ID);
   return true;
 }
 
@@ -67,13 +63,13 @@ export function bootstrapDemoUsers(spec = process.env.DEMO_USERS, password = pro
   return created;
 }
 
-/** 启动时跑一次：系统 AI + 管理员 + 可选的本地联系人。 */
+/** 启动时跑一次：退役老 AI + 管理员 + 可选的本地联系人。 */
 export function bootstrap({ log = () => {} } = {}) {
   // 只告警不拦启动：现有部署没配这个变量，不能因为加了加密就起不来。
   if (!isEncryptionConfigured() && process.env.NODE_ENV === 'production') {
-    log('⚠ 未设置 ENCRYPTION_KEY，AI 供应商的 API Key 仍以明文存库（见 server/.env.example）');
+    log('⚠ 未设置 ENCRYPTION_KEY，需要加密落库的凭据（如后续的 hapi token）将以明文存库（见 server/.env.example）');
   }
-  ensureAiAccount();
+  if (retireLegacyAi()) log('已停用退役的系统 AI（Aria），历史消息不受影响');
   const admin = bootstrapAdmin();
   if (admin.created) log(`已创建管理员 ${admin.user.email}`);
   else if (admin.reason === 'missing-config') log('未配置 ADMIN_EMAIL / ADMIN_PASSWORD，跳过管理员初始化');

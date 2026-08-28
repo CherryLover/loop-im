@@ -1,7 +1,8 @@
-// 服务端用量限流：发消息 / @AI / 上传 / 群写操作，按用户维度数「成功次数」。
+// 服务端用量限流：发消息 / 上传 / 群写操作，按用户维度数「成功次数」。
+// 'ai' 档只剩配置——Aria 退役后暂无消费方，留给接入中的 hapi Agent（见 src/usage-limit.js）。
 // 和登录那套「只数失败、成功清零」是两套语义，见 src/usage-limit.js 开头。
-import { startServer, waitFor } from './helpers.js';
-import { direct, group, member } from './fixtures.js';
+import { startServer } from './helpers.js';
+import { group, member } from './fixtures.js';
 import { PNG } from './samples.js';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -177,96 +178,64 @@ describe('发消息限流', () => {
   });
 });
 
-// ---- @AI 单独一档 --------------------------------------------------------
+// ---- 'ai' 单独一档：只剩配置，暂无消费方 ---------------------------------
 
-describe('@AI 限流', () => {
-  it('@Aria 同时吃 message 和 ai 两档，普通消息只吃 message 档', async () => {
+describe("'ai' 档限流", () => {
+  it("发消息路由只吃 message 档：@ 了谁都不占 'ai' 档额度", async () => {
+    // Aria 退役后没有任何路由消费 'ai' 档（留给接入中的 hapi Agent），
+    // 发消息这条路上 @全员 / @某人 都只是普通消息。
     limit.resetUsageLimits();
     await send('一条谁也没 @ 的普通消息');
     assert.equal(limit.quotaState('message', chen.id).used, 1);
-    assert.equal(limit.quotaState('ai', chen.id).used, 0, '普通消息不该占 @AI 的额度');
+    assert.equal(limit.quotaState('ai', chen.id).used, 0, "普通消息不该占 'ai' 档的额度");
 
-    await send('@Aria 帮忙看一下发版风险');
+    await send(`@全员 站会推迟，@${zhou.name} 记得同步`);
     assert.equal(limit.quotaState('message', chen.id).used, 2);
-    assert.equal(limit.quotaState('ai', chen.id).used, 1, '@Aria 才占 @AI 的额度');
+    assert.equal(limit.quotaState('ai', chen.id).used, 0, "'ai' 档现在没有消费方，发消息不该动它");
   });
 
-  it('@AI 额度用完时单独返回 429（scope 为 ai），普通消息仍然发得出去', async () => {
+  it("'ai' 档本身还能用：额度用完单独挡住，不影响 message 档", () => {
+    // 接口级没得测（没有路由消费这一档），直接调 quotaState/consumeQuota
+    // 锁住配置与分账逻辑，hapi Agent 接上时这一档拿来就能用。
     const restore = limit.configureUsageLimit('ai', { max: 2, windowMs: 60_000 });
     try {
-      for (let i = 0; i < 2; i += 1) assert.equal((await send(`@Aria 第 ${i + 1} 问`)).status, 201);
+      limit.resetUsageLimits();
+      const t0 = 1_700_000_000_000;
+      for (let i = 0; i < 2; i += 1) limit.consumeQuota('ai', 'u_lin', t0 + i);
 
-      const blocked = await api.call('POST', `/api/conversations/${room.id}/messages`,
-        { token: chenToken, body: { body: '@Aria 再问一次' } });
-      assert.equal(blocked.status, 429);
-      assert.equal(blocked.body.scope, 'ai', '应当是 @AI 那一档挡下的');
-      assert.ok(blocked.body.retryAfterMs > 0);
+      const blocked = limit.quotaState('ai', 'u_lin', t0 + 1_000);
+      assert.equal(blocked.allowed, false, "'ai' 档满了就该单独挡住");
+      assert.ok(blocked.retryAfterMs > 0, 'retryAfterMs 应当为正');
+      assert.ok(blocked.retryAfterMs <= 60_000, 'retryAfterMs 不该超过窗口长度');
 
-      // 只是不能再叫 Aria 了，人和人之间照常聊。
-      assert.equal((await send('那我们先自己对一下')).status, 201);
+      // 两档各记各的账：'ai' 档满了，message 档一笔都没动。
+      const message = limit.quotaState('message', 'u_lin', t0 + 1_000);
+      assert.equal(message.used, 0, "'ai' 档的账不该记到 message 档头上");
+      assert.equal(message.allowed, true);
     } finally {
       restore();
-    }
-  });
-
-  it('群里没有 Aria 时 @全员 不占 @AI 额度（那条路本来就不会调模型）', async () => {
-    const { run } = await import('../src/db.js');
-    const { AI_ID } = await import('../src/ai.js');
-    const { saveSettings } = await import('../src/ai.js');
-    const solo = await group(api, adminToken, '限流 · 无 Aria 群', [chen.id]);
-    run('DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?', solo.id, AI_ID);
-    const before = saveSettings({ replyAtAll: 1 });
-    try {
-      limit.resetUsageLimits();
-      const res = await api.post(`/api/conversations/${solo.id}/messages`, { body: '@全员 站会推迟' }, chenToken);
-      assert.equal(res.status, 201);
-      assert.equal(limit.quotaState('ai', chen.id).used, 0, '不会调模型的消息不该占 @AI 额度');
-    } finally {
-      saveSettings({ replyAtAll: before.reply_at_all ? 1 : 0 });
     }
   });
 });
 
-// ---- AI 自己发的消息不受限 -----------------------------------------------
+// ---- AI 用户自己发的消息不受限 -------------------------------------------
 
-describe('AI 自己发的消息不受限流', () => {
-  it('AI 的用户 id 在任何档位上都豁免', () => {
+describe('AI 用户不受限流', () => {
+  it("两代 AI 的 id 在任何档位上都豁免：退役的 'ai' 与 hapi Agent 的 'ai-<agent>'", () => {
     const restore = limit.configureUsageLimit('message', { max: 1, windowMs: 60_000 });
     try {
-      for (let i = 0; i < 50; i += 1) limit.consumeQuota('message', 'ai');
-      assert.equal(limit.quotaState('message', 'ai').allowed, true, 'AI 不该被自己的额度挡住');
-      assert.equal(limit.quotaState('ai', 'ai').allowed, true);
+      for (const aiId of ['ai', 'ai-claude']) {
+        for (let i = 0; i < 50; i += 1) limit.consumeQuota('message', aiId);
+        assert.equal(limit.quotaState('message', aiId).allowed, true, `${aiId} 不该被自己的额度挡住`);
+        assert.equal(limit.quotaState('ai', aiId).allowed, true);
+      }
       // 同一时刻普通用户是会被挡住的，说明豁免确实是针对 AI 而不是限流没生效。
       limit.consumeQuota('message', 'u_lin');
       assert.equal(limit.quotaState('message', 'u_lin').allowed, false);
-    } finally {
-      restore();
-    }
-  });
-
-  it('用户额度只按用户自己发的条数算，Aria 的回复不算进去', async () => {
-    // 阈值设成 2。AI 私聊里每条用户消息都会带来一条 Aria 的回复，
-    // 如果限流数的是「会话里新增了几条消息」，第 2 条用户消息就会被挡；
-    // 数的是「这个用户发了几条」才对，所以两条都该成功。
-    const restore = limit.configureUsageLimit('message', { max: 2, windowMs: 60_000 });
-    try {
-      const dm = await direct(api, chenToken, 'ai');
-      limit.resetUsageLimits();
-
-      assert.equal((await api.post(`/api/conversations/${dm.id}/messages`, { body: '第一问' }, chenToken)).status, 201);
-      const afterFirst = await waitFor(async () => {
-        const rows = (await api.get(`/api/conversations/${dm.id}/messages`, chenToken)).body.messages;
-        return rows.some((m) => m.isAI) ? rows : null;
-      });
-      assert.ok(afterFirst.length >= 2, 'Aria 应当已经回过一条');
-
-      // Aria 刚插了一条消息，用户自己的额度必须原封不动地只用掉 1。
-      assert.equal(limit.quotaState('message', chen.id).used, 1, 'Aria 的回复不该算进用户额度');
-      assert.equal(
-        (await api.post(`/api/conversations/${dm.id}/messages`, { body: '第二问' }, chenToken)).status,
-        201,
-        '用户自己只发了 2 条，不该被挡',
-      );
+      // 豁免认的是「'ai' 本人或 'ai-' 前缀」，不是「id 里带 ai」——普通用户沾不上光。
+      assert.equal(limit.isInternalSender('aid'), false);
+      assert.equal(limit.isInternalSender('ai'), true);
+      assert.equal(limit.isInternalSender('ai-claude'), true);
     } finally {
       restore();
     }

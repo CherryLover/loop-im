@@ -27,7 +27,6 @@ const view = (reads: ReadState[], showReaderCount = false, message = mine()) =>
       messages={[message]}
       meId="u_lin"
       showSenderName
-      aiProviderLabel="模拟供应商"
       typing={false}
       reads={reads}
       showReaderCount={showReaderCount}
@@ -72,7 +71,6 @@ describe('自己消息的已读状态', () => {
         messages={[mine({ id: 'm_other', senderId: 'u_chen', senderName: '陈子航' })]}
         meId="u_lin"
         showSenderName
-        aiProviderLabel="模拟供应商"
         typing={false}
         reads={[{ userId: 'u_chen', lastReadAt: AT + 1 }]}
       />,

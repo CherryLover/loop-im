@@ -111,7 +111,7 @@ for (const [table, column, ddl] of MIGRATIONS) {
  * 所以用 schema_meta 记一个标记位。就算标记位丢了重跑也无害 ——
  * INSERT OR IGNORE 撞上 (key, message_id) 唯一索引，重复行进不来。
  *
- * 已知边界：这里假设 messages.body 是明文。今天确实如此（secret-box 只加密 ai_settings.api_key，
+ * 已知边界：这里假设 messages.body 是明文。今天确实如此（secret-box 只加密个别凭据字段，
  * routes/search.js 的注释也记着同一条假设）。哪天正文改成落库加密，这段和 attachment-access.js
  * 里那条 instr() 兜底查询都要跟着改成先 decrypt 再匹配。
  */

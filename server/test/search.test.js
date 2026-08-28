@@ -12,7 +12,7 @@ const search = (token, query) => api.get(`/api/messages/search?${query}`, token)
 const q = (text) => `q=${encodeURIComponent(text)}`;
 const bodies = (res) => res.body.results.map((r) => r.body);
 
-/** 直接把正文写进库，绕开 @ 解析与 Aria 的后台回合，让用例只考察检索本身。 */
+/** 统一的发消息入口，顺手断言发送成功，让用例只考察检索本身。 */
 const say = async (conversationId, token, body) => {
   const res = await api.post(`/api/conversations/${conversationId}/messages`, { body }, token);
   assert.equal(res.status, 201, `发送失败：${JSON.stringify(res.body)}`);
@@ -23,8 +23,6 @@ beforeAll(async () => {
   api = await startServer();
   ({ likeContains } = await import('../src/routes/search.js'));
   adminToken = await api.loginAdmin();
-  // 关掉静默读取与 @全员 回复，免得 Aria 插话把结果条数搅乱。
-  await api.put('/api/ai/settings', { silentRead: false, replyAtAll: false, allowDm: true }, adminToken);
 
   chen = await member('陈子航', { dept: '后端' });
   zhou = await member('周明', { dept: '前端' });

@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { AiPublicInfo, Conversation, User } from './lib/types';
+import type { Conversation, User } from './lib/types';
 
 // useStream 会真的开 EventSource，jsdom 里没有；这组用例不靠 SSE，空掉即可。
 vi.mock('./lib/useStream', () => ({ useStream: () => {} }));
@@ -17,7 +17,6 @@ const ME: User = {
   id: 'u_lin', name: '林悦', email: 'lin@loop.dev', dept: '产品',
   role: 'admin', avatarUrl: null, isAI: false, online: true,
 };
-const AI: AiPublicInfo = { name: 'Aria', providerLabel: '模拟供应商', silentRead: false, allowDm: true };
 
 const convo = (id: string, title: string, at: number, over: Partial<Conversation> = {}): Conversation => ({
   id,
@@ -46,7 +45,7 @@ async function mount(list: Conversation[]) {
   mockApi.conversations.mockResolvedValue({ conversations: list });
   const { AppShell } = await import('./AppShell');
   render(
-    <AppShell me={ME} ai={AI} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
+    <AppShell me={ME} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
   );
   await waitFor(() => expect(mockApi.conversations).toHaveBeenCalled());
   // 标题在列表和聊天详情各出现一次，取全部即可
@@ -57,7 +56,7 @@ beforeEach(() => {
   for (const fn of Object.values(mockApi)) fn.mockReset().mockResolvedValue({});
   mockApi.conversations.mockResolvedValue({ conversations: [] });
   mockApi.users.mockResolvedValue({ users: [ME] });
-  mockApi.me.mockResolvedValue({ user: ME, ai: AI });
+  mockApi.me.mockResolvedValue({ user: ME });
   mockApi.ping.mockResolvedValue({ online: true, users: [ME] });
   mockApi.aiContext.mockResolvedValue({ line: '' });
   mockApi.markRead.mockResolvedValue({ conversationId: 'c_a', lastReadAt: 1, unread: 0 });

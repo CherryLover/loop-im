@@ -30,8 +30,6 @@ const view = (conversations: Conversation[]) =>
       activeId={null}
       messages={[]}
       typing={false}
-      aiProviderLabel="模拟供应商"
-      silentRead={false}
       canCreateGroup
       showChatOnMobile={false}
       reads={[]}

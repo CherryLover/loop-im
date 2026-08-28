@@ -8,7 +8,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AppShell } from './AppShell';
 import type { StreamHandlers } from './lib/useStream';
-import type { AiPublicInfo, Conversation, Message, User } from './lib/types';
+import type { Conversation, Message, User } from './lib/types';
 
 // 实时通道换成把回调存下来，测试自己触发。
 let handlers: StreamHandlers = {};
@@ -21,7 +21,6 @@ const ME: User = {
   role: 'admin', avatarUrl: null, isAI: false, online: true,
 };
 const PEER: User = { ...ME, id: 'u_chen', name: '陈子航', email: 'c@loop.dev', dept: '后端', role: 'member' };
-const AI: AiPublicInfo = { name: 'Aria', providerLabel: '模拟供应商', silentRead: false, allowDm: true };
 
 const T0 = 1_700_000_000_000;
 
@@ -102,7 +101,7 @@ afterEach(() => {
 
 function mountShell() {
   render(
-    <AppShell me={ME} ai={AI} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
+    <AppShell me={ME} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
   );
 }
 
@@ -133,17 +132,6 @@ describe('切离聊天详情后收到的新消息（issue #20）', () => {
     await incoming('m2', T0 + 1000);
 
     await waitFor(() => expect(screen.getAllByLabelText('1 条未读').length).toBeGreaterThan(0));
-    expect(readCalls()).toHaveLength(1);
-  });
-
-  it('管理员停在 AI 管理页时不上报已读', async () => {
-    mountShell();
-    await waitFor(() => expect(readCalls()).toHaveLength(1));
-
-    await goto('AI');
-    await screen.findByRole('button', { name: /AI 配置/ });
-
-    await incoming('m2', T0 + 1000);
     expect(readCalls()).toHaveLength(1);
   });
 

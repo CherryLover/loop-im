@@ -12,7 +12,6 @@ interface MessageListProps {
   messages: Message[];
   meId: string;
   showSenderName: boolean;
-  aiProviderLabel: string;
   typing: boolean;
   hasOlder?: boolean;
   loadingOlder?: boolean;
@@ -31,7 +30,7 @@ interface MessageListProps {
 }
 
 export function MessageList({
-  messages, meId, showSenderName, aiProviderLabel, typing, hasOlder, loadingOlder, onLoadOlder,
+  messages, meId, showSenderName, typing, hasOlder, loadingOlder, onLoadOlder,
   reads = [], showReaderCount = false, onReply, onReact,
 }: MessageListProps) {
   /**
@@ -367,7 +366,6 @@ export function MessageList({
                   {reactionRow(m)}
                   <div className="msg__meta">
                     {clock(m.createdAt)}
-                    {m.isAI ? ` · 由 ${aiProviderLabel} 生成` : ''}
                     {replyButton(m)}
                   </div>
                 </div>
@@ -379,7 +377,7 @@ export function MessageList({
 
       {typing ? (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <Avatar name="Aria" isAI size={32} radius={10} />
+          <Avatar name="AI" isAI size={32} radius={10} />
           <div className="typing">
             <span />
             <span />

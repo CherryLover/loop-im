@@ -36,8 +36,6 @@ before(async () => {
   zhouToken = await api.login(zhou.email);
   wuToken = await api.login(wu.email);
 
-  // Aria 不插话，消息条数才好数。
-  await api.put('/api/ai/settings', { silentRead: false, replyAtAll: false, allowDm: true }, adminToken);
   roomA = await group(api, adminToken, '回应测试 · A 群', [chen.id, zhou.id]);
   roomB = await group(api, adminToken, '回应测试 · B 群', [chen.id]);
   dm = await direct(api, chenToken, zhou.id);

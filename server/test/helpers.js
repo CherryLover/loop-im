@@ -29,7 +29,7 @@ export const ADMIN = process.env.ADMIN_EMAIL;
 export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 export const PASSWORD = 'test-member-password';
 
-/** Boots the API on an ephemeral port with only the AI account and the admin. */
+/** Boots the API on an ephemeral port with only the admin account. */
 export async function startServer() {
   const { createApp } = await import('../src/app.js');
   const { bootstrap } = await import('../src/bootstrap.js');
@@ -71,7 +71,7 @@ export async function startServer() {
   };
 }
 
-/** The AI reply is produced after the POST responds; give it a moment to land. */
+/** 等一个异步条件成立（SSE 到达、后台任务落库等）。 */
 export const waitFor = async (probe, { timeout = 4000, interval = 60 } = {}) => {
   const deadline = Date.now() + timeout;
   for (;;) {

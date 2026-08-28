@@ -76,11 +76,8 @@ describe('停用账号 · 每一个鉴权入口都要挡住', () => {
       ['GET', `/api/conversations/${dm.id}/messages`],
       ['POST', `/api/conversations/${dm.id}/messages`],
       ['POST', `/api/conversations/${dm.id}/read`],
-      ['GET', `/api/conversations/${dm.id}/ai-context`],
       ['POST', `/api/conversations/${dm.id}/leave`],
       ['GET', '/api/messages/search?q=你好'],
-      ['GET', '/api/ai/settings'],
-      ['GET', '/api/ai/overview'],
       ['GET', '/api/stream'],
     ];
     for (const [method, path] of probes) {
@@ -185,16 +182,17 @@ describe('停用账号 · 每一个鉴权入口都要挡住', () => {
   it('管理员被停用后，管理接口也一起关上（不是只关普通成员的门）', async () => {
     const other = await member('副管理员', { role: 'admin' });
     const token = await api.login(other.email);
-    assert.equal((await api.get('/api/ai/settings', token)).status, 200);
+    // Aria 退役后 /api/ai/* 已删除，改用「停用别人」这个管理动作来验证管理接口的通断。
+    const first = await member('先被他停用的人');
+    assert.equal((await disable(first.id, token)).status, 200);
 
     await disable(other.id, admin);
 
-    const res = await api.get('/api/ai/settings', token);
+    // 不能再停用别人了。
+    const victim = await member('不该被牵连的人');
+    const res = await disable(victim.id, token);
     assert.equal(res.status, 401);
     assert.match(res.body.error, /停用/);
-    // 也不能再停用别人了。
-    const victim = await member('不该被牵连的人');
-    assert.equal((await disable(victim.id, token)).status, 401);
   });
 
   it('issue #16 那道防御没被破坏：没有 ver 的老凭据仍然是「登录已过期」', async () => {
@@ -387,10 +385,12 @@ describe('停用 / 恢复的边界', () => {
   });
 
   it('不能停用 AI 账号', async () => {
-    const res = await disable('ai', admin);
+    // Aria 退役后全新库里不再有 id='ai' 那一行；这道闸门是按 role='ai' 判的，造一个来验证。
+    const bot = await member('值守机器人', { role: 'ai' });
+    const res = await disable(bot.id, admin);
     assert.equal(res.status, 400);
     const { get } = await import('../src/db.js');
-    assert.equal(get('SELECT disabled_at FROM users WHERE id = ?', 'ai').disabled_at, null);
+    assert.equal(get('SELECT disabled_at FROM users WHERE id = ?', bot.id).disabled_at, null);
   });
 
   it('账号不存在时返回 404（停用和恢复都是）', async () => {

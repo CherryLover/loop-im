@@ -118,24 +118,5 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 );
 
--- Single-row table holding the system AI configuration.
-CREATE TABLE IF NOT EXISTS ai_settings (
-  id            INTEGER PRIMARY KEY CHECK (id = 1),
-  provider      TEXT NOT NULL DEFAULT 'gpt',
-  api_key       TEXT NOT NULL DEFAULT '',
-  silent_read   INTEGER NOT NULL DEFAULT 1,       -- read group context without being @-ed
-  reply_at_all  INTEGER NOT NULL DEFAULT 0,       -- also reply on @全员
-  allow_dm      INTEGER NOT NULL DEFAULT 1,       -- allow 1:1 chats with the AI
-  updated_at    INTEGER NOT NULL
-);
-
--- What the AI has learned about one person: habits & preferences, reused next time.
-CREATE TABLE IF NOT EXISTS ai_profiles (
-  user_id     TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  scene       TEXT NOT NULL DEFAULT '群聊',
-  summary     TEXT NOT NULL DEFAULT '',
-  note        TEXT NOT NULL DEFAULT '',
-  habits      TEXT NOT NULL DEFAULT '[]',         -- JSON array
-  keys        TEXT NOT NULL DEFAULT '[]',         -- JSON array of key information points
-  updated_at  INTEGER NOT NULL
-);
+-- 退役的 Aria 留下的两张表（ai_settings / ai_profiles）不再创建：新库用不上，
+-- 老库里的那两张原样保留、不再读写（见 docs/hapi-Agent-接入方案.md §F）。

@@ -16,16 +16,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChatPage } from './ChatPage';
-import { api } from '../lib/api';
 import type { Conversation, ConversationType, User } from '../lib/types';
 
-// 只替掉 api 对象本身（详情打开着，ChatPage 会去问 aiContext），模块里其余的导出照旧 ——
+// 只替掉 api 对象本身，模块里其余的导出照旧 ——
 // Composer 要用到同一个模块导出的 MAX_VIDEO_UPLOAD_MB，整个模块替掉它就渲染不出来了。
 vi.mock('../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/api')>()),
-  api: { searchMessages: vi.fn(), aiContext: vi.fn() },
+  api: { searchMessages: vi.fn() },
 }));
-vi.mocked(api.aiContext).mockResolvedValue({ line: '' });
 
 const me: User = {
   id: 'u_lin', name: '林悦', email: 'lin@loop.dev', dept: '产品',
@@ -59,8 +57,6 @@ const view = (conversation: Conversation) => {
       activeId={conversation.id}
       messages={[]}
       typing={false}
-      aiProviderLabel="模拟供应商"
-      silentRead={false}
       canCreateGroup
       showChatOnMobile
       reads={[]}
@@ -128,7 +124,6 @@ describe('会话详情顶栏的免打扰入口', () => {
 
   it('详情里多了入口之后，列表行上那个仍然在（两个都要有，不是搬家）', async () => {
     view(convo('group', '发版协作'));
-    // findBy 顺带把 aiContext 那个 promise 冲干净，免得 act(...) 告警
     expect(await head().findByRole('button', { name: '免打扰「发版协作」（当前会话）' })).toBeInTheDocument();
     expect(listRow().getByRole('button', { name: '免打扰「发版协作」' })).toBeInTheDocument();
   });
@@ -143,7 +138,7 @@ describe('会话详情顶栏的免打扰入口', () => {
 
   it('两个按钮的无障碍名称必须互不相同 —— 同框的两个同名按钮读屏分不清', async () => {
     view(convo('group', '发版协作'));
-    // 顺带冲掉 aiContext 那个 promise，免得 act(...) 告警。标题在列表和顶栏各有一处，用 findAll。
+    // 标题在列表和顶栏各有一处，用 findAll。
     await screen.findAllByText('发版协作');
     const names = screen.getAllByRole('button')
       .map((b) => b.getAttribute('aria-label') || '')
@@ -163,8 +158,6 @@ describe('会话详情顶栏的免打扰入口', () => {
         activeId={conversation.id}
         messages={[]}
         typing={false}
-        aiProviderLabel="模拟供应商"
-        silentRead={false}
         canCreateGroup
         showChatOnMobile
         reads={[]}

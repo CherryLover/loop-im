@@ -8,20 +8,10 @@
 //
 // 这样加新埋点的人不用懂规则也会被挡住：只要他把正文塞进日志，这里就红。
 import { startServer, ADMIN, ADMIN_PASSWORD, PASSWORD } from './helpers.js';
-import { direct, group, member, members } from './fixtures.js';
+import { group, member, members } from './fixtures.js';
 import { resetRateLimit } from '../src/rate-limit.js';
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-
-// 把 codex 供应商指到一个必然连不上的本地地址。要验「AI 调用失败也被记下来」就得真的
-// 走一遍 callProvider，但用例绝不能真去打外部接口——又慢又要钱还看别人的脸色。
-// 必须赶在 startServer() 动态 import ai.js 之前设好：PROVIDERS 是模块加载时就定型的。
-process.env.CODEX_ENDPOINT = 'http://127.0.0.1:1/dead-on-purpose';
-
-/** 让 Aria 走那个必然失败的供应商。codex 只要有 endpoint 就算「已配置」，不需要 api_key。 */
-const useDeadProvider = () => api.put('/api/ai/settings', { provider: 'codex', allowDm: true }, admin);
-/** 退回未配置状态：gpt + 空密钥，isConfigured 为假，走本地模拟回复，不发任何外部请求。 */
-const useStubProvider = () => api.put('/api/ai/settings', { provider: 'gpt', apiKey: '' }, admin);
 
 let api, admin, adminId;
 
@@ -43,8 +33,8 @@ after(async () => { await api.close(); });
  * 两个细节不能省：
  * - LOG_IN_TEST=1：log.js 在测试环境默认闭嘴，不打开就什么也抓不到，
  *   「没有泄漏」会变成「没有日志」，用例绿得毫无意义（下面专门断言了确实抓到了行）。
- * - settleMs：发消息接口是先响应、后跑 Aria 的后台回合（见 conversations.js 的
- *   runAiTurn，「发射后不管」）。响应一回来就收网的话，漏掉的恰恰是最该检查的那几行。
+ * - settleMs：发消息接口是先响应、后台再做推送分发（见 conversations.js 的
+ *   pushForMessage，「发射后不管」）。响应一回来就收网的话，漏掉的恰恰是最该检查的那几行。
  */
 async function capture(fn, { settleMs = 250 } = {}) {
   const lines = [];
@@ -95,11 +85,10 @@ function assertNoLeak(cap, needles = [CANARY, CANARY_CN]) {
 }
 
 describe('日志红线 · 消息正文不许泄漏', () => {
-  it('发消息、@Aria、引用回复、表情回应：跑完整条链路，正文一次都没出现', async () => {
+  it('发消息、引用回复、表情回应：跑完整条链路，正文一次都没出现', async () => {
     const [zhou, xin] = await members('周正文', '辛新人');
     const g = await group(api, admin, '埋点冒烟群', [zhou.id]);
     const token = await api.login(zhou.email);
-    await useDeadProvider();
 
     const cap = await capture(async () => {
       // 1. 普通消息：写库 + SSE 广播 + 会话预览
@@ -107,42 +96,20 @@ describe('日志红线 · 消息正文不许泄漏', () => {
       assert.equal(first.status, 201);
       const messageId = first.body.message.id;
 
-      // 2. @Aria：触发后台的 AI 回合。供应商已经指到死地址，于是必然走一遍
-      //    ai.call.failed —— 那正是「整段聊天记录都在手上」的一处埋点，最该盯的就是它。
-      await api.post(`/api/conversations/${g.id}/messages`, { body: `@Aria 看看这个 ${CANARY}` }, token);
-
-      // 3. 引用回复：quoteOf 会把被引用消息的正文截断成摘要，最容易顺手记进日志的地方
+      // 2. 引用回复：quoteOf 会把被引用消息的正文截断成摘要，最容易顺手记进日志的地方
       await api.post(`/api/conversations/${g.id}/messages`, { body: '收到', replyTo: messageId }, token);
 
-      // 4. 表情回应 + 5. 拉取消息列表 + 6. 全文搜索
+      // 3. 表情回应 + 4. 拉取消息列表 + 5. 全文搜索
       await api.post(`/api/conversations/${g.id}/messages/${messageId}/reactions`, { emoji: '👍' }, token);
       await api.get(`/api/conversations/${g.id}/messages`, token);
       await api.get(`/api/messages/search?q=${encodeURIComponent(CANARY)}`, token);
-      // 7. 会话列表：lastMessage.preview 就是正文的截断
+      // 6. 会话列表：lastMessage.preview 就是正文的截断
       await api.get('/api/conversations', token);
-      // 8. 加人：这一步确实会打日志，顺带保证「本轮抓到的行」不是零
+      // 7. 加人：这一步确实会打日志，顺带保证「本轮抓到的行」不是零
       await api.post(`/api/conversations/${g.id}/members`, { userIds: [xin.id] }, admin);
-    }, { settleMs: 800 });
-    await useStubProvider();
+    });
 
-    // 先确认这一轮真的把 AI 那条路径跑到了，否则「没泄漏」只是因为压根没走到
-    assert.ok(cap.events.includes('ai.call.failed'), `没跑到 AI 调用那条路径：${[...new Set(cap.events)].join(', ')}`);
     assert.ok(cap.events.includes('group.members_added'));
-    assertNoLeak(cap);
-  });
-
-  it('AI 私聊的正文同样不进日志 —— 那条路径整段都是说给 Aria 听的', async () => {
-    const [wu] = await members('吴私聊');
-    const token = await api.login(wu.email);
-    const convo = await direct(api, token, 'ai');
-    await useDeadProvider();
-
-    const cap = await capture(async () => {
-      await api.post(`/api/conversations/${convo.id}/messages`, { body: `${CANARY} ${CANARY_CN}` }, token);
-    }, { settleMs: 800 });
-    await useStubProvider();
-
-    assert.ok(cap.events.includes('ai.call.failed'), 'AI 私聊没走到真正的调用，这一轮等于没验');
     assertNoLeak(cap);
   });
 
@@ -197,20 +164,6 @@ describe('日志红线 · 消息正文不许泄漏', () => {
     assert.ok(cap.events.includes('auth.credential.rejected'), `凭据被拒没记日志：${cap.events.join(', ')}`);
   });
 
-  it('AI 的 api_key 不进日志，改配置时也只记「换没换」', async () => {
-    const key = 'sk-ZQX-APIKEY-CANARY-88ff';
-    const cap = await capture(async () => {
-      await api.put('/api/ai/settings', { provider: 'gpt', apiKey: key, silentRead: true }, admin);
-      await api.get('/api/ai/settings', admin);
-    });
-    // 把密钥清掉，免得后面的用例真的去打外部接口
-    await api.put('/api/ai/settings', { apiKey: '' }, admin);
-
-    assertNoLeak(cap, [key, 'ZQX-APIKEY-CANARY']);
-    const row = oneRow(cap, 'admin.ai.settings_changed');
-    assert.equal(row.apiKeyChanged, true, '换没换密钥这件事本身要记下来');
-    assert.equal(row.actorId, adminId);
-  });
 });
 
 // ---- 关键事件确实被打出来了 ---------------------------------------------
@@ -352,50 +305,12 @@ describe('埋点 · 管理动作（谁对谁做了什么）', () => {
     const created = oneRow(cap, 'group.created');
     assert.equal(created.actorId, adminId);
     assert.equal(created.conversationId, cap.result);
-    assert.equal(created.memberCount, 3, '建群时人数没对上（管理员 + 甲 + Aria）');
+    assert.equal(created.memberCount, 2, '建群时人数没对上（管理员 + 甲，Aria 退役后新群没有 AI 成员）');
 
     assert.deepEqual(oneRow(cap, 'group.members_added').targetIds, [b.id]);
     assert.equal(oneRow(cap, 'group.member_removed').targetId, b.id);
     // 群名是用户自己写的内容，不进日志
     assertNoLeak(cap, ['审计群', '甲成员', '乙成员']);
-  });
-});
-
-describe('埋点 · AI 调用（唯一直接花钱的路径）', () => {
-  it('调用失败记下供应商、耗时和失败原因，而且不带走任何正文', async () => {
-    const [ai] = await members('艾提问');
-    const token = await api.login(ai.email);
-    const convo = await direct(api, token, 'ai');
-    await useDeadProvider();
-
-    const cap = await capture(async () => {
-      await api.post(`/api/conversations/${convo.id}/messages`, { body: `${CANARY} 帮我看看` }, token);
-    }, { settleMs: 1000 });
-    await useStubProvider();
-
-    const row = rowsFor(cap, 'ai.call.failed')[0];
-    assert.ok(row, `AI 调用失败却没记日志：${[...new Set(cap.events)].join(', ')}`);
-    assert.equal(row.provider, 'codex');
-    assert.equal(row.level, 'warn', '失败会退回本地模拟回复，产品还能用，所以是 warn 不是 error');
-    assert.equal(typeof row.ms, 'number', '没记耗时就不知道钱花在哪一段');
-    assert.ok(row.reason, '没记失败原因');
-    // 送进模型的就是整段聊天记录，一个字都不许留在日志里
-    assertNoLeak(cap, [CANARY]);
-    assert.equal(typeof row.sentMessages, 'number', '只记条数，不记内容');
-  });
-
-  it('没配凭据时走本地模拟回复，不该冒出一条 AI 调用日志', async () => {
-    const [gu] = await members('顾模拟');
-    const token = await api.login(gu.email);
-    const convo = await direct(api, token, 'ai');
-    await useStubProvider();
-    await api.put('/api/ai/settings', { allowDm: true }, admin);
-
-    const cap = await capture(() =>
-      api.post(`/api/conversations/${convo.id}/messages`, { body: '在吗' }, token), { settleMs: 500 });
-
-    assert.deepEqual(rowsFor(cap, 'ai.call.ok'), []);
-    assert.deepEqual(rowsFor(cap, 'ai.call.failed'), []);
   });
 });
 

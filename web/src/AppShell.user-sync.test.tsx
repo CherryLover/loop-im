@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { StreamHandlers } from './lib/useStream';
-import type { AiPublicInfo, Conversation, Message, User } from './lib/types';
+import type { Conversation, Message, User } from './lib/types';
 
 // useStream 会真的开 EventSource，jsdom 里没有；换成把回调存下来，测试自己触发。
 let handlers: StreamHandlers = {};
@@ -33,7 +33,6 @@ const PEER: User = {
 };
 /** 换了头像 key 就变（对象名是 randomUUID），所以新旧是两个不同的 URL。 */
 const RENAMED: User = { ...PEER, name: '陈子航（新）', avatarUrl: '/uploads/new-avatar.png' };
-const AI: AiPublicInfo = { name: 'Aria', providerLabel: '模拟供应商', silentRead: false, allowDm: true };
 
 const GROUP: Conversation = {
   id: 'c_group',
@@ -84,7 +83,7 @@ async function mount(conversations: Conversation[] = [DM, GROUP]) {
   mockApi.conversations.mockResolvedValue({ conversations });
   const { AppShell } = await import('./AppShell');
   render(
-    <AppShell me={ME} ai={AI} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
+    <AppShell me={ME} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
   );
   await waitFor(() => expect(mockApi.conversations).toHaveBeenCalled());
   await screen.findAllByText(conversations[0].title);
@@ -95,7 +94,7 @@ beforeEach(() => {
   for (const fn of Object.values(mockApi)) fn.mockReset().mockResolvedValue({});
   mockApi.conversations.mockResolvedValue({ conversations: [] });
   mockApi.users.mockResolvedValue({ users: [ME, PEER] });
-  mockApi.me.mockResolvedValue({ user: ME, ai: AI });
+  mockApi.me.mockResolvedValue({ user: ME });
   mockApi.ping.mockResolvedValue({ online: true, users: [ME, PEER] });
   mockApi.aiContext.mockResolvedValue({ line: '' });
   mockApi.markRead.mockResolvedValue({ conversationId: 'c_dm', lastReadAt: 1, unread: 0 });

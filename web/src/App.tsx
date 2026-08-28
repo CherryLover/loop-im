@@ -3,18 +3,18 @@ import { AppShell } from './AppShell';
 import { LoginPage } from './pages/LoginPage';
 import { api, clearToken, getToken } from './lib/api';
 import { useTheme } from './lib/theme';
-import type { AiPublicInfo, User } from './lib/types';
+import type { User } from './lib/types';
 
 export function App() {
   const { theme, toggle } = useTheme();
-  const [session, setSession] = useState<{ user: User; ai: AiPublicInfo } | null>(null);
+  const [session, setSession] = useState<{ user: User } | null>(null);
   const [checking, setChecking] = useState(!!getToken());
   const [justSignedIn, setJustSignedIn] = useState(false);
 
   useEffect(() => {
     if (!getToken()) return;
     api.me()
-      .then((r) => setSession({ user: r.user, ai: r.ai }))
+      .then((r) => setSession({ user: r.user }))
       .catch(() => clearToken())
       .finally(() => setChecking(false));
   }, []);
@@ -48,8 +48,8 @@ export function App() {
     return (
       <div className="app">
         <LoginPage
-          onSignedIn={(user, ai) => {
-            setSession({ user, ai });
+          onSignedIn={(user) => {
+            setSession({ user });
             setJustSignedIn(true);
           }}
         />
@@ -60,7 +60,6 @@ export function App() {
   return (
     <AppShell
       me={session.user}
-      ai={session.ai}
       theme={theme}
       onToggleTheme={toggle}
       onSignOut={signOut}

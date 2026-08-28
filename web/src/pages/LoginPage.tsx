@@ -1,11 +1,10 @@
 import { useId, useState } from 'react';
 import { Logo } from '../components/Logo';
-import { AiBadge } from '../components/Avatar';
 import { PasswordInput } from '../components/PasswordInput';
 import { api, setToken } from '../lib/api';
-import type { AiPublicInfo, User } from '../lib/types';
+import type { User } from '../lib/types';
 
-export function LoginPage({ onSignedIn }: { onSignedIn: (user: User, ai: AiPublicInfo) => void }) {
+export function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(true);
@@ -18,9 +17,9 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (user: User, ai: AiPubli
     setBusy(true);
     setError('');
     try {
-      const { token, user, ai } = await api.login(email.trim(), password, remember);
+      const { token, user } = await api.login(email.trim(), password, remember);
       setToken(token, remember);
-      onSignedIn(user, ai);
+      onSignedIn(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败');
     } finally {
@@ -81,20 +80,14 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (user: User, ai: AiPubli
       </div>
 
       <div className="login__aside">
-        <div className="login__aside-kicker">系统原生 AI</div>
+        <div className="login__aside-kicker">团队 IM</div>
         <div className="login__aside-lead">
-          AI 助手是系统成员之一：群聊里静默读取上下文，被{' '}
-          <span style={{ color: 'var(--accent-text)', fontWeight: 500 }}>@</span> 时才发言。
+          轻量的团队内部聊天：Markdown 消息、图片与文件、已读回执、
+          手机上装到主屏还能收离线推送。
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
           <div className="login__bubble">周五能发版吗？后端还有两个接口。</div>
-          <div className="login__bubble--ai">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-              <AiBadge />
-              <span style={{ fontSize: 11.5, color: 'var(--accent-text)', fontWeight: 500 }}>Aria</span>
-            </div>
-            按当前进度，接口预计周四完成，建议发版顺延到周一。
-          </div>
+          <div className="login__bubble">接口预计周四完成，发版顺延到周一吧。</div>
         </div>
       </div>
     </div>

@@ -171,7 +171,6 @@ describe('图片的加载状态', () => {
         messages={[message('![二](/uploads/b.png)')]}
         meId="u_lin"
         showSenderName
-        aiProviderLabel="模拟供应商"
         typing={false}
       />,
     );

@@ -21,8 +21,6 @@ before(async () => {
   zhou = await member('周明', { dept: '前端' });
   chenToken = await api.login(chen.email);
   zhouToken = await api.login(zhou.email);
-  // 关掉静默读取，AI 不插话，未读条数才好数
-  await api.put('/api/ai/settings', { silentRead: false, replyAtAll: false, allowDm: true }, adminToken);
   room = await group(api, adminToken, '发版协作', [chen.id, zhou.id]);
   other = await group(api, adminToken, '日常闲聊', [chen.id, zhou.id]);
   dm = await direct(api, chenToken, zhou.id);

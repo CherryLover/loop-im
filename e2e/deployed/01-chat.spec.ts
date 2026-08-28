@@ -28,15 +28,13 @@ test('TC-AUTH-01 登录成功：进入应用并显示已上线', async ({ page }
   await shot(page, '02-登录成功');
 });
 
-test('TC-GROUP-01 建群：直接进新群，4 名成员含 Aria，Aria 发出开场白', async ({ page }) => {
+test('TC-GROUP-01 建群：直接进新群，3 名成员（Aria 退役后没有 AI）', async ({ page }) => {
   watchErrors(page, errors);
   await signIn(page, ADMIN);
   await createGroup(page, GROUP, [JIA.name, YI.name]);
-  // 建群人 + 2 名成员 + Aria
-  await expect(page.locator('.members__row')).toHaveCount(4);
-  // 注意这是 Aria 发的开场白（bubble--ai），不是成员变动那种居中的系统提示 ——
-  // 系统提示（TC-GROUP-09）由 server/test/group-members.test.js 覆盖。
-  await expect(page.locator('.bubble--ai').last()).toContainText('群聊已创建');
+  // 建群人 + 2 名成员；没有 AI 成员，也没有欢迎消息。
+  await expect(page.locator('.members__row')).toHaveCount(3);
+  await expect(page.locator('.bubble--ai')).toHaveCount(0);
   await shot(page, '03-建群成功');
 });
 
@@ -118,30 +116,11 @@ test('TC-CHAT-09 @ 提及气泡：↑↓ 选择，Enter 确认', async ({ page }
   await shot(page, '08-提及气泡');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
-  await expect(composer).toHaveValue('@Aria ');
+  await expect(composer).toHaveValue(`@${JIA.name} `);
   await page.keyboard.press('Escape');
 });
 
-test('TC-AI-01 群里 @Aria：拿到回复', async ({ page }) => {
-  watchErrors(page, errors);
-  await signIn(page, ADMIN);
-  await page.locator('.convo', { hasText: GROUP }).first().click();
-  const before = await page.locator('.bubble--ai').count();
-
-  const composer = page.locator('.composer__input');
-  await composer.click();
-  await composer.pressSequentially('@');
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Enter');
-  await composer.pressSequentially('这个群现在进度怎么样？');
-  await page.keyboard.press('Enter');
-
-  // 只断言「回复来了」。中间那个「输入中」是瞬时状态，本地模拟回复太快抓不稳，
-  // 它由 web/src/lib/useStream.test.ts 的事件分发覆盖。
-  await expect(page.locator('.bubble--ai')).toHaveCount(before + 1, { timeout: 25_000 });
-  await expect(page.locator('.bubble--ai').last()).toContainText('已收到提及');
-  await shot(page, '09-AI回复');
-});
+// TC-AI-01（@Aria 拿到回复）已随 Aria 退役删除；hapi Agent 接入后由新用例接替。
 
 test('TC-REACT-01/02 表情回应：点 👍 出现计数，再点取消', async ({ page }) => {
   watchErrors(page, errors);

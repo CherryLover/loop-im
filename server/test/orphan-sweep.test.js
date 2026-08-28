@@ -53,7 +53,6 @@ before(async () => {
   adminToken = await api.loginAdmin();
   chen = await member('陈子航', { dept: '后端' });
   chenToken = await api.login(chen.email);
-  await api.put('/api/ai/settings', { silentRead: false, replyAtAll: false, allowDm: true }, adminToken);
   room = await group(api, adminToken, '清理测试 · 群', [chen.id]);
   // 用内存实现跑，断言「对象真的被删了」比翻磁盘直观。
   process.env.S3_BUCKET = 'loop-im-test';

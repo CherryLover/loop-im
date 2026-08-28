@@ -1,7 +1,9 @@
 # Loop IM
 
-一个「基础聊天 + 原生 AI 接入」的 IM 系统：React 前端 + Express/SQLite 后端。
-界面按 Claude Design 原型 `project/聊天 IM 原型.dc.html` 实现（聊天布局采用 A 三栏版，AI 管理采用表格版）。
+一个「基础聊天 + AI Agent 接入」的 IM 系统：React 前端 + Express/SQLite 后端。
+界面按 Claude Design 原型 `project/聊天 IM 原型.dc.html` 实现（聊天布局采用 A 三栏版）。
+AI 侧正在改造为接入自托管 hapi 的 Agent（方案见 [docs/hapi-Agent-接入方案.md](docs/hapi-Agent-接入方案.md)），
+原内置 AI「Aria」已退役。
 
 ## 快速开始
 
@@ -11,7 +13,7 @@ cd server && cp .env.example .env
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"   # 填进 JWT_SECRET
 # 再填 ADMIN_EMAIL / ADMIN_PASSWORD，这就是你的第一个管理员账号
 
-# 2) 后端（首次启动自动建库、创建 Aria 与管理员）
+# 2) 后端（首次启动自动建库并创建管理员）
 npm install && npm start                     # http://localhost:4000
 
 # 3) 前端（另开一个终端）
@@ -43,7 +45,7 @@ DEMO_PASSWORD=只在本地用的密码
 - 管理员额外可见「添加联系人」（开通新成员账号，返回初始密码）与「建群」；普通成员只能去聊天。
 - 管理员可以**停用 / 恢复**成员账号（员工离职）。停用**不是删除**：该成员所有设备上的登录
   立刻失效（含已建立的 SSE 长连接），无法再登录、发消息，也不出现在建群 / 加成员的可选名单里；
-  但他发过的消息、群成员身份、头像和名字照常显示，随时可以恢复。不能停用自己，也不能停用 Aria。
+  但他发过的消息、群成员身份、头像和名字照常显示，随时可以恢复。不能停用自己，也不能停用 AI 账号。
 
 **未读与已读**
 - 会话列表显示未读条数，侧栏与底部标签栏的「会话」上显示总未读（超过 99 显示 `99+`）。
@@ -52,7 +54,7 @@ DEMO_PASSWORD=只在本地用的密码
 
 **群管理**
 - 建群者与系统管理员可以添加 / 移除成员、修改群名；任何成员都能自己退群。
-- 群主不能被别人移除；Aria 可以被移出群，移出后新消息不再对 AI 可见，也可以再加回来。
+- 群主不能被别人移除。
 - 成员变动与改群名会在聊天里留下一行居中的系统提示。
 
 **聊天**
@@ -69,8 +71,8 @@ DEMO_PASSWORD=只在本地用的密码
   手机上长按大图弹出保存菜单（系统分享可存入相册 / 直接下载），桌面顶栏有常驻下载按钮，
   下载文件名优先用发送时的原始文件名、扩展名以真实格式为准。
 - 输入 `@` 弹出提及气泡，支持 ↑↓ 选择、Enter/Tab 确认、Esc 关闭。
-- 群聊右栏显示成员、在线状态与「AI 掌握的上下文」摘要。
-- 新消息、AI 输入中、在线状态通过 SSE (`/api/stream`) 实时推送。
+- 群聊右栏显示成员与在线状态。
+- 新消息、在线状态、已读回执通过 SSE (`/api/stream`) 实时推送。
 
 **消息互动**
 - 表情回应：气泡上用白名单内的 emoji 回应，同一个人对同一条消息同种表情只算一次，实时同步。
@@ -89,22 +91,15 @@ DEMO_PASSWORD=只在本地用的密码
 - 方案、真机验收清单与已知平台限制全部记录在 [docs/PWA-与推送改造方案.md](docs/PWA-与推送改造方案.md)。
 
 **防滥用**
-- 登录失败、发消息、@AI、上传、建群分档限流；@Aria 单独更严一档（每次都真实计费）。
+- 登录失败、发消息、上传、建群分档限流（@AI 一档保留给接入中的 Agent）。
   触发时提示里写明几点几分可以再试，限流日志一个窗口只记一条且不含正文。
 
-**原生 AI（Aria）**
-- 群聊里静默读取全部上下文；被 `@Aria` 时必定回复，`@全员` 是否触发可在配置里开关。
-- 成员可与 AI 一对一私聊（可由管理员关闭）。
-- 持续为每个人积累「沟通偏好与习惯」画像，并在下一次回复时作为提示注入。
-- 供应商可切换：OpenAI、xAI Grok、Codex（本地 Agent）。**未配置凭据时自动退回本地模拟回复**，
-  所以整套流程离线也能跑通；配置了 API Key 就走真实调用。
-
-**AI 管理（管理员）**
-- 页面顶部显示当前状态（供应商是否连接、群聊静默读取开关）。
-- 统计只保留「今日被 @ 次数」与「关键信息点」。
-- 列表是 Aria 正在跟踪的对话对象；点击进入二级页，先看 AI 推导出的偏好/习惯与关键信息点，
-  再点「查看详细 · 原始对话」展开原始聊天记录。
-- 右上角「AI 配置」进入二级页：选择 Agent、填凭据、三个行为开关、测试连通性。
+**AI 用户（改造中）**
+- 原内置 AI「Aria」已整体退役（2026-08）：供应商直连、画像学习、静默读取、AI 管理后台全部下线；
+  它的历史消息照常可读，账号已永久停用并从联系人里消失。
+- 下一步接入自托管 [hapi](https://github.com/tiann/hapi)：hub 里的每个 Agent（Claude Code / Codex / Grok 等）
+  映射为系统里的一个 AI 用户，@ 它即可让真 Agent 干活。方案与分期见
+  [docs/hapi-Agent-接入方案.md](docs/hapi-Agent-接入方案.md)。
 
 **个人资料**
 - 侧栏底部头像进入弹窗：改昵称、上传头像（走同一套对象存储）、改密码、切换浅色/深色、退出登录。
@@ -188,25 +183,28 @@ docker run -d -p 4000:4000 \
   分 PR1（外壳）/ PR2（Web Push）两步落地，真机验收清单与已知平台限制都在方案里。
 - 主题「跟随系统」修复（2026-08-26）：旧版首次加载会把系统颜色当成手动选择存下来，
   之后系统切深浅色应用不再跟随；现在没手动选过就实时跟随，手动切换过才记忆。
+- Aria 退役（2026-08-28）：内置 AI 及其供应商直连、画像、静默读取、AI 管理后台整体下线，
+  历史消息保留；系统转向 hapi Agent 接入（见 [docs/hapi-Agent-接入方案.md](docs/hapi-Agent-接入方案.md)）。
+  升级后 Aria 从联系人与群成员名单里消失，属预期行为。
 
 ## 测试与 CI
 
 ```bash
-npm run test          # 后端 940 条 + 前端 905 条（约 1 分钟）
+npm run test          # 后端 896 条 + 前端 923 条（约 1 分钟）
 npm run test:server   # node:test，跑在临时 SQLite 库上，不碰 server/data
 npm run test:web      # vitest（jsdom + testing-library）
 npm run test:e2e      # 构建前端后用 Playwright 跑 13 条真实浏览器冒烟
-npm run test:deployed # 对跑起来的部署再跑 22 条真实浏览器验证（要传测试账号，见 e2e/deployed/）
+npm run test:deployed # 对跑起来的部署再跑 20 条真实浏览器验证（要传测试账号，见 e2e/deployed/）
 ```
 
 覆盖范围（2026-08-26 实测数字，用例总账见 [docs/测试用例.md](docs/测试用例.md)）：
 
 | 层次 | 用例 | 覆盖内容 |
 | --- | --- | --- |
-| 后端 `server/test` | 940（58 文件） | 登录 / 权限 / 限流 / 会话与群管理 / 消息与 @ 机制 / 已读回执 / 表情回应 / 引用回复 / 搜索 / 附件安全（嗅探、鉴权、Range）/ 对象存储 / Web Push（加密、订阅、该不该推）/ AI 全流程 / 安全默认值与日志脱敏 |
-| 前端 `web/src/**/*.test.*` | 905（75 文件） | Markdown 渲染与 XSS 转义 / 乐观发送与合并排序 / 输入框与 @ 提及 / 通知状态机 / 推送订阅与 sw.js 源码约束 / 主题跟随系统与手动记忆 / 各组件交互 |
-| 端到端 `e2e` | 13 | 登录 → 建群 → @Aria 全链路、移动端布局与跳转、Toast 不挡按钮、深色主题、主题跟随系统 |
-| 部署后 `e2e/deployed` | 22 | 对真实部署跑：附件、已读回执、搜索、表情回应、个人资料、AI 管理二级页 |
+| 后端 `server/test` | 896（55 文件） | 登录 / 权限 / 限流 / 会话与群管理 / 消息与 @ 机制 / 已读回执 / 表情回应 / 引用回复 / 搜索 / 附件安全（嗅探、鉴权、Range）/ 对象存储 / Web Push（加密、订阅、该不该推）/ 安全默认值与日志脱敏 |
+| 前端 `web/src/**/*.test.*` | 923（76 文件） | Markdown 渲染与 XSS 转义 / 乐观发送与合并排序 / 输入框与 @ 提及 / 通知状态机 / 推送订阅与 sw.js 源码约束 / 主题跟随系统与手动记忆 / 各组件交互 |
+| 端到端 `e2e` | 13 | 登录 → 建群 → @提及全链路、移动端布局与跳转、Toast 不挡按钮、深色主题、主题跟随系统 |
+| 部署后 `e2e/deployed` | 20 | 对真实部署跑：附件、已读回执、搜索、表情回应、个人资料 |
 
 GitHub Actions（`.github/workflows/ci.yml`）在每次 push 与 PR 上跑三个 job：
 后端测试（Node 22 与 24）、前端类型检查 + 单元测试 + 构建、以及依赖前两者的 Playwright 冒烟。
@@ -217,9 +215,9 @@ GitHub Actions（`.github/workflows/ci.yml`）在每次 push 与 PR 上跑三个
 ```
 server/                Express + node:sqlite 后端
   src/schema.sql        表结构（users / conversations / messages / attachments / ai_settings / ai_profiles）
-  src/bootstrap.js      账号初始化：系统 AI + .env 里的管理员与本地联系人
+  src/bootstrap.js      账号初始化：.env 里的管理员与本地联系人（并停用退役的老 AI）
   src/auth.js           bcrypt + JWT（15 天）、在线判定
-  src/ai.js             供应商调用、@ 解析、回复策略、画像学习
+  src/mentions.js       @提及 解析（@某人 / @全员，最长匹配、跳过邮箱）
   src/attachments.js    附件类型判定（magic number 嗅探）与 /uploads 回源响应头策略
   src/range.js          Range 请求头解析（视频 206 / 416）
   src/upload-temp.js    上传中转文件的读取与清理（成功 / 失败 / 断线 / 启动兜底）
@@ -231,12 +229,12 @@ server/                Express + node:sqlite 后端
   src/push-decide.js    「该不该推」的五条规则（按设备判定，与前端 notify 逻辑对齐）
   src/push-store.js     推送订阅的存取（含设备可见性状态）
   src/web-push.js       Web Push 协议：VAPID 签名 + RFC 8291 payload 加密（不引第三方 SDK）
-  src/routes/           auth / users / conversations / uploads / upload-files / ai / push / search
+  src/routes/           auth / users / conversations / uploads / upload-files / push / search
 web/                   Vite + React + TypeScript 前端
   public/               PWA 外壳：manifest.webmanifest、图标、sw.js（只做推送，永不缓存页面）
   src/styles.css        设计 token（浅色/深色）与全部组件样式
   src/lib/              api 客户端、Markdown 渲染、时间格式、主题、通知与推送、SSE hook
-  src/pages/            登录、聊天、联系人、AI 管理
+  src/pages/            登录、聊天、联系人
   src/modals/           建群、添加联系人、个人资料
 docs/                  方案与测试文档：PWA 与推送改造方案、测试用例集、issue 修复报告
 deploy/                部署：docker-compose.yml、deploy.sh、.env.example
@@ -250,7 +248,7 @@ chats/                 设计过程的对话记录
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/auth/login` | 邮箱密码登录，返回 15 天 token |
-| GET | `/api/auth/me` | 当前用户 + AI 公共信息 |
+| GET | `/api/auth/me` | 当前用户信息 |
 | POST | `/api/auth/ping` | 心跳（维持在线状态），返回全员在线状态 |
 | POST | `/api/auth/logout` | 主动退出：结束本会话，该账号无其他设备在线时立刻广播离线 |
 | PATCH | `/api/auth/me` | 改昵称 |
@@ -262,8 +260,8 @@ chats/                 设计过程的对话记录
 | POST | `/api/users/:id/enable` | 管理员恢复账号 |
 | POST | `/api/users/:id/reset-password` | 管理员重置成员密码，返回新的初始密码 |
 | GET | `/api/conversations` | 我的会话列表 |
-| POST | `/api/conversations/group` | 管理员建群（至少 1 人，AI 默认加入） |
-| POST | `/api/conversations/direct` | 打开/创建一对一（含 AI 私聊） |
+| POST | `/api/conversations/group` | 管理员建群（至少 1 人） |
+| POST | `/api/conversations/direct` | 打开/创建一对一会话 |
 | PATCH | `/api/conversations/:id` | 改群名（群主 / 管理员） |
 | POST/DELETE | `/api/conversations/:id/members` | 添加 / 移除群成员（群主 / 管理员） |
 | POST | `/api/conversations/:id/leave` | 退出群聊 |
@@ -272,16 +270,11 @@ chats/                 设计过程的对话记录
 | PATCH | `/api/conversations/:id/prefs` | 置顶 / 免打扰（个人设置，只改自己那一份） |
 | POST/DELETE | `/api/conversations/:id/messages/:messageId/reactions` | 加 / 取消表情回应 |
 | GET | `/api/messages/search` | 搜索自己可见的消息（关键词 + 游标翻页） |
-| GET | `/api/conversations/:id/ai-context` | 群内 AI 上下文摘要 |
 | POST | `/api/uploads` | 附件上传（图片 / 视频按真实字节嗅探，其余作为只能下载的文件）。返回 `kind` 为 `image` / `video` / `file` |
-| GET | `/api/stream` | SSE：新消息 / AI 输入中 / 在线状态 / 已读回执 |
+| GET | `/api/stream` | SSE：新消息 / 在线状态 / 已读回执 |
 | GET | `/api/push/config` | Web Push 公钥与开关状态 |
 | POST/DELETE | `/api/push/subscribe` | 注册 / 注销本设备的推送订阅 |
 | POST | `/api/push/visibility` | 上报本设备是否在前台（服务端按设备决定该不该推） |
-| GET/PUT | `/api/ai/settings` | AI 配置（管理员） |
-| POST | `/api/ai/test` | 测试连通性（管理员） |
-| GET | `/api/ai/overview` | AI 管理列表与统计（管理员） |
-| GET | `/api/ai/profiles/:userId` | 某个人的画像与原始对话（管理员） |
 
 ## 配置项
 
@@ -293,13 +286,12 @@ chats/                 设计过程的对话记录
 | `JWT_SECRET` | 签发登录 token 的密钥。**生产环境必填**，缺失时服务拒绝启动 |
 | `ADMIN_NAME` / `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 首个管理员账号，只在该邮箱不存在时创建 |
 | `DEMO_USERS` / `DEMO_PASSWORD` | 本地开发用的联系人（`姓名:邮箱:部门`，逗号分隔），留空则不创建 |
-| `AI_NAME` | AI 成员显示名，默认 `Aria` |
-| `ENCRYPTION_KEY` | 加密落库的密钥（目前用于 AI 供应商的 API Key）。留空则 Key 仍以明文存库 |
+| `ENCRYPTION_KEY` | 加密落库的密钥（预留给需要加密存储的凭据，如后续的 hapi token）。留空则相关凭据以明文存库 |
 | `CORS_ORIGIN` | 跨域白名单，逗号分隔。默认同源部署不需要填；留空时生产环境不发跨域头 |
 | `TRUST_PROXY` | 部署在反向代理后面时填，否则按 IP 限流会把所有请求算成反代的 IP |
 | `LOGIN_WINDOW_MS` / `LOGIN_MAX_FAILURES` | 登录失败限流的窗口与上限，默认 15 分钟 10 次 |
 | `RATE_MESSAGE_WINDOW_MS` / `RATE_MESSAGE_MAX` | 发消息限流，默认 1 分钟 60 条（按用户，数成功次数） |
-| `RATE_AI_WINDOW_MS` / `RATE_AI_MAX` | @Aria 限流，默认 5 分钟 10 次。这一档单独且更严：每次都真实调用大模型 |
+| `RATE_AI_WINDOW_MS` / `RATE_AI_MAX` | @AI 限流，默认 5 分钟 10 次。这一档暂无消费方，保留给接入中的 hapi Agent |
 | `RATE_UPLOAD_WINDOW_MS` / `RATE_UPLOAD_MAX` | 上传限流（聊天附件与头像共用），默认 1 分钟 20 次 |
 | `RATE_WRITE_WINDOW_MS` / `RATE_WRITE_MAX` | 建群 / 加成员等写接口限流，默认 1 分钟 30 次 |
 | `S3_BUCKET` / `S3_ENDPOINT` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` / `S3_REGION` | 配置后附件走 MinIO / S3 兼容存储，留空用本地磁盘。切换步骤见 `deploy/README.md` |
@@ -307,14 +299,11 @@ chats/                 设计过程的对话记录
 | `UPLOADS_LEGACY_ACCESS` | 历史附件（库里查不到归属的老对象）的降级策略：`authenticated`（默认）/ `deny` |
 | `UPLOAD_ORPHAN_SWEEP` | 孤儿对象清理的总开关，**默认关闭**（程序不主动删用户数据）。设 `on` 才启用 |
 | `UPLOAD_ORPHAN_TTL_HOURS` / `UPLOAD_SWEEP_INTERVAL_MINUTES` | 上面开了才有意义：保留时长与扫描间隔，默认 24 小时 / 60 分钟 |
-| `CODEX_ENDPOINT` | Codex 本地 Agent 的调用地址（可选） |
-
-AI 供应商与 API Key 存在数据库里，通过「AI 配置」页面维护，接口不会把 Key 回传给前端。
 
 ## 与原型的差异
 
 - 去掉了原型顶部的演示切换条（主题/视口/身份/布局）：主题切换移到个人资料弹窗，身份由登录账号的角色决定，
-  视口交给响应式断点，聊天布局固定为 A 三栏、AI 管理固定为表格版。
+  视口交给响应式断点，聊天布局固定为 A 三栏。
 - 图标统一改用 [lucide-react](https://lucide.dev)（品牌 Logo 仍为自绘气泡标志）。
 - 精简了偏技术的说明文案（如「哈希加盐」「已归档至 SQLite」），只保留用户关心的信息。
 - 登录页不再预填账号密码。

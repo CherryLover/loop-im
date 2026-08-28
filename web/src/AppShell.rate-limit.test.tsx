@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { AiPublicInfo, Conversation, Message, User } from './lib/types';
+import type { Conversation, Message, User } from './lib/types';
 
 // useStream 会真的开 EventSource，jsdom 里没有。这里的用例都不依赖推送，空实现即可。
 vi.mock('./lib/useStream', () => ({ useStream: () => {} }));
@@ -20,7 +20,6 @@ const ME: User = {
   role: 'admin', avatarUrl: null, isAI: false, online: true,
 };
 const PEER: User = { ...ME, id: 'u_chen', name: '陈子航', email: 'c@loop.dev', dept: '后端', role: 'member' };
-const AI: AiPublicInfo = { name: 'Aria', providerLabel: '模拟供应商', silentRead: false, allowDm: true };
 
 const CONVERSATION: Conversation = {
   id: 'c1',
@@ -59,7 +58,7 @@ async function mount() {
   mockApi.conversations.mockResolvedValue({ conversations: [CONVERSATION] });
   const { AppShell } = await import('./AppShell');
   render(
-    <AppShell me={ME} ai={AI} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
+    <AppShell me={ME} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
   );
   await waitFor(() => expect(mockApi.conversations).toHaveBeenCalled());
   return screen.findByPlaceholderText(/输入消息/) as Promise<HTMLTextAreaElement>;
@@ -77,7 +76,7 @@ beforeEach(() => {
   for (const fn of Object.values(mockApi)) fn.mockReset().mockResolvedValue({});
   mockApi.conversations.mockResolvedValue({ conversations: [] });
   mockApi.users.mockResolvedValue({ users: [ME, PEER] });
-  mockApi.me.mockResolvedValue({ user: ME, ai: AI });
+  mockApi.me.mockResolvedValue({ user: ME });
   mockApi.ping.mockResolvedValue({ online: true, users: [ME, PEER] });
   mockApi.aiContext.mockResolvedValue({ line: '' });
   mockApi.markRead.mockResolvedValue({ conversationId: 'c1', lastReadAt: 1, unread: 0 });

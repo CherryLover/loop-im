@@ -44,7 +44,6 @@ before(async () => {
   chenToken = await api.login(chen.email);
   zhouToken = await api.login(zhou.email);
   linToken = await api.login(lin.email);
-  await api.put('/api/ai/settings', { silentRead: false, replyAtAll: false, allowDm: true }, adminToken);
   roomA = await group(api, adminToken, '附件鉴权 · A 群', [chen.id, zhou.id]);
   roomB = await group(api, adminToken, '附件鉴权 · B 群', [lin.id]);
 });

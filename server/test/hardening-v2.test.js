@@ -1,5 +1,5 @@
-// 生产化加固：登录失败限流、AI Key 加密落库、CORS 策略。
-import { ADMIN, ADMIN_PASSWORD, PASSWORD, startServer } from './helpers.js';
+// 生产化加固：登录失败限流、凭据加密落库（secret-box）、CORS 策略。
+import { PASSWORD, startServer } from './helpers.js';
 import { member } from './fixtures.js';
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -108,7 +108,9 @@ describe('登录失败限流', () => {
   });
 });
 
-describe('AI API Key 加密落库', () => {
+// ai_settings 表已随 Aria 退役一并删除（docs/hapi-Agent-接入方案.md §F），
+// secret-box 模块本身保留——将来 hapi token 的落库加密走的还是它，所以这些单元用例照跑。
+describe('凭据加密落库（secret-box）', () => {
   it('加密后密文不含明文，解密拿回原值，重复加密幂等', async () => {
     const { encrypt, decrypt, isEncrypted, isEncryptionConfigured } = await import('../src/secret-box.js');
     assert.equal(isEncryptionConfigured(), true, '测试环境应当开着落库加密');
@@ -122,16 +124,6 @@ describe('AI API Key 加密落库', () => {
 
     // 每次加密用新的 IV，同一明文不该产生相同密文
     assert.notEqual(encrypt(plain), encrypt(plain));
-  });
-
-  it('库里落的确实是密文而不是明文', async () => {
-    const adminToken = await api.login(ADMIN, ADMIN_PASSWORD);
-    await api.put('/api/ai/settings', { apiKey: 'sk-stored-check-9876' }, adminToken);
-
-    const { get } = await import('../src/db.js');
-    const raw = get('SELECT api_key FROM ai_settings WHERE id = 1').api_key;
-    assert.ok(!raw.includes('sk-stored-check'), '数据库里不应存明文 Key');
-    assert.ok(raw.startsWith('v1:'), '数据库里应当是 v1 密文');
   });
 
   it('密钥可以是任意口令（非 64 位十六进制走 scrypt 派生）', async () => {
@@ -178,18 +170,6 @@ describe('AI API Key 加密落库', () => {
     assert.equal(decrypt(''), '');
   });
 
-  it('老库的明文 Key 在配了密钥后会被就地改写成密文，且读出来不变', async () => {
-    const { run, get } = await import('../src/db.js');
-    const { settings } = await import('../src/ai.js');
-
-    // 模拟升级前的库：直接写入明文
-    run('UPDATE ai_settings SET api_key = ? WHERE id = 1', 'sk-legacy-in-db-4321');
-    // migrateLegacyKey 每进程只跑一次，这里直接验证 settings() 读明文不出错，
-    // 迁移本身由下面的子进程用例覆盖（那里是全新进程）。
-    assert.equal(settings().api_key, 'sk-legacy-in-db-4321', '老明文应当能正常读出');
-    assert.equal(get('SELECT api_key FROM ai_settings WHERE id = 1').api_key, 'sk-legacy-in-db-4321');
-  });
-
   it('没配 ENCRYPTION_KEY 时退回明文，不抛异常（现有部署的兼容承诺）', async () => {
     const { execFileSync } = await import('node:child_process');
     const script = `
@@ -213,22 +193,6 @@ describe('AI API Key 加密落库', () => {
     assert.equal(out.roundTrip, 'sk-plain');
     assert.equal(out.legacyRead, 'sk-old-value', '老明文照常读');
     assert.equal(out.cipherWithoutKey, '', '解不开的密文降级成空值而不是抛异常');
-  });
-
-  it('接口始终不把 Key 回传给前端', async () => {
-    const adminToken = await api.login(ADMIN, ADMIN_PASSWORD);
-    await api.put('/api/ai/settings', { apiKey: 'sk-should-never-leak-1234' }, adminToken);
-
-    for (const path of ['/api/ai/settings', '/api/ai/overview']) {
-      const res = await api.get(path, adminToken);
-      assert.equal(res.status, 200);
-      assert.equal(res.body.hasApiKey, true, `${path} 应当只暴露「是否配置」`);
-      assert.ok(!JSON.stringify(res.body).includes('sk-should-never-leak'), `${path} 不应回传 Key 本身`);
-    }
-
-    // 存进去再读出来，供应商调用拿到的仍是原始明文
-    const { settings } = await import('../src/ai.js');
-    assert.equal(settings().api_key, 'sk-should-never-leak-1234');
   });
 });
 

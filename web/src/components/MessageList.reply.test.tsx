@@ -28,7 +28,6 @@ const view = (messages: Message[], onReply?: (m: Message) => void) =>
       messages={messages}
       meId="u_lin"
       showSenderName
-      aiProviderLabel="模拟供应商"
       typing={false}
       onReply={onReply}
     />,

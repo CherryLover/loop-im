@@ -54,8 +54,6 @@ const renderChat = (showChatOnMobile: boolean, onBack = vi.fn()) => {
       hasOlder={false}
       loadingOlder={false}
       onLoadOlder={vi.fn()}
-      aiProviderLabel="模拟供应商"
-      silentRead={false}
       canCreateGroup
       showChatOnMobile={showChatOnMobile}
       onSelect={vi.fn()}

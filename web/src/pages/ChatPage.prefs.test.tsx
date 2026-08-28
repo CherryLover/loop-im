@@ -4,13 +4,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChatPage } from './ChatPage';
-import { api } from '../lib/api';
 import type { Conversation, User } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
-  api: { searchMessages: vi.fn(), aiContext: vi.fn().mockResolvedValue({ line: '' }) },
+  api: { searchMessages: vi.fn() },
 }));
-vi.mocked(api.aiContext).mockResolvedValue({ line: '' });
 
 const me: User = {
   id: 'u_lin', name: '林悦', email: 'lin@loop.dev', dept: '产品',
@@ -39,8 +37,6 @@ const view = (conversations: Conversation[]) => {
       activeId={null}
       messages={[]}
       typing={false}
-      aiProviderLabel="模拟供应商"
-      silentRead={false}
       canCreateGroup
       showChatOnMobile={false}
       reads={[]}

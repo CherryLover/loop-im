@@ -37,8 +37,6 @@ const view = (me: User, handlers: Record<string, ReturnType<typeof vi.fn>> = {})
       activeId="c_room"
       messages={[]}
       typing={false}
-      aiProviderLabel="模拟供应商"
-      silentRead={false}
       canCreateGroup
       showChatOnMobile
       reads={[]}

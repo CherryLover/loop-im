@@ -65,8 +65,6 @@ const view = (conversations: Conversation[], activeId: string, messages: Message
       activeId={activeId}
       messages={messages}
       typing={false}
-      aiProviderLabel="模拟供应商"
-      silentRead={false}
       canCreateGroup
       showChatOnMobile
       reads={[]}

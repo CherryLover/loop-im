@@ -23,9 +23,9 @@ const message = (over: Partial<Message> = {}): Message => ({
   ...over,
 });
 
-const list = (messages: Message[], aiProviderLabel = 'GPT-4o mini') =>
+const list = (messages: Message[]) =>
   render(
-    <MessageList messages={messages} meId="u_lin" showSenderName aiProviderLabel={aiProviderLabel} typing={false} />,
+    <MessageList messages={messages} meId="u_lin" showSenderName typing={false} />,
   );
 
 describe('自己发出的消息状态', () => {
@@ -59,9 +59,11 @@ describe('自己发出的消息状态', () => {
     expect(screen.queryByText(/已读|已发送/)).not.toBeInTheDocument();
   });
 
-  it('AI 回复保留「由 … 生成」的说明', () => {
+  it('AI 的历史消息只显示时间，同样不带发送状态', () => {
+    // Aria 退役后不再有「由 … 生成」的供应商标注，历史 AI 消息按普通对端消息展示。
     const ai = message({ id: 'm_ai_reply', senderId: 'ai', senderName: 'Aria', isAI: true, body: '已收到' });
     list([ai]);
-    expect(screen.getByText(`${clock(ai.createdAt)} · 由 GPT-4o mini 生成`)).toBeInTheDocument();
+    expect(screen.getByText(clock(ai.createdAt))).toBeInTheDocument();
+    expect(screen.queryByText(/已读|已发送|由 .+ 生成/)).not.toBeInTheDocument();
   });
 });

@@ -13,7 +13,6 @@ import { router as conversationRoutes } from './routes/conversations.js';
 import { router as uploadRoutes } from './routes/uploads.js';
 import { router as uploadFileRoutes } from './routes/upload-files.js';
 import { router as searchRoutes } from './routes/search.js';
-import { router as aiRoutes } from './routes/ai.js';
 import { router as pushRoutes } from './routes/push.js';
 import { logError } from './log.js';
 
@@ -79,7 +78,6 @@ export function createApp({ serveClient = true, clientDist } = {}) {
   app.use('/api/conversations', conversationRoutes);
   app.use('/api/messages', searchRoutes);
   app.use('/api/uploads', uploadRoutes);
-  app.use('/api/ai', aiRoutes);
   app.use('/api/push', pushRoutes);
 
   // Serve the built frontend when it exists, so `npm start` is enough in production.

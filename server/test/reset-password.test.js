@@ -94,10 +94,11 @@ describe('管理员重置成员密码', () => {
   });
 
   it('不能重置 AI 账号（它本来就没有密码、无法登录）', async () => {
-    const res = await reset('ai', admin);
+    // Aria 退役后全新库里没有 'ai' 这行；这道闸门按 role='ai' 判，对将来的 hapi Agent 用户同样生效。
+    const { member } = await import('./fixtures.js');
+    const bot = await member('Reset-Bot', { role: 'ai' });
+    const res = await reset(bot.id, admin);
     assert.equal(res.status, 400);
-    const { get } = await import('../src/db.js');
-    assert.equal(get('SELECT password_hash FROM users WHERE id = ?', 'ai').password_hash, null);
   });
 
   it('账号不存在时返回 404', async () => {

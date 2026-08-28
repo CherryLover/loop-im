@@ -1,12 +1,11 @@
-import { startServer, waitFor } from './helpers.js';
+import { startServer } from './helpers.js';
 import { direct, group, member } from './fixtures.js';
-import { after, before, beforeEach, describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 let api, adminToken, chenToken, chen, zhou, release, dm;
 
 const messagesOf = async (id, token) => (await api.get(`/api/conversations/${id}/messages`, token)).body.messages;
-const aiRepliesIn = async (id, token) => (await messagesOf(id, token)).filter((m) => m.isAI).length;
 
 before(async () => {
   api = await startServer();
@@ -18,11 +17,6 @@ before(async () => {
   dm = await direct(api, adminToken, chen.id);
 });
 after(async () => { await api.close(); });
-
-beforeEach(async () => {
-  // Reset the AI rules to their defaults between cases.
-  await api.put('/api/ai/settings', { silentRead: true, replyAtAll: false, allowDm: true }, adminToken);
-});
 
 describe('发消息', () => {
   it('消息按 Markdown 原样存储并回读', async () => {
@@ -49,57 +43,22 @@ describe('发消息', () => {
 });
 
 describe('@ 机制', () => {
-  it('@Aria 时必定回复', async () => {
-    const before = await aiRepliesIn(release.id, adminToken);
-    const res = await api.post(`/api/conversations/${release.id}/messages`, { body: '@Aria 周五能发版吗？' }, adminToken);
-    assert.deepEqual(res.body.message.mentions, ['ai']);
-    await waitFor(async () => (await aiRepliesIn(release.id, adminToken)) > before);
-  });
-
-  it('@某个人不会触发 AI，AI 只是静默读取', async () => {
-    const before = await aiRepliesIn(release.id, adminToken);
+  it('@某个人：提及被解析并随消息返回', async () => {
     const res = await api.post(`/api/conversations/${release.id}/messages`, { body: '@周明 联调时间定了吗' }, adminToken);
+    assert.equal(res.status, 201);
     assert.deepEqual(res.body.message.mentions, [zhou.id]);
-    await new Promise((r) => setTimeout(r, 600));
-    assert.equal(await aiRepliesIn(release.id, adminToken), before);
   });
 
-  it('@全员 是否触发 AI 由「@全员时 AI 也回复」开关决定', async () => {
-    const off = await aiRepliesIn(release.id, adminToken);
-    await api.post(`/api/conversations/${release.id}/messages`, { body: '@全员 今天站会推迟' }, adminToken);
-    await new Promise((r) => setTimeout(r, 600));
-    assert.equal(await aiRepliesIn(release.id, adminToken), off, '关闭时不应回复');
-
-    await api.put('/api/ai/settings', { replyAtAll: true }, adminToken);
-    const on = await aiRepliesIn(release.id, adminToken);
-    await api.post(`/api/conversations/${release.id}/messages`, { body: '@全员 补充一下排期' }, adminToken);
-    await waitFor(async () => (await aiRepliesIn(release.id, adminToken)) > on, { timeout: 5000 });
-  });
-});
-
-describe('AI 私聊', () => {
-  it('私聊里不用 @ 也会回复', async () => {
-    const conversation = await direct(api, chenToken, 'ai');
-    await api.post(`/api/conversations/${conversation.id}/messages`, { body: '帮我总结今天的排期结论' }, chenToken);
-    const reply = await waitFor(async () => {
-      const list = await messagesOf(conversation.id, chenToken);
-      return list.find((m) => m.isAI);
-    });
-    assert.ok(reply.body.length > 0);
+  it('@全员 解析为 all', async () => {
+    const res = await api.post(`/api/conversations/${release.id}/messages`, { body: '@全员 今天站会推迟' }, adminToken);
+    assert.deepEqual(res.body.message.mentions, ['all']);
   });
 
-  it('管理员关闭 AI 私聊后不能再新建 AI 会话', async () => {
-    await api.put('/api/ai/settings', { allowDm: false }, adminToken);
-    const zhouToken = await api.login(zhou.email);
-    const res = await api.post('/api/conversations/direct', { userId: 'ai' }, zhouToken);
-    assert.equal(res.status, 403);
-  });
-});
-
-describe('群内 AI 上下文摘要', () => {
-  it('成员也能读到 AI 掌握的上下文，并包含成员人数', async () => {
-    const res = await api.get(`/api/conversations/${release.id}/ai-context`, chenToken);
-    assert.equal(res.status, 200);
-    assert.match(res.body.line, /相关成员 \d+ 人/);
+  // Aria 退役后系统里暂时没有任何 AI（hapi Agent 接入前）：
+  // 任何消息都不该触发 AI 回复，也不该出现 isAI 的消息。
+  it('没有任何消息会触发 AI 回复', async () => {
+    await new Promise((r) => setTimeout(r, 400));
+    const all = await messagesOf(release.id, adminToken);
+    assert.equal(all.filter((m) => m.isAI).length, 0);
   });
 });

@@ -23,7 +23,6 @@ before(async () => {
   chenToken = await api.login(chen.email);
   zhouToken = await api.login(zhou.email);
   suToken = await api.login(su.email);
-  await api.put('/api/ai/settings', { silentRead: false, replyAtAll: false, allowDm: true }, adminToken);
 });
 after(async () => { await api.close(); });
 
@@ -33,7 +32,8 @@ describe('建群人数限制放开', () => {
   it('1 个人也能建群，不再要求恰好 2–3 人', async () => {
     const room = await freshGroup('两人小组');
     assert.ok(room.id);
-    assert.deepEqual((await membersOf(room.id, adminToken)).sort(), ['Aria', '测试管理员', '陈子航'].sort());
+    // Aria 退役后建群只有创建者和选中的成员，不再自动带 AI。
+    assert.deepEqual((await membersOf(room.id, adminToken)).sort(), ['测试管理员', '陈子航'].sort());
   });
 
   it('一个成员都不选仍然拒绝', async () => {
@@ -46,7 +46,7 @@ describe('建群人数限制放开', () => {
       '/api/conversations/group', { title: '大群', memberIds: [chen.id, zhou.id, su.id] }, adminToken,
     );
     assert.equal(res.status, 201);
-    assert.equal(res.body.conversation.members.length, 5);   // 管理员 + 3 人 + Aria
+    assert.equal(res.body.conversation.members.length, 4);   // 管理员 + 3 人（Aria 退役后不再有 AI）
   });
 });
 
@@ -118,23 +118,6 @@ describe('移除成员', () => {
     await addMembers(room.id, [zhou.id], adminToken);
     assert.equal((await removeMember(room.id, zhou.id, chenToken)).status, 403);
   });
-
-  it('Aria 可以被移出，移出后新消息不再对 AI 可见', async () => {
-    const room = await freshGroup('移出 Aria');
-    await api.put('/api/ai/settings', { silentRead: true }, adminToken);
-
-    assert.equal((await removeMember(room.id, 'ai', adminToken)).status, 200);
-    assert.ok(!(await membersOf(room.id, adminToken)).includes('Aria'));
-
-    await api.post(`/api/conversations/${room.id}/messages`, { body: '这条 Aria 不该读到' }, chenToken);
-    const raw = (await messagesOf(room.id, adminToken)).at(-1);
-    assert.equal(raw.body, '这条 Aria 不该读到');
-    // ai_visible 是写库时定档的，Aria 不在群里就一定是 0
-    const { get } = await import('../src/db.js');
-    assert.equal(get('SELECT ai_visible FROM messages WHERE id = ?', raw.id).ai_visible, 0);
-
-    await api.put('/api/ai/settings', { silentRead: false }, adminToken);
-  });
 });
 
 describe('改群名', () => {
@@ -191,7 +174,7 @@ describe('退出群聊', () => {
   });
 });
 
-describe('系统提示不进 AI 学习', () => {
+describe('消息不进 AI 学习', () => {
   it('系统提示的 ai_visible 恒为 0', async () => {
     const room = await freshGroup('系统提示不学');
     await addMembers(room.id, [zhou.id], adminToken);
@@ -199,5 +182,14 @@ describe('系统提示不进 AI 学习', () => {
     const rows = all("SELECT ai_visible FROM messages WHERE conversation_id = ? AND kind = 'system'", room.id);
     assert.ok(rows.length > 0);
     assert.ok(rows.every((r) => r.ai_visible === 0), '系统提示不应进入 AI 的可读范围');
+  });
+
+  it('普通消息的 ai_visible 也恒为 0（Aria 退役后写库时一律定档为 0）', async () => {
+    const room = await freshGroup('普通消息不学');
+    await api.post(`/api/conversations/${room.id}/messages`, { body: '这条不该进 AI 学习' }, chenToken);
+    const raw = (await messagesOf(room.id, adminToken)).at(-1);
+    assert.equal(raw.body, '这条不该进 AI 学习');
+    const { get } = await import('../src/db.js');
+    assert.equal(get('SELECT ai_visible FROM messages WHERE id = ?', raw.id).ai_visible, 0);
   });
 });

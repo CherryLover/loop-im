@@ -9,12 +9,10 @@ import type { Conversation, MessageSearchResult, User } from '../lib/types';
 vi.mock('../lib/api', () => ({
   api: {
     searchMessages: vi.fn(),
-    aiContext: vi.fn(),
   },
 }));
 
 const searchMessages = vi.mocked(api.searchMessages);
-const aiContext = vi.mocked(api.aiContext);
 
 const me: User = {
   id: 'u_lin', name: '林悦', email: 'lin@loop.dev', dept: '产品',
@@ -55,8 +53,6 @@ const view = (onSelect = vi.fn()) => {
       activeId={null}
       messages={[]}
       typing={false}
-      aiProviderLabel="模拟供应商"
-      silentRead={false}
       canCreateGroup
       showChatOnMobile={false}
       reads={[]}
@@ -86,7 +82,6 @@ const type = async (text: string) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  aiContext.mockResolvedValue({ line: '' });
   searchMessages.mockResolvedValue(page([]));
 });
 

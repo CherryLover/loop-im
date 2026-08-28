@@ -3,7 +3,7 @@ import { all, get, run, now, uid } from '../db.js';
 import { authenticate, isDisabled, publicUser, requireAdmin } from '../auth.js';
 import { emitTo } from '../events.js';
 import { queuePush, reportPushFailure } from '../push-decide.js';
-import { AI_ID, generateReply, insertAiMessage, isVisibleToAi, learnAbout, parseMentions, settings, shouldReply } from '../ai.js';
+import { parseMentions } from '../mentions.js';
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
 import { linkAttachmentsToMessage } from '../attachment-access.js';
@@ -222,7 +222,8 @@ export function serializeMessage(row, sender, reactions = []) {
     body: row.body,
     mentions: JSON.parse(row.mentions || '[]'),
     createdAt: row.created_at,
-    isAI: row.sender_id === AI_ID,
+    // 兼容两代 AI：退役的 Aria（sender_id 固定 'ai'）与将来的 hapi Agent 用户（role='ai'）。
+    isAI: sender?.role === 'ai' || row.sender_id === 'ai',
     kind: row.kind || 'user',
     replyTo: row.reply_to || null,               // 被引用消息的 id，前端据此跳转
     quote: quoteOf(row.reply_to, row.conversation_id),
@@ -232,8 +233,7 @@ export function serializeMessage(row, sender, reactions = []) {
 
 /**
  * 成员变动、改群名之类的系统提示。挂在操作者名下但标成 system：
- * 不能借 Aria 的口说（Aria 可能已经被移出群），也不该被 AI 当成对话内容学习，
- * 所以 ai_visible 一律为 0。
+ * 不能借任何成员的口说，也不该被 AI 当成对话内容学习，所以 ai_visible 一律为 0。
  */
 function insertSystemMessage(conversationId, actorId, body) {
   const id = uid('m');
@@ -343,10 +343,12 @@ router.patch('/:id/prefs', (req, res) => {
   res.json({ conversation: serializeConversation(convo, req.user.id) });
 });
 
-// 管理员建群，AI 助手默认加入。人数只要求至少 1 人，建完还可以随时增减。
+// 管理员建群。人数只要求至少 1 人，建完还可以随时增减。
+// （曾经 AI 助手默认加入，Aria 退役后新群默认没有任何 AI 成员，
+//  将来 hapi 的 Agent 用户由管理员按需拉入 —— 见 docs/hapi-Agent-接入方案.md D8。）
 router.post('/group', requireAdmin, limitUsage('write'), (req, res) => {
   const title = String(req.body?.title || '').trim() || '新群聊';
-  const picked = [...new Set((req.body?.memberIds || []).filter((id) => id !== req.user.id && id !== AI_ID))];
+  const picked = [...new Set((req.body?.memberIds || []).filter((id) => id !== req.user.id))];
   if (!picked.length) return res.status(400).json({ error: '请至少选择 1 名成员' });
   const known = all(`SELECT * FROM users WHERE id IN (${picked.map(() => '?').join(',')})`, ...picked);
   if (known.length !== picked.length) return res.status(400).json({ error: '成员不存在' });
@@ -357,24 +359,22 @@ router.post('/group', requireAdmin, limitUsage('write'), (req, res) => {
   const ts = now();
   run('INSERT INTO conversations (id, type, title, created_by, created_at) VALUES (?, ?, ?, ?, ?)',
     id, 'group', title, req.user.id, ts);
-  for (const m of [req.user.id, ...picked, AI_ID]) {
+  for (const m of [req.user.id, ...picked]) {
     run('INSERT INTO conversation_members (conversation_id, user_id, joined_at) VALUES (?, ?, ?)', id, m, ts);
   }
   const convo = get('SELECT * FROM conversations WHERE id = ?', id);
-  logEvent('group.created', { reqId: req.id, actorId: req.user.id, conversationId: id, memberCount: picked.length + 2 });
-  const hello = insertAiMessage(id, '群聊已创建，我已加入并开始记录上下文。需要我做什么时 **@Aria**。');
+  logEvent('group.created', { reqId: req.id, actorId: req.user.id, conversationId: id, memberCount: picked.length + 1 });
   const serialized = serializeConversation(convo, req.user.id);
   emitTo([req.user.id, ...picked], 'conversation-created', { conversationId: id });
-  emitTo([req.user.id, ...picked], 'message', { message: serializeMessage(hello, { name: 'Aria' }) });
   res.status(201).json({ conversation: serialized });
 });
 
-// 联系人页「去聊天」：拿到或新建一对一会话（对 Aria 则是 AI 私聊）。
+// 联系人页「去聊天」：拿到或新建一对一会话。
+// type='ai' 这一档保留：历史上与 Aria 的私聊是这个类型，将来 hapi Agent 私聊也走它。
 router.post('/direct', (req, res) => {
   const peerId = String(req.body?.userId || '');
   const peer = get('SELECT * FROM users WHERE id = ?', peerId);
   if (!peer || peer.id === req.user.id) return res.status(400).json({ error: '联系人不存在' });
-  if (peer.role === 'ai' && !settings().allow_dm) return res.status(403).json({ error: '管理员已关闭与 AI 的私聊' });
 
   const type = peer.role === 'ai' ? 'ai' : 'dm';
   const existing = get(
@@ -475,21 +475,6 @@ router.post('/:id/leave', (req, res) => {
   res.json({ ok: true });
 });
 
-// 成员可见的一行摘要：AI 目前从这个群里掌握到什么。
-router.get('/:id/ai-context', (req, res) => {
-  const convo = requireMembership(req, res, req.params.id);
-  if (!convo) return;
-  const ids = memberIds(convo.id).filter((id) => id !== AI_ID);
-  const keys = ids.length
-    ? all(
-      `SELECT keys FROM ai_profiles WHERE user_id IN (${ids.map(() => '?').join(',')}) ORDER BY updated_at DESC`,
-      ...ids,
-    ).flatMap((r) => JSON.parse(r.keys || '[]'))
-    : [];
-  const top = [...new Set(keys)].slice(0, 2);
-  res.json({ line: [...top, `相关成员 ${ids.length} 人`].join(' · ') });
-});
-
 // 分页：默认只给最新的一页，再往前用 before 游标翻。原来是把整个会话的历史
 // 一次性返回，消息一多就是几 MB 的响应加上前端一次渲染几千个气泡。
 export const MESSAGE_PAGE_SIZE = 50;
@@ -564,15 +549,7 @@ router.post('/:id/read', (req, res) => {
 });
 
 /**
- * 响应发出之后才跑的那一步失败了，只能记在服务端日志里——响应已经走了，没别的地方可说。
- * 测试环境下不打印，免得污染测试输出 —— 这一条现在由 log.js 统一兜着，不用各处自己判断。
- */
-function reportAiTurnFailure(err) {
-  logError('ai.turn.failed', err);
-}
-
-/**
- * 一条刚发出去的消息，该推的推走。**发射后不管**，和 runAiTurn 一模一样的形状。
+ * 一条刚发出去的消息，该推的推走。**发射后不管**。
  *
  * 调用点都在 `emitTo(...)` / `res.json(...)` 之后，所以这里绝不能把异常放出去：
  * 响应已经发了，之后冒出来的 rejection 会被 Express 5 转给错误中间件，那时
@@ -601,65 +578,6 @@ export function pushForMessage(convo, message, audience, deps) {
   }
 }
 
-/**
- * 发消息接口把 201 响应发出去之后，才轮到 Aria 干活：学习沟通习惯、必要时生成回复。
- *
- * 这段工作必须自成一体、绝不向外抛。发消息的 handler 是 async 的，响应之后再出现的
- * rejection 会被 Express 5 转给 app.js 末尾的错误中间件；那时 res.headersSent 已经是
- * true，中间件再 res.status().json() 就撞上 ERR_HTTP_HEADERS_SENT，日志里留下一串跟真实
- * 故障毫无关系的堆栈，把排查带偏。所以这里每一步（含 finally 里的 ai-typing）各自兜住
- * 自己的错误，函数本身永远 resolve。
- *
- * 依赖都可以从 deps 覆盖，方便测试注入失败。
- */
-export async function runAiTurn(ctx, deps = {}) {
-  const { convo, userId, audience, mentions, settings: s } = ctx;
-  const {
-    learn = learnAbout,
-    generate = generateReply,
-    insert = insertAiMessage,
-    emit = emitTo,
-    onError = reportAiTurnFailure,
-    push = pushForMessage,
-  } = deps;
-
-  const safeEmit = (event, data) => {
-    try {
-      emit(audience, event, data);
-    } catch (err) {
-      onError(err);       // 某个 SSE 连接写失败，不该连累后面的步骤
-    }
-  };
-  const typing = (on) => safeEmit('ai-typing', { conversationId: convo.id, typing: on });
-
-  try {
-    // 学习画像与生成回复互不依赖，保持原来的并行关系；各自吞掉自己的错误。
-    const learning = (async () => learn(userId, convo))().catch(onError);
-
-    if (shouldReply(convo, mentions, s)) {
-      typing(true);
-      try {
-        const { body: reply } = await generate(convo, userId);
-        const row = insert(convo.id, reply);
-        const aiMessage = serializeMessage(row, { name: 'Aria' });
-        safeEmit('message', { message: aiMessage });
-        // ⚠️ Aria 的回复**不做任何特例**，按同一套规则推给所有没设免打扰的成员。
-        // 方案文档 §E.1 Q3 倾向「只推给触发她的那个人」，已被用户否决——要的是规则统一。
-        // 所以这里传的 audience 就是整个会话，和上面用户消息那处一字不差。
-        push(convo, aiMessage, audience);
-      } catch (err) {
-        onError(err);
-      } finally {
-        // 无论上面成没成，都要收掉「正在输入」，否则前端会一直转。
-        typing(false);
-      }
-    }
-    await learning;
-  } catch (err) {
-    onError(err);         // 兜底：任何没预料到的错误也不许逃出这个函数
-  }
-}
-
 router.post('/:id/messages', (req, res) => {
   const convo = requireMembership(req, res, req.params.id);
   if (!convo) return;
@@ -678,46 +596,28 @@ router.post('/:id/messages', (req, res) => {
   const roster = memberRows(convo.id);
   const mentions = parseMentions(body, roster);
   const audience = roster.map((m) => m.id);
-  // 可见性在写库时定档：之后管理员再改开关，也不会让 Aria 追溯读到这条消息。
-  const s = settings();
-  const aiInRoom = audience.includes(AI_ID);
-  const aiVisible = isVisibleToAi(convo, mentions, aiInRoom, s);
 
   // ---- 限流 -------------------------------------------------------------
-  // 两档：所有消息都走 message 档；真会触发一次大模型调用的（@Aria、AI 私聊）
-  // 再额外走更严的 ai 档 —— 那一档每次都要真花钱，和多写几行 SQLite 不是一回事。
-  // 判定要和下面「发不发起 AI 流程」完全一致：aiVisible 为假时 runAiTurn 根本不跑，
-  // 不会有模型调用，就不该占 ai 档的额度（例如群里没有 Aria 却 @全员 的情形）。
-  //
   // 检查放在参数校验之后、写库之前：空消息、非法引用这类 400 不该白吃掉额度。
   // 计数放在写库成功之后，所以这一档数的是「成功发出去几条」——语义上和登录那套
   // 「只数失败、成功清零」正相反，两者各用各的模块，见 usage-limit.js 开头。
-  const willCallModel = aiVisible && shouldReply(convo, mentions, s);
-  for (const action of willCallModel ? ['message', 'ai'] : ['message']) {
-    const state = quotaState(action, req.user.id);
-    if (!state.allowed) return rejectOverQuota(res, action, state, { userId: req.user.id, route: req.originalUrl });
-  }
+  const state = quotaState('message', req.user.id);
+  if (!state.allowed) return rejectOverQuota(res, 'message', state, { userId: req.user.id, route: req.originalUrl });
 
   const id = uid('m');
-  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    id, convo.id, req.user.id, body, JSON.stringify(mentions), aiVisible ? 1 : 0, replyTo, now());
+  // ai_visible 列已随 Aria 退役停用（列保留，统一写 0），见 docs/hapi-Agent-接入方案.md §F。
+  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, reply_to, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)',
+    id, convo.id, req.user.id, body, JSON.stringify(mentions), replyTo, now());
   consumeQuota('message', req.user.id);
-  if (willCallModel) consumeQuota('ai', req.user.id);
   // 正文里引用到的附件挂到这个会话上：附件的下载鉴权就是查这张关联表（见 attachment-access.js）。
   linkAttachmentsToMessage({ body, conversationId: convo.id, messageId: id, senderId: req.user.id });
   const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), req.user);
   emitTo(audience, 'message', { message });
   res.status(201).json({ message });
 
-  // 响应已经发出去了。下面这两步都是「发射后不管」，任何一步失败都不许影响
-  // 这次发消息的结果（消息已经入库、201 已经回了）。
+  // 响应已经发出去了。推送是「发射后不管」，失败不影响这次发消息的结果
+  // （消息已经入库、201 已经回了）。
   pushForMessage(convo, message, audience);
-
-  // Aria: 被 @ 时必回；未被 @ 时按「群聊静默读取」决定是否读取上下文并学习沟通习惯。
-  // 响应已经发出，这里只能「发射后不管」：runAiTurn 自己兜住所有错误，
-  // 末尾的 catch 只是多一道保险，避免任何 rejection 变成 Express 的 headers-sent 噪音。
-  if (!aiVisible) return;
-  runAiTurn({ convo, userId: req.user.id, audience, mentions, settings: s }).catch(reportAiTurnFailure);
 });
 
 // ---- 消息表情回应 -------------------------------------------------------

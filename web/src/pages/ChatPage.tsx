@@ -24,8 +24,6 @@ interface ChatPageProps {
   activeId: string | null;
   messages: Message[];
   typing: boolean;
-  aiProviderLabel: string;
-  silentRead: boolean;
   canCreateGroup: boolean;
   showChatOnMobile: boolean;
   reads: ReadState[];
@@ -49,9 +47,8 @@ interface ChatPageProps {
 }
 
 export function ChatPage(props: ChatPageProps) {
-  const { me, conversations, activeId, messages, typing, aiProviderLabel, silentRead, canCreateGroup, showChatOnMobile } = props;
+  const { me, conversations, activeId, messages, typing, canCreateGroup, showChatOnMobile } = props;
   const [query, setQuery] = useState('');
-  const [aiContext, setAiContext] = useState('');
   // 搜索框现在同时搜会话标题（本地过滤）和消息正文（走服务端）。
   const [results, setResults] = useState<MessageSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -106,27 +103,13 @@ export function ChatPage(props: ChatPageProps) {
     };
   }, [trimmed]);
 
-  useEffect(() => {
-    if (!active || active.type !== 'group') {
-      setAiContext('');
-      return;
-    }
-    let alive = true;
-    api.aiContext(active.id)
-      .then((r) => alive && setAiContext(r.line))
-      .catch(() => alive && setAiContext(''));
-    return () => {
-      alive = false;
-    };
-  }, [active, messages.length]);
-
   const peer = active && active.type !== 'group' ? active.members.find((m) => m.id !== me.id) : null;
   const subtitle = !active
     ? ''
     : active.type === 'group'
-      ? `${active.members.length} 名成员 · Aria 常驻`
+      ? `${active.members.length} 名成员`
       : active.type === 'ai'
-        ? `一对一 · ${aiProviderLabel}`
+        ? '一对一 · AI'
         // 对方账号被停用后，这个私聊会话仍然留在列表里、历史照常可读（停用不是删除），
         // 只是把状态如实说出来，免得有人对着一个永远不会回话的窗口干等。
         : peer?.disabled ? '对方账号已停用' : peer?.online ? '在线' : '离线';
@@ -325,7 +308,6 @@ export function ChatPage(props: ChatPageProps) {
               messages={messages}
               meId={me.id}
               showSenderName={active.type === 'group'}
-              aiProviderLabel={aiProviderLabel}
               typing={typing}
               reads={props.reads}
               showReaderCount={active.type === 'group'}
@@ -335,13 +317,6 @@ export function ChatPage(props: ChatPageProps) {
               onReply={(m) => setReplyRequest(replyTargetOf(m))}
               onReact={props.onReact}
             />
-
-            {active.type === 'group' && silentRead ? (
-              <div className="silent-hint">
-                <span className="dot dot--online" />
-                Aria 静默读取本群上下文，被 @ 时才发言
-              </div>
-            ) : null}
 
             <Composer conversation={active} meId={me.id} onSend={props.onSend} replyRequest={replyRequest} />
           </div>
@@ -390,13 +365,6 @@ export function ChatPage(props: ChatPageProps) {
                 </div>
               </div>
 
-              {aiContext ? (
-                <div className="ai-context">
-                  <div className="ai-context__label">AI 掌握的上下文</div>
-                  <div className="ai-context__body">{aiContext}</div>
-                </div>
-              ) : null}
-
               <div className="members__actions">
                 {canManage ? (
                   <button type="button" className="btn btn--sm" onClick={() => props.onRenameGroup(active.id, active.title)}>
@@ -408,7 +376,6 @@ export function ChatPage(props: ChatPageProps) {
                 </button>
               </div>
 
-              <div className="members__foot">Aria 会记录每个人的沟通习惯，下次对话时沿用。</div>
             </div>
           ) : null}
         </div>

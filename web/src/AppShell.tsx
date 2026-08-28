@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, MessageCircle, Users } from 'lucide-react';
+import { MessageCircle, Users } from 'lucide-react';
 import { Logo } from './components/Logo';
 import { Toast } from './components/Toast';
 import { ChatPage } from './pages/ChatPage';
 import { ContactsPage } from './pages/ContactsPage';
-import { AiPage } from './pages/AiPage';
 import { CreateGroupModal } from './modals/CreateGroupModal';
 import { AddContactModal } from './modals/AddContactModal';
 import { ProfileModal } from './modals/ProfileModal';
@@ -25,9 +24,9 @@ import { documentVisible, reportVisibility, startVisibilityReporting } from './l
 import { startKeyboardInsetTracking } from './lib/keyboard';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
-import type { AiPublicInfo, Conversation, Message, MessageReaction, ReadState, User } from './lib/types';
+import type { Conversation, Message, MessageReaction, ReadState, User } from './lib/types';
 
-type Tab = 'chat' | 'contacts' | 'ai';
+type Tab = 'chat' | 'contacts';
 
 // 与 styles.css 里 `@media (max-width: 720px)` 的断点一致：手机布局下会话列表和聊天详情
 // 是前后两屏（.chat--hidden），桌面布局下两者并排常驻。判断「详情露出来没有」得先知道是哪一种。
@@ -53,16 +52,14 @@ interface OlderState {
 
 interface AppShellProps {
   me: User;
-  ai: AiPublicInfo;
   theme: Theme;
   onToggleTheme: () => void;
   onSignOut: () => void;
   justSignedIn: boolean;
 }
 
-export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, onSignOut, justSignedIn }: AppShellProps) {
+export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justSignedIn }: AppShellProps) {
   const [me, setMe] = useState(initialMe);
-  const [ai, setAi] = useState(initialAi);
   const [tab, setTab] = useState<Tab>('chat');
   const [users, setUsers] = useState<User[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -191,12 +188,6 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
     const { users: list } = await api.users({ signal: abortSignal() });
     setUsers(list);
   }, [abortSignal]);
-
-  const refreshAiInfo = useCallback(async () => {
-    if (signingOutRef.current) return;
-    const { ai: info } = await api.me();
-    setAi(info);
-  }, []);
 
   /**
    * 有人改了名字 / 换了头像（或被停用），把界面上**确实拷了一份**用户资料的地方就地对齐：
@@ -666,7 +657,6 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
       { key: 'chat', label: '会话', short: '会话', icon: MessageCircle },
       { key: 'contacts', label: '联系人', short: '联系人', icon: Users },
     ];
-    if (isAdmin) items.push({ key: 'ai', label: 'AI 管理', short: 'AI', icon: Bot });
     return items;
   }, [isAdmin]);
 
@@ -727,8 +717,6 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
             activeId={activeId}
             messages={activeMessages}
             typing={activeId ? !!typing[activeId] : false}
-            aiProviderLabel={ai.providerLabel}
-            silentRead={ai.silentRead}
             canCreateGroup={isAdmin}
             showChatOnMobile={mobileChatOpen}
             reads={activeReads}
@@ -766,7 +754,6 @@ export function AppShell({ me: initialMe, ai: initialAi, theme, onToggleTheme, o
           />
         ) : null}
 
-        {tab === 'ai' && isAdmin ? <AiPage onSettingsSaved={refreshAiInfo} /> : null}
       </div>
 
       <nav className="tabbar">

@@ -26,7 +26,6 @@ const view = (props: Partial<Parameters<typeof MessageList>[0]> = {}) =>
       messages={base}
       meId="u_lin"
       showSenderName
-      aiProviderLabel="模拟供应商"
       typing={false}
       {...props}
     />,

@@ -15,8 +15,6 @@ beforeAll(async () => {
   chenToken = await api.login(chen.email);
   room = await group(api, adminToken, '分页测试群', [chen.id, zhou.id]);
 
-  // 关掉静默读取，免得 AI 插话打乱条数
-  await api.put('/api/ai/settings', { silentRead: false, replyAtAll: false, allowDm: true }, adminToken);
   for (let i = 1; i <= TOTAL; i += 1) {
     await api.post(`/api/conversations/${room.id}/messages`, { body: `第 ${i} 条` }, chenToken);
   }
@@ -55,8 +53,8 @@ describe('消息分页', () => {
       assert.ok(guard < 20, '翻页没有收敛');
     }
 
-    // 群创建时 Aria 会发一条欢迎消息，所以总数是 TOTAL + 1
-    assert.equal(seen.length, TOTAL + 1);
+    // 新群创建时没有任何消息，翻完正好是我们发的 TOTAL 条
+    assert.equal(seen.length, TOTAL);
     const ids = seen.map((m) => m.id);
     assert.equal(new Set(ids).size, ids.length, '翻页不应出现重复消息');
 
@@ -79,7 +77,7 @@ describe('消息分页', () => {
 
   it('最后一页 hasMore 为 false 且不再给游标', async () => {
     const res = await pageOf('?limit=200');
-    assert.equal(res.body.messages.length, TOTAL + 1);
+    assert.equal(res.body.messages.length, TOTAL);
     assert.equal(res.body.hasMore, false);
     assert.equal(res.body.nextBefore, null);
   });
@@ -93,6 +91,8 @@ describe('消息分页', () => {
     const other = await group(api, adminToken, '另一个群', [
       (await member('外人甲')).id, (await member('外人乙')).id,
     ]);
+    // 新群是空的，先发一条，拿它的 id 来当跨会话游标
+    await api.post(`/api/conversations/${other.id}/messages`, { body: '另一个群里的一条' }, adminToken);
     const otherFirst = (await api.get(`/api/conversations/${other.id}/messages`, adminToken)).body.messages[0];
     const res = await pageOf(`?before=${encodeURIComponent(otherFirst.id)}`);
     assert.equal(res.status, 400, '跨会话的游标应当被拒绝');

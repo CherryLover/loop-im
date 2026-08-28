@@ -25,8 +25,6 @@ before(async () => {
   zhouToken = await api.login(zhou.email);
   adminId = db.get('SELECT id FROM users WHERE lower(email) = ?', process.env.ADMIN_EMAIL.toLowerCase()).id;
 
-  // Aria 不插话，条数才好数。
-  await api.put('/api/ai/settings', { silentRead: false, replyAtAll: false, allowDm: true }, adminToken);
   room = await group(api, adminToken, '提及未读测试群', [chen.id, zhou.id]);
   dm = await direct(api, chenToken, zhou.id);
 });

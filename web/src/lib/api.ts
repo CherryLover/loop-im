@@ -1,5 +1,5 @@
 import type {
-  AiOverview, AiProfileDetail, AiPublicInfo, AiSettings, Conversation, Message, MessagePage,
+  Conversation, Message, MessagePage,
   MessageReaction, MessageSearchPage, UploadResult, User,
 } from './types';
 
@@ -122,12 +122,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   login: (email: string, password: string, remember = true) =>
-    request<{ token: string; tokenDays: number; user: User; ai: AiPublicInfo }>('/auth/login', {
+    request<{ token: string; tokenDays: number; user: User }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password, remember }),
     }),
   logout: () => request<{ ok: true; online: boolean }>('/auth/logout', { method: 'POST' }),
-  me: () => request<{ user: User; ai: AiPublicInfo }>('/auth/me'),
+  me: () => request<{ user: User }>('/auth/me'),
   ping: () => request<{ online: boolean; users: User[] }>('/auth/ping', { method: 'POST' }),
   updateName: (name: string) =>
     request<{ user: User }>('/auth/me', { method: 'PATCH', body: JSON.stringify({ name }) }),
@@ -190,7 +190,6 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(prefs),
     }),
-  aiContext: (id: string) => request<{ line: string }>(`/conversations/${id}/ai-context`),
   // 默认只取最新一页；翻历史时把上一页最早那条的 id 作为 before 传回来。
   messages: (id: string, opts: { before?: string; limit?: number; signal?: AbortSignal } = {}) => {
     const q = new URLSearchParams();
@@ -284,10 +283,4 @@ export const api = {
       keepalive: true,
     }),
 
-  aiSettings: () => request<AiSettings>('/ai/settings'),
-  saveAiSettings: (patch: Record<string, unknown>) =>
-    request<AiSettings>('/ai/settings', { method: 'PUT', body: JSON.stringify(patch) }),
-  testAi: () => request<{ ok: boolean; message: string }>('/ai/test', { method: 'POST' }),
-  aiOverview: () => request<AiOverview>('/ai/overview'),
-  aiProfile: (userId: string) => request<AiProfileDetail>(`/ai/profiles/${userId}`),
 };

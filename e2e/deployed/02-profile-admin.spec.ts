@@ -179,51 +179,9 @@ test('TC-PREF-01/04 置顶与免打扰：置顶跳到最前，免打扰有明确
 });
 
 /* ────────────────────────────────────────────────────────────────
- * AI 管理后台
+ * AI 管理后台已随 Aria 退役整体下线（TC-ADMIN-02~09 删除）；
+ * hapi Agent 的管理页上线后由新用例接替。
  * ──────────────────────────────────────────────────────────── */
-
-test('TC-ADMIN-02~09 AI 管理：统计、画像二级页、原始对话、AI 配置', async ({ page }) => {
-  watchErrors(page, errors);
-  await signIn(page, ADMIN);
-  await page.locator('.nav-btn[title="AI 管理"]').click();
-
-  await expect(page.getByText('今日被 @ 次数')).toBeVisible({ timeout: 15_000 });
-  await shot(page, '30-AI管理首页');
-
-  // 跟踪对象列表 → 画像二级页
-  await page.locator('.table__row').first().click();
-  await expect(page.getByText('AI 推导 · 沟通偏好与习惯')).toBeVisible({ timeout: 15_000 });
-  await shot(page, '31-画像二级页');
-
-  await page.getByRole('button', { name: /查看详细/ }).click();
-  await expect(page.getByText('原始对话记录')).toBeVisible({ timeout: 15_000 });
-  await shot(page, '32-原始对话');
-
-  await page.getByRole('button', { name: '返回列表' }).click();
-  await page.getByRole('button', { name: 'AI 配置' }).click();
-
-  // TC-ADMIN-09：三个开关必须是真的 switch，不是装饰用的 span
-  const switches = page.getByRole('switch');
-  await expect(switches).toHaveCount(3, { timeout: 15_000 });
-  for (let i = 0; i < 3; i++) {
-    const s = switches.nth(i);
-    expect(await s.getAttribute('aria-checked')).toMatch(/true|false/);
-    const name = await s.getAttribute('aria-labelledby') || await s.getAttribute('aria-label');
-    expect(name, '开关必须有可访问名称').toBeTruthy();
-  }
-  await shot(page, '33-AI配置');
-
-  // TC-ADMIN-07/08：测试连通性有结果；换供应商后旧结果要被清掉
-  await page.locator('.provider', { hasText: 'xAI Grok' }).click();
-  await page.getByRole('button', { name: '测试连通性' }).click();
-  await expect(page.locator('.test-result')).toBeVisible({ timeout: 20_000 });
-  console.log(`    测试连通性结果：「${(await page.locator('.test-result').innerText()).trim()}」`);
-  await shot(page, '34-测试连通性');
-
-  await page.locator('.provider', { hasText: 'OpenAI' }).first().click();
-  await expect(page.locator('.test-result')).toHaveCount(0, { timeout: 10_000 });
-  console.log('    换供应商后旧的测试结果已清掉 ✅');
-});
 
 test('TC-CONTACT-04 普通成员看不到管理入口', async ({ page }) => {
   watchErrors(page, errors);
@@ -231,7 +189,6 @@ test('TC-CONTACT-04 普通成员看不到管理入口', async ({ page }) => {
   await page.locator('.nav-btn[title="联系人"]').click();
   await expect(page.locator('.contacts__bar').getByRole('button', { name: '添加联系人' })).toHaveCount(0);
   await expect(page.locator('.contacts__bar').getByRole('button', { name: '建群' })).toHaveCount(0);
-  await expect(page.locator('.nav-btn[title="AI 管理"]')).toHaveCount(0);
   // 这里只验「前端没有入口」。「成员直接打管理接口要 403」（TC-CONTACT-05）
   // 是后端的事，由 server/test/auth.test.js 覆盖 —— 前端藏起来 ≠ 安全。
   await shot(page, '35-成员无管理入口');

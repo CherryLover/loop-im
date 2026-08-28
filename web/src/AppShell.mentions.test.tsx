@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { StreamHandlers } from './lib/useStream';
-import type { AiPublicInfo, Conversation, User } from './lib/types';
+import type { Conversation, User } from './lib/types';
 
 let handlers: StreamHandlers = {};
 vi.mock('./lib/useStream', () => ({
@@ -19,7 +19,6 @@ const ME: User = {
   role: 'admin', avatarUrl: null, isAI: false, online: true,
 };
 const PEER: User = { ...ME, id: 'u_chen', name: '陈子航', email: 'c@loop.dev', dept: '后端', role: 'member' };
-const AI: AiPublicInfo = { name: 'Aria', providerLabel: '模拟供应商', silentRead: false, allowDm: true };
 
 const conversation = (over: Partial<Conversation> = {}): Conversation => ({
   id: 'c1',
@@ -47,7 +46,7 @@ async function mount(conversations: Conversation[]) {
   mockApi.conversations.mockResolvedValue({ conversations });
   const { AppShell } = await import('./AppShell');
   render(
-    <AppShell me={ME} ai={AI} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
+    <AppShell me={ME} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
   );
   await waitFor(() => expect(mockApi.conversations).toHaveBeenCalled());
 }
@@ -57,7 +56,7 @@ beforeEach(() => {
   for (const fn of Object.values(mockApi)) fn.mockReset().mockResolvedValue({});
   mockApi.conversations.mockResolvedValue({ conversations: [] });
   mockApi.users.mockResolvedValue({ users: [ME, PEER] });
-  mockApi.me.mockResolvedValue({ user: ME, ai: AI });
+  mockApi.me.mockResolvedValue({ user: ME });
   mockApi.ping.mockResolvedValue({ online: true, users: [ME, PEER] });
   mockApi.aiContext.mockResolvedValue({ line: '' });
   mockApi.markRead.mockResolvedValue({ conversationId: 'c1', lastReadAt: 1, unread: 0 });

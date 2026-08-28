@@ -14,7 +14,9 @@ router.use(authenticate);
 
 // 系统内全部成员，无需加好友。
 router.get('/', (req, res) => {
-  res.json({ users: all('SELECT * FROM users ORDER BY role = ? DESC, created_at', 'ai').map(publicUser) });
+  // 停用的 AI 用户不出现在联系人里（退役的 Aria、将来临时不可用的 Agent）；
+  // 停用的人类成员照常列出——管理员要从这里恢复账号。
+  res.json({ users: all(`SELECT * FROM users WHERE NOT (role = 'ai' AND disabled_at IS NOT NULL) ORDER BY role = 'ai' DESC, created_at`).map(publicUser) });
 });
 
 // 管理员开通新成员账号。
@@ -78,7 +80,7 @@ function targetForStatusChange(req, res) {
     res.status(400).json({ error: '不能停用自己的账号' });
     return null;
   }
-  // Aria 本来就没有密码、登不了录，停用对它没有意义，只会让它从群里消失。
+  // AI 账号本来就没有密码、登不了录；它的启用与否由 AI 侧的配置联动管理，不走这里。
   if (target.role === 'ai') {
     res.status(400).json({ error: 'AI 账号不能停用' });
     return null;

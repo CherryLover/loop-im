@@ -13,11 +13,10 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer, waitFor } from './helpers.js';
 import { direct, group, member } from './fixtures.js';
-import { AI_ID } from '../src/ai.js';
 import { emitTo, foregroundDeviceIds } from '../src/events.js';
 import { setPushBridgeForTests } from '../src/push-decide.js';
 import { get } from '../src/db.js';
-import { pushForMessage, runAiTurn } from '../src/routes/conversations.js';
+import { pushForMessage } from '../src/routes/conversations.js';
 
 let api;
 let admin;
@@ -449,30 +448,5 @@ describe('发消息 → 真的推出去（把 2A / 2B 换成假的）', () => {
     assert.equal((await api.post(`/api/conversations/${g.id}/messages`, { body: '还在吗' }, admin)).status, 201);
     await waitFor(() => dropped.length === 1);
     assert.deepEqual(dropped, [`https://push.example.com/${guo.id}/phone`]);
-  });
-
-  it('Aria 的回复照同一套规则推给全群，不只是触发她的那个人', async () => {
-    // ⚠️ §E.1 Q3 的「只推给触发她的那个人」已被用户否决——规则统一，不做特例。
-    // 直接驱动 runAiTurn，不依赖真的模型调用。
-    const wen = await member('提问的');
-    const pang = await member('旁观的');
-    const g = await group(api, admin, 'Aria 群', [wen.id, pang.id]);
-    fakeBridge({ subscriptions: [subFor(wen, 'phone'), subFor(pang, 'phone')] });
-    const convo = get('SELECT * FROM conversations WHERE id = ?', g.id);
-
-    // mentions 里有 AI_ID，shouldReply 就必回，跟 settings 无关（见 ai.js:117）。
-    // insert 用真的 insertAiMessage（默认值），落一条真消息进库，正文摘要才是真的。
-    await runAiTurn(
-      { convo, userId: wen.id, audience: [wen.id, pang.id, AI_ID], mentions: [AI_ID], settings: {} },
-      {
-        learn: async () => {},
-        generate: async () => ({ body: '明早十点，我记下了' }),
-        emit: () => {},
-      },
-    );
-
-    await waitFor(() => sent.length === 2);
-    assert.deepEqual(sent.map((s) => s.subscription.userId).sort(), [pang.id, wen.id].sort());
-    assert.equal(sent[0].payload.body, '明早十点，我记下了');
   });
 });

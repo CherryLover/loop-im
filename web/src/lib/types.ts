@@ -137,52 +137,6 @@ export interface UploadResult {
   mime?: string;
 }
 
-/** AI facts every signed-in member may see (the full settings are admin-only). */
-export interface AiPublicInfo {
-  name: string;
-  providerLabel: string;
-  silentRead: boolean;
-  allowDm: boolean;
-}
-
-export interface AiProviderOption {
-  key: string;
-  name: string;
-  note: string;
-  model: string;
-}
-
-export interface AiSettings {
-  provider: string;
-  hasApiKey: boolean;
-  configured: boolean;
-  providers: AiProviderOption[];
-  rules: { silentRead: boolean; replyAtAll: boolean; allowDm: boolean };
-  statusLine: string;
-}
-
-export interface AiStat {
-  key: string;
-  label: string;
-  value: string;
-  note: string;
-}
-
-export interface AiTrackedPerson {
-  userId: string;
-  name: string;
-  avatarUrl: string | null;
-  scene: string;
-  summary: string;
-  keys: string[];
-  lastActiveAt: number;
-}
-
-export interface AiOverview extends AiSettings {
-  stats: AiStat[];
-  rows: AiTrackedPerson[];
-}
-
 /**
  * 一条消息搜索结果：消息本身，外加它所属会话的标题与类型，
  * 前端不必再去会话列表里回查就能渲染，也能直接跳过去。
@@ -200,17 +154,3 @@ export interface MessageSearchPage {
   nextBefore: string | null;
 }
 
-export interface AiProfileDetail {
-  profile: {
-    userId: string;
-    name: string;
-    avatarUrl: string | null;
-    scene: string;
-    summary: string;
-    note: string;
-    habits: string[];
-    keys: string[];
-    lastActiveAt: number;
-  };
-  raw: { name: string; text: string; createdAt: number }[];
-}

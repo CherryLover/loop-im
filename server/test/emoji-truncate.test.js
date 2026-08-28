@@ -153,13 +153,10 @@ describe('emoji 走完整条链路不被切坏', () => {
 
   before(async () => {
     api = await startServer();
-    const adminToken = await api.loginAdmin();
     chen = await member('陈子航', { dept: '后端' });
     zhou = await member('周明', { dept: '前端' });
     chenToken = await api.login(chen.email);
     zhouToken = await api.login(zhou.email);
-    // Aria 不插话，摘要里才只有我们发的那条。
-    await api.put('/api/ai/settings', { silentRead: false, replyAtAll: false, allowDm: true }, adminToken);
     dm = await direct(api, chenToken, zhou.id);
   });
   after(async () => { await api.close(); });

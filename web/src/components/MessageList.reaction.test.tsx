@@ -37,7 +37,6 @@ const view = (messages: Message[], onReact?: (m: Message, emoji: string) => void
       messages={messages}
       meId="u_lin"
       showSenderName
-      aiProviderLabel="模拟供应商"
       typing={false}
       onReact={onReact}
     />,

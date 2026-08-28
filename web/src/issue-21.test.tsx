@@ -9,7 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { App } from './App';
 import { AppShell } from './AppShell';
 import type { StreamHandlers } from './lib/useStream';
-import type { AiPublicInfo, Conversation, Message, User } from './lib/types';
+import type { Conversation, Message, User } from './lib/types';
 
 let handlers: StreamHandlers = {};
 let streamEnabled = false;
@@ -22,7 +22,6 @@ const ME: User = {
   role: 'member', avatarUrl: null, isAI: false, online: true,
 };
 const PEER: User = { ...ME, id: 'u_chen', name: '陈子航', email: 'c@loop.dev', dept: '后端' };
-const AI: AiPublicInfo = { name: 'Aria', providerLabel: '模拟供应商', silentRead: false, allowDm: true };
 
 // 用单聊：群聊还会额外拉一次 AI 上下文，与本 issue 无关，别混进请求断言里。
 const CONVERSATION: Conversation = {
@@ -112,7 +111,7 @@ beforeEach(() => {
     const gate = pending[url];
     if (gate) await abortable(init, gate);
     if (url === '/api/auth/logout') return logoutReply();
-    if (url === '/api/auth/me') return json({ user: ME, ai: AI });
+    if (url === '/api/auth/me') return json({ user: ME });
     if (url === '/api/users') {
       return usersStatus === 401
         ? json({ error: '登录已过期，请重新登录' }, 401)
@@ -133,7 +132,7 @@ afterEach(() => {
 });
 
 const shell = (onSignOut: () => void) => render(
-  <AppShell me={ME} ai={AI} theme="light" onToggleTheme={vi.fn()} onSignOut={onSignOut} justSignedIn={false} />,
+  <AppShell me={ME} theme="light" onToggleTheme={vi.fn()} onSignOut={onSignOut} justSignedIn={false} />,
 );
 
 /** 进「我」→ 点退出登录。 */

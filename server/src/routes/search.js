@@ -1,6 +1,6 @@
 // 消息内容搜索。会话列表顶上的搜索框原来只过滤会话标题，搜不到聊天记录。
 //
-// 正文是明文落库的：secret-box 只加密 ai_settings.api_key，messages.body 从来没进过
+// 正文是明文落库的：secret-box 只加密个别凭据字段，messages.body 从来没进过
 // encrypt()（见 routes/conversations.js 的 INSERT 与 ai.js 的 insertAiMessage），
 // 所以直接用 SQL 的 LIKE 就能搜，不需要在应用层解密后过滤。
 import { Router } from 'express';

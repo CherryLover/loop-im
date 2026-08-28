@@ -269,45 +269,47 @@ describe('推送判定 · 规则组合', () => {
   });
 });
 
-describe('推送判定 · Aria（AI）不做特例', () => {
-  const aria = (over = {}) => msg({ senderId: 'ai', senderName: 'Aria', ...over });
+describe('推送判定 · AI 用户不做特例', () => {
+  // Aria（senderId 'ai'）已整体退役（方案文档 §F），但这条规则没跟着退：接入中的
+  // hapi Agent 以 'ai-<agent>' 的用户身份发言，走的必须还是同一套规则。
+  const agent = (over = {}) => msg({ senderId: 'ai-claude', senderName: 'Claude', ...over });
 
-  it('Aria 的回复推给群里所有没设免打扰的人，不只是触发她的那个人', () => {
-    // ⚠️ 方案文档 §E.1 Q3 倾向「只推给触发她的那个人」，**已被用户否决**：要的是规则统一。
-    // 这个模块里出现任何 AI_ID / senderName === 'Aria' 的分支，就是有人在加特例。
+  it('AI 的回复推给群里所有没设免打扰的人，不只是触发它的那个人', () => {
+    // ⚠️ 方案文档 §E.1 Q3 倾向「只推给触发它的那个人」，**已被用户否决**：要的是规则统一。
+    // 这个模块里出现任何 'ai-' 前缀 / senderName 的分支，就是有人在加特例。
     const out = targetsFor({
-      message: aria(),
-      memberIds: ['ai', 'u_asker', 'u_bystander_1', 'u_bystander_2'],
+      message: agent(),
+      memberIds: ['ai-claude', 'u_asker', 'u_bystander_1', 'u_bystander_2'],
       subscriptions: [sub('u_asker'), sub('u_bystander_1'), sub('u_bystander_2')],
     });
     assert.deepEqual(out.map((s) => s.userId), ['u_asker', 'u_bystander_1', 'u_bystander_2']);
   });
 
-  it('Aria 的回复同样过免打扰这一关', () => {
+  it('AI 的回复同样过免打扰这一关', () => {
     const out = targetsFor({
-      message: aria(),
-      memberIds: ['ai', 'u_asker', 'u_bystander'],
+      message: agent(),
+      memberIds: ['ai-claude', 'u_asker', 'u_bystander'],
       mutedBy: new Set(['u_bystander']),
       subscriptions: [sub('u_asker'), sub('u_bystander')],
     });
     assert.deepEqual(out.map((s) => s.userId), ['u_asker']);
   });
 
-  it('Aria 的回复同样按设备判前台', () => {
+  it('AI 的回复同样按设备判前台', () => {
     const out = targetsFor({
-      message: aria(),
-      memberIds: ['ai', 'u_asker'],
+      message: agent(),
+      memberIds: ['ai-claude', 'u_asker'],
       subscriptions: [sub('u_asker', 'laptop'), sub('u_asker', 'phone')],
       foregroundDevices: { u_asker: ['laptop'] },
     });
     assert.deepEqual(out.map((s) => s.deviceId), ['phone']);
   });
 
-  it('Aria 自己有订阅也不会收到自己的回复（规则 2 一视同仁）', () => {
+  it('AI 用户自己有订阅也不会收到自己的回复（规则 2 一视同仁）', () => {
     const out = targetsFor({
-      message: aria(),
-      memberIds: ['ai', 'u_asker'],
-      subscriptions: [sub('ai'), sub('u_asker')],
+      message: agent(),
+      memberIds: ['ai-claude', 'u_asker'],
+      subscriptions: [sub('ai-claude'), sub('u_asker')],
     });
     assert.deepEqual(out.map((s) => s.userId), ['u_asker']);
   });
@@ -330,8 +332,9 @@ describe('推送标题 · 不带应用名（iOS 自己会附一行）', () => {
     assert.equal(pushTitle(msg(), { type: 'group', title: '发版小组' }), '张三 · 发版小组');
   });
 
-  it('AI 会话按单聊排：标题就是 Aria 本人', () => {
-    assert.equal(pushTitle(msg({ senderName: 'Aria' }), { type: 'ai' }), 'Aria');
+  it('AI 会话按单聊排：标题就是那个 AI 用户本人', () => {
+    // type='ai' 这一档保留着（历史上是 Aria 私聊，将来是 hapi Agent 私聊），排法同单聊。
+    assert.equal(pushTitle(msg({ senderName: 'Claude' }), { type: 'ai' }), 'Claude');
   });
 
   it('群没有标题时退回一段，不留一个空荡荡的「· 」尾巴', () => {

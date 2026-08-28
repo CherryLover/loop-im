@@ -26,9 +26,8 @@ test('手机端：建群成功后直接进入新群', async ({ page }) => {
   await page.locator('.tab', { hasText: '联系人' }).click();
   await createGroup(page, '手机建群 · 立即进入', [MEMBERS[0].name, MEMBERS[1].name]);
 
-  // 验收：标题、系统欢迎消息、输入框、返回按钮都在，会话列表让位给聊天详情。
+  // 验收：标题、输入框、返回按钮都在，会话列表让位给聊天详情。（Aria 退役后新群没有欢迎消息。）
   await expect(page.locator('.chat__title')).toHaveText('手机建群 · 立即进入');
-  await expect(page.locator('.bubble--ai').last()).toContainText('群聊已创建');
   await expect(page.locator('.composer__input')).toBeVisible();
   await expect(page.locator('.chat__back')).toBeVisible();
   await expect(page.locator('.convos')).toBeHidden();
@@ -48,5 +47,5 @@ test('桌面端：建群成功后仍然直接进入新群', async ({ page }) => 
 
   await expect(page.locator('.chat__title')).toHaveText('桌面建群 · 立即进入');
   await expect(page.locator('.convos')).toBeVisible();
-  await expect(page.locator('.members__row')).toHaveCount(4);   // 建群人 + 2 名成员 + Aria
+  await expect(page.locator('.members__row')).toHaveCount(3);   // 建群人 + 2 名成员（Aria 退役后没有 AI）
 });

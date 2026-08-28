@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { AiPublicInfo, Conversation, Message, User } from './lib/types';
+import type { Conversation, Message, User } from './lib/types';
 
 // useStream 会真的开 EventSource，jsdom 里没有。这个用例不需要推送，换成空实现即可。
 vi.mock('./lib/useStream', () => ({ useStream: () => {} }));
@@ -18,7 +18,6 @@ const ME: User = {
   role: 'admin', avatarUrl: null, isAI: false, online: true,
 };
 const PEER: User = { ...ME, id: 'u_chen', name: '陈子航', email: 'c@loop.dev', dept: '后端', role: 'member' };
-const AI: AiPublicInfo = { name: 'Aria', providerLabel: '模拟供应商', silentRead: false, allowDm: true };
 
 const conversation: Conversation = {
   id: 'c1',
@@ -59,7 +58,7 @@ const composerInput = () => screen.getByPlaceholderText(/输入消息/) as HTMLT
 async function mount() {
   const { AppShell } = await import('./AppShell');
   render(
-    <AppShell me={ME} ai={AI} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
+    <AppShell me={ME} theme="light" onToggleTheme={vi.fn()} onSignOut={vi.fn()} justSignedIn={false} />,
   );
   await waitFor(() => expect(screen.getByText('联调排期改到下周二')).toBeInTheDocument());
 }
@@ -68,7 +67,7 @@ beforeEach(() => {
   for (const fn of Object.values(mockApi)) fn.mockReset().mockResolvedValue({});
   mockApi.conversations.mockResolvedValue({ conversations: [conversation] });
   mockApi.users.mockResolvedValue({ users: [ME, PEER] });
-  mockApi.me.mockResolvedValue({ user: ME, ai: AI });
+  mockApi.me.mockResolvedValue({ user: ME });
   mockApi.ping.mockResolvedValue({ online: true, users: [ME, PEER] });
   mockApi.aiContext.mockResolvedValue({ line: '' });
   mockApi.markRead.mockResolvedValue({ conversationId: 'c1', lastReadAt: 1, unread: 0 });

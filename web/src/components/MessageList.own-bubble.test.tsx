@@ -35,7 +35,6 @@ const view = (body: string, senderId = 'u_lin') =>
       messages={[message(body, senderId)]}
       meId="u_lin"
       showSenderName
-      aiProviderLabel="模拟供应商"
       typing={false}
     />,
   );

@@ -17,7 +17,6 @@
  * 存储沿用进程内滑动窗口。部署形态是单进程 + SQLite，进程内就是全局，
  * 够用且不值得为它引 redis；换成多进程时这里要整体换实现，不要打补丁。
  */
-import { AI_ID } from './ai.js';
 import { logWarn } from './log.js';
 
 /** 环境变量取正数，非法或缺省时退回默认值。 */
@@ -32,9 +31,10 @@ const num = (name, fallback) => {
  *
  * - message 60 条 / 分钟：人手打字最猛的时候（一串「好」「收到」「行」）大概
  *   15~20 条/分钟，这里给了三四倍余量；而循环脚本是每秒上千条，一秒内就撞上。
- * - ai 10 次 / 5 分钟：@Aria 一轮是「问 → 等回复 → 读完 → 再问」，5 分钟问 10 次
- *   已经比人读得完的速度还快。这一档同时把单个用户的最坏成本压到 120 次/小时，
- *   不至于一个死循环就把当月的模型预算烧穿。
+ * - ai 10 次 / 5 分钟：@AI 一轮是「问 → 等回复 → 读完 → 再问」，5 分钟问 10 次
+ *   已经比人读得完的速度还快。Aria 退役后这一档暂时没有消费方，保留给接入中的
+ *   hapi Agent（那边一次触发就是一次真实的 Agent 任务，还要排队）——见
+ *   docs/hapi-Agent-接入方案.md。
  * - upload 20 次 / 分钟：附件一次最多选 9 个（前端 Composer 的 MAX_ATTACHMENTS，
  *   这一档就是照着这里的额度定的），连发两批 18 次仍在额度内；一分钟内传满 20 个
  *   已经不像人在操作。改这一档之前先看一眼那个上限，两边是配套的。
@@ -42,7 +42,7 @@ const num = (name, fallback) => {
  */
 export const DEFAULT_LIMITS = {
   message: { windowMs: 60_000, max: 60, env: 'RATE_MESSAGE', hint: '消息发得太快了' },
-  ai: { windowMs: 5 * 60_000, max: 10, env: 'RATE_AI', hint: '@Aria 太频繁了' },
+  ai: { windowMs: 5 * 60_000, max: 10, env: 'RATE_AI', hint: '@AI 太频繁了' },
   upload: { windowMs: 60_000, max: 20, env: 'RATE_UPLOAD', hint: '上传太频繁了' },
   write: { windowMs: 60_000, max: 30, env: 'RATE_WRITE', hint: '操作太频繁了' },
 };
@@ -61,12 +61,12 @@ const buckets = new Map();                      // `${action}:${userId}` -> numb
 const bucketKey = (action, userId) => `${action}:${userId}`;
 
 /**
- * AI 自己发的消息走服务端内部路径（ai.js 的 insertAiMessage），压根不经过这些路由，
- * 所以正常情况下不会碰到限流。这里再显式豁免一次，是为了万一将来有人给 Aria
- * 接上一条 HTTP 出口，也不会出现「用户把额度用完了，Aria 就哑了」这种事——
- * Aria 的回复是系统行为，不该算进任何人的额度。
+ * AI 用户自己发的消息走服务端内部路径，压根不经过这些路由，正常情况下碰不到限流。
+ * 这里再显式豁免一次，是为了万一将来有人给 AI 用户接上一条 HTTP 出口，也不会出现
+ * 「用户把额度用完了，AI 就哑了」——AI 的回复是系统行为，不该算进任何人的额度。
+ * 覆盖两代 AI 的 id 约定：退役的 Aria（'ai'）与 hapi Agent 用户（'ai-<agent>'）。
  */
-export const isInternalSender = (userId) => userId === AI_ID;
+export const isInternalSender = (userId) => userId === 'ai' || String(userId || '').startsWith('ai-');
 
 /** 取出窗口内还有效的那些时间戳，顺手把过期的丢掉（窗口自然滑动，不会永久锁死）。 */
 function hits(action, userId, now) {
