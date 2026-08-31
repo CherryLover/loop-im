@@ -199,9 +199,9 @@ function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents }) {
 /**
  * 发消息路由在 201 之后调它（发射后不管）。deps 可整体覆盖，测试用。
  * postReply 由路由注入：以 Agent 用户的身份把一条 Markdown 消息贴回会话
- * （入库 + SSE 广播 + 推送），返回无所谓。
+ * （入库 + SSE 广播 + 推送），第三个参数是要引用的消息 id，返回无所谓。
  */
-export function runAgentTurns({ convo, sender, body, roster, audience, targets, postReply }, deps = {}) {
+export function runAgentTurns({ convo, sender, body, messageId, roster, audience, targets, postReply }, deps = {}) {
   const {
     emit = emitTo,
     ensure = ensureSession,
@@ -211,10 +211,15 @@ export function runAgentTurns({ convo, sender, body, roster, audience, targets, 
     quietMs = QUIET_MS(),
   } = deps;
 
+  // 群里多人可能同时在说话，Agent 的回帖一律引用触发它的那条消息，回的是谁那句
+  // 一眼可辨；私聊一对一本来就清楚，引用反而累赘。失败文案（暂不可用/超时/排队）
+  // 同样要引用——恰恰是没办成事的时候，更得指明「没办成的是哪条」。
+  const replyTo = convo.type === 'group' ? messageId : null;
+
   for (const target of targets) {
     const say = (text) => {
       try {
-        postReply(target, text);
+        postReply(target, text, replyTo);
       } catch (err) {
         logError('hapi.turn.post_failed', err);
       }
@@ -273,7 +278,7 @@ export function runAgentTurns({ convo, sender, body, roster, audience, targets, 
 
     if (enqueue(`${target.key}:${convo.id}`, job)) continue;
     try {
-      postReply(target, AGENT_BUSY(target.name));           // 队列满：立刻回话，不静默丢
+      postReply(target, AGENT_BUSY(target.name), replyTo);  // 队列满：立刻回话，不静默丢
     } catch (err) {
       logError('hapi.turn.post_failed', err);
     }

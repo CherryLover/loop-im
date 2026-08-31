@@ -628,7 +628,7 @@ router.post('/:id/messages', (req, res) => {
   if (targets.length) {
     runAgentTurns({
       convo, sender: req.user, body, messageId: id, roster, audience, targets,
-      postReply: (target, text) => postAgentReply(convo, target, text, audience),
+      postReply: (target, text, replyTo) => postAgentReply(convo, target, text, audience, replyTo),
     });
   }
 });
@@ -636,11 +636,13 @@ router.post('/:id/messages', (req, res) => {
 /**
  * 以 Agent 用户的身份把回复贴回会话：入库 + SSE 广播 + 推送，一条龙。
  * 和人类发消息共用同一套 serializeMessage / pushForMessage，规则零特例。
+ * replyTo 写进 reply_to 后，引用摘要和「消息已不可用」降级也全走人类那套（quoteOf），
+ * 不另起炉灶；调用方（turns.js）只在群聊传触发消息的 id，私聊传 null。
  */
-export function postAgentReply(convo, target, text, audience = memberIds(convo.id)) {
+export function postAgentReply(convo, target, text, audience = memberIds(convo.id), replyTo = null) {
   const id = uid('m');
-  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    id, convo.id, target.userId, String(text || '').trim() || '（空回复）', '[]', now());
+  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    id, convo.id, target.userId, String(text || '').trim() || '（空回复）', '[]', replyTo, now());
   const sender = get('SELECT * FROM users WHERE id = ?', target.userId);
   const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), sender || { name: target.name, role: 'ai' });
   emitTo(audience, 'message', { message });

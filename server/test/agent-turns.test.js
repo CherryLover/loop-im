@@ -79,6 +79,10 @@ describe('群聊 @ 触发', () => {
     assert.equal(reply.senderId, 'ai-claude');
     assert.equal(reply.senderName, 'Claude-Code');
     assert.ok(reply.body.includes('红在 lint'));
+    // 群里多人可能同时在说话，回帖必须引用触发那条消息，才看得清回的是谁那句
+    assert.equal(reply.replyTo, send.body.message.id);
+    assert.equal(reply.quote.senderName, '陈子航');
+    assert.ok(reply.quote.preview.includes('CI 为什么红了'), '引用摘要里要认得出原话');
   });
 
   it('第二次 @ 复用已有会话（不再 spawn）；消息就是「署名：原文」，一个字不多', async () => {
@@ -157,7 +161,12 @@ describe('Agent 私聊', () => {
     assert.equal(hub.state.lastMessage.text, '帮我总结今天的排期', '私聊原文直达：不加署名、不加开场白');
 
     pushTurn('s_claude_dm', '排期总结：……');
-    await waitFor(async () => (await lastAgentMessage(dm.id, chenToken))?.body.includes('排期总结'));
+    const reply = await waitFor(async () => {
+      const last = await lastAgentMessage(dm.id, chenToken);
+      return last?.body.includes('排期总结') ? last : null;
+    });
+    // 私聊一对一，回的是谁那句本来就清楚，引用反而累赘——不带 replyTo
+    assert.equal(reply.replyTo, null);
   });
 });
 
@@ -166,12 +175,14 @@ describe('不可用与超时', () => {
     hub.state.machines = [];
     await api.get('/api/agents', admin);                 // 触发一次对账，让 ai-claude 停用
     const before = (await messagesOf(room.id, chenToken)).filter((m) => m.isAI).length;
-    await api.post(`/api/conversations/${room.id}/messages`, { body: '@Claude-Code 在吗' }, chenToken);
+    const send = await api.post(`/api/conversations/${room.id}/messages`, { body: '@Claude-Code 在吗' }, chenToken);
     const reply = await waitFor(async () => {
       const list = (await messagesOf(room.id, chenToken)).filter((m) => m.isAI);
       return list.length > before ? list.at(-1) : null;
     });
     assert.equal(reply.body, 'Claude-Code 暂不可用，请联系管理员');
+    // 失败文案更要引用触发消息——没办成事的时候，得指明「没办成的是哪条」
+    assert.equal(reply.replyTo, send.body.message.id);
 
     hub.state.machines = [hub.onlineMachine('m_1')];
     await api.get('/api/agents', admin);                 // 恢复，别影响后面的用例
@@ -250,12 +261,13 @@ describe('排队与限流', () => {
     await waitFor(() => hub.state.lastMessage?.text.includes('第一件事'));
 
     // 第二条进不了队列 → 立刻回话
-    await api.post(`/api/conversations/${room.id}/messages`, { body: '@Claude-Code 第二件事' }, admin);
+    const second = await api.post(`/api/conversations/${room.id}/messages`, { body: '@Claude-Code 第二件事' }, admin);
     const busy = await waitFor(async () => {
       const list = (await messagesOf(room.id, chenToken)).filter((m) => m.isAI);
       return list.find((m) => m.body.includes('排队请求过多')) || null;
     });
     assert.equal(busy.body, 'Claude-Code 排队请求过多，请稍后再试');
+    assert.equal(busy.replyTo, second.body.message.id, '队列满的即时回话也要指明回的是哪条');
 
     // 放第一条走完，别拖住后面的用例
     pushTurn('s_claude_1', '第一件事办完了。');
