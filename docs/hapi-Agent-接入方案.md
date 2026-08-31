@@ -41,6 +41,7 @@ IM 用户 ──@ Claude-Code──▶ Loop IM 服务端 ──HTTP API──▶
 | D10 | **权限模式 yolo** | Agent 在自己的工作目录里自主干活，不做审批转发（风险见 §H） |
 | D11 | **Aria 整体退役** | 删掉现有 Aria：供应商直连（OpenAI/Grok/Codex endpoint）、画像与学习、静默读取、@全员触发、AI 私聊开关、AI 统计，全部下线（迁移见 §F） |
 | D12 | **纯 API 对接，配置切环境** | 本地开发连自己的 hub（hapi-server），线上连 Sophie-VPS 那套。代码零差异，只换配置（见 §C.1） |
+| D13 | **消息原样转发**（2026-08-31，替代早期「拼上下文」想法） | 上下文由 hapi 会话自身在底层携带、由本地 Agent CLI 管理——我们只把这条消息发出去（参照 HapiKmp 手机客户端：请求体就是 {text, localId}）。会话模型因此改为**每个「Agent × IM 会话」一条 hapi 会话**（§C.3'）。唯一进文本的是群聊署名「张三：」（接口没有发送者字段）与新会话的一次性开场白；私聊原文直达 |
 
 一条**未拍死**的：一个群里允许同时有多个 Agent 吗？D5 已经把死循环堵住，D8 又只有管理员能拉，
 本方案倾向**允许**（比如一个群里同时有 Claude-Code 和 Codex，各干各的）；如果实际用出问题，
@@ -108,16 +109,23 @@ hapi hub 提供完整的 HTTP API。⚠️ **以线上实际部署的 0.27.3 为
   机器整个离线 → 全体 hapi 用户停用。
 - @ 到一个「存在但临时不可用」的 Agent（探测有延迟时可能发生）→ 按 D6 回固定文案。
 
-### C.3 会话模型
+### C.3' 会话模型（2026-08-31 修订，替代下方原 C.3）
 
-- **每个 Agent 一个全局 hapi 会话**，承接它在所有群和私聊里收到的全部请求（一对多）。
-- 发过去的每条消息都带来源前缀，让 Agent 知道在跟谁说话、在哪个场合：
-  `「群『发版讨论』的 张三：@Claude-Code 帮我看看 CI 为什么红了」`
-- **会话是可抛弃的现场，记忆在文件里**（§E）。所以判活逻辑很简单：
-  发消息前 `GET /api/sessions/:id` 看 `agentState` → 死了先 `resume`/`reopen` →
-  还不行就在同一目录 `spawn` 一个新的（新会话开场自动读记忆文件，见 §E 的守则）。
-- **串行队列**：同一 Agent 一次处理一条，排队期间聊天里持续显示「输入中」；
-  不同 Agent 各自的会话互不影响，可并行。
+- **每个「Agent × IM 会话」一条 hapi 会话**：群 A 的讨论一直在群 A 对应的那条
+  hapi 会话里延续，上下文由会话自身在底层携带，**不做任何文本拼接**（D13）。
+- 递话格式：群聊 `张三：<原文>`（署名是接口层带不了的唯一额外内容）；私聊原文直达；
+  新会话第一条前带一次性开场白（对应哪个场合、前缀怎么读、回复会贴回聊天）。
+- 同一 Agent 的所有会话共用同一个工作目录（记忆文件是「个体」的，不分场合）。
+- 判活照旧：发消息前查 → 死了 resume → 不行就同目录 spawn 新的；spawn/resume 受理后
+  要**轮询到 active** 再发（Agent 进程要几秒启动，早发会被 409 拒）。
+- **串行队列按「Agent × 会话」分**：同一会话内一次一件事；不同群/私聊各是独立的
+  hapi 会话（独立进程），天然并行。
+- 会话映射记在 `hapi_sessions`（agent_key × conversation_id → session_id）。
+
+<details><summary>原 C.3（已废弃：每个 Agent 一条全局会话 + 拼最近 20 条上下文）</summary>
+一个 Agent 一条会话导致多群串音，只能靠把最近 N 条拼进文本补课——重复、费 token、
+且把上下文管理错放到了我们这层。用户点破后改为 C.3'。
+</details>
 
 ### C.4 一条消息的完整旅程
 
@@ -127,7 +135,7 @@ hapi hub 提供完整的 HTTP API。⚠️ **以线上实际部署的 0.27.3 为
 3. 该 Agent 的队列里排队；轮到时：
    a. JWT 有效？过期先 POST /api/auth 换新
    b. 会话活着？GET session → 死了 resume/reopen → 没有就 spawn（目录、agent、yolo）
-   c. POST messages：来源前缀 + 消息正文（+ 群里最近 N 条上下文，首版 N=20）
+   c. POST messages：`张三：<原文>`（私聊则是原文本身；全新会话前面带一次开场白）
 4. SSE 上等这个会话的最终回复（中间的工具调用过程不转发）
 5. 以 ai-claude 的身份把回复贴回原会话，Markdown 渲染
 6. 任何一步失败 → 按 D6 贴固定文案 + 服务端日志记原因
@@ -140,8 +148,8 @@ hapi hub 提供完整的 HTTP API。⚠️ **以线上实际部署的 0.27.3 为
 ### C.5 数据模型改动
 
 - `users`：无需加列（`role='ai'` 已存在）；约定 `ai-` 前缀 id。
-- 新表 `hapi_agents`：`agent_key`（如 `claude`）、`user_id`、`enabled`、`session_id`（当前会话）、
-  `last_seen_available_at`。会话重开就地更新 `session_id`，不留历史。
+- 表 `hapi_agents`：`agent_key`、`user_id`、`enabled`（session_id 列已随 C.3' 弃用）。
+- 表 `hapi_sessions`：`agent_key × conversation_id → session_id`，会话重开就地覆盖。
 - `ai_settings` 表整体退役，hapi 的产品层配置进新表 `hapi_settings`（单行）。
 - **不需要**在途请求表（D9）。
 

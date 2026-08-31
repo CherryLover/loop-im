@@ -98,6 +98,17 @@ const MIGRATIONS = [
                   session_id  TEXT,
                   updated_at  INTEGER NOT NULL
                 )`],
+  // hapi_sessions：每个「Agent × IM 会话」一条 hapi 会话（2026-08-31 会话模型修订：
+  // 上下文由 hapi 会话自身在底层携带，消息原样转发、不做任何文本拼接——
+  // 参照 HapiKmp 手机客户端的做法；见方案 §C.3'）。
+  // hapi_agents.session_id 旧列随之弃用（保留不读写）。
+  [null, null, `CREATE TABLE IF NOT EXISTS hapi_sessions (
+                  agent_key        TEXT NOT NULL,
+                  conversation_id  TEXT NOT NULL,
+                  session_id       TEXT,
+                  updated_at       INTEGER NOT NULL,
+                  PRIMARY KEY (agent_key, conversation_id)
+                )`],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
   // column 为 null：这条迁移不是补列（索引、新表之类），DDL 自己保证幂等，直接跑。

@@ -1,29 +1,29 @@
-// 一条 IM 消息到 hapi Agent 的完整旅程（docs/hapi-Agent-接入方案.md §C.3/§C.4/§D/§G）。
+// 一条 IM 消息到 hapi Agent 的完整旅程（docs/hapi-Agent-接入方案.md §C.3'/§C.4/§D/§G）。
 //
 // 触发（D4/D5）：群里被 @ 才响应，Agent 私聊每条都响应；AI 用户发的消息永不触发任何
 // AI（防互相 @ 出死循环的硬规则）；@全员 不触发。
 //
-// 会话模型（§C.3）：每个 Agent 一个全局 hapi 会话，承接它在所有群和私聊里的全部请求。
-// 会话是可抛弃的现场：发消息前判活，死了 resume，再不行就在同一目录 spawn 新的——
-// 记忆靠工作目录里的文件（人设与守则放在 runner 侧，见方案 §E）。
+// 会话模型（§C.3'，2026-08-31 修订）：**每个「Agent × IM 会话」一条 hapi 会话**。
+// 上下文由 hapi 会话自身在底层携带、由本地 Agent CLI 自己管理——消息**原样转发**，
+// 不做任何上下文拼接（参照 HapiKmp 手机客户端：请求体就是 {text, localId}）。
+// 唯一进文本的额外内容是群聊里的署名「张三：」——发消息接口没有「发送者」元数据
+// 字段，而群里有多个人在跟同一条会话说话；私聊连署名都不加，原文直达。
+// 会话对应哪个群、名字前缀怎么读，在新会话的开场白里说一次。
 //
-// 串行队列（§C.3）：同一 Agent 一次处理一条，排队期间「输入中」持续亮着；不同 Agent
-// 并行。队列积压超过上限直接回「排队请求过多」。在途请求不落库（D9）：进程重启即丢，
-// 用户再问一次。
+// 串行队列按「Agent × 会话」分：不同群里可以并行（各自是独立的 hapi 会话/进程），
+// 同一会话内一次一件事。队列积压超上限直接回「排队请求过多」。在途请求不落库（D9）。
 //
-// 回合结束的判定：hub 的 session-updated 事件带 thinking 布尔（true=Agent 在干活）。
-// thinking 从 true 翻回 false 即回合结束，取回合内**最后一条** Agent 文本当回复
-//（中间的工具调用、推理过程不转发）。有些流转不出 thinking 翻转（极快的回合），
-// 兜底：收到过文本且安静了几秒也算结束。整体超时后出队，任务在 hapi 侧其实还在跑。
-import { get, all } from '../db.js';
+// 回合结束的判定：session-updated 的 thinking 从 true 翻回 false 即结束，取回合内
+// **最后一条** Agent 文本；见过 thinking 信号就不用「安静兜底」（Agent 干活前的
+// 中场白不能被当成最终回复——真实环境踩过）。整体超时后出队，任务在 hapi 侧还在跑。
+import { get, run, now } from '../db.js';
 import { emitTo } from '../events.js';
 import { logError, logEvent, logWarn } from '../log.js';
-import { truncate } from '../text.js';
 import {
   extractAgentText, hapiConfig, isHapiConfigured, openEvents,
   resumeSession, sendSessionMessage, session, spawnSession,
 } from './client.js';
-import { agentRow, agentUserId, flavorOf, setAgentSession } from './agents.js';
+import { flavorOf } from './agents.js';
 
 export const AGENT_UNAVAILABLE = (name) => `${name} 暂不可用，请联系管理员`;
 export const AGENT_BUSY = (name) => `${name} 排队请求过多，请稍后再试`;
@@ -33,7 +33,6 @@ export const AGENT_NO_TEXT = (name) => `${name} 本次执行完成，但没有�
 const MAX_QUEUE = Number(process.env.HAPI_QUEUE_MAX || 5);
 const turnTimeoutMs = () => Number(process.env.HAPI_TURN_TIMEOUT_MS || 10 * 60_000);
 const QUIET_MS = () => Number(process.env.HAPI_TURN_QUIET_MS || 5_000);
-const CONTEXT_MESSAGES = 20;
 
 /**
  * 这条刚发出的消息触发哪些 Agent。返回 [{ key, userId, name }]。
@@ -50,19 +49,19 @@ export function agentTargetsFor({ convo, roster, mentions, sender }) {
   return hit.map((u) => ({ key: u.id.slice(3), userId: u.id, name: u.name }));
 }
 
-// ---- 串行队列（每个 Agent 一条） -----------------------------------------
+// ---- 串行队列（每个「Agent × 会话」一条，跨会话并行） ---------------------
 
-const queues = new Map();                                  // key -> { tail: Promise, depth: number }
+const queues = new Map();                                  // `${key}:${convoId}` -> { tail, depth }
 
-function enqueue(key, job) {
-  const q = queues.get(key) || { tail: Promise.resolve(), depth: 0 };
+function enqueue(queueKey, job) {
+  const q = queues.get(queueKey) || { tail: Promise.resolve(), depth: 0 };
   if (q.depth >= MAX_QUEUE) return false;
   q.depth += 1;
   q.tail = q.tail
     .then(() => job())
     .catch((err) => logError('hapi.turn.failed', err))
     .finally(() => { q.depth -= 1; });
-  queues.set(key, q);
+  queues.set(queueKey, q);
   return true;
 }
 
@@ -80,35 +79,30 @@ function setTyping(audience, conversationId, on, emit) {
   }
 }
 
-// ---- 请求正文的拼装（§C.4） ----------------------------------------------
+// ---- 会话记录（hapi_sessions：Agent × IM 会话 → hapi 会话 id） ------------
 
-/** 群里最近几条消息当上下文；正文超长的截断，系统提示跳过。 */
-function contextBlock(conversationId, excludeMessageId) {
-  const rows = all(
-    `SELECT m.id, m.body, m.kind, u.name AS sender_name FROM messages m
-     LEFT JOIN users u ON u.id = m.sender_id
-     WHERE m.conversation_id = ? ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
-    conversationId, CONTEXT_MESSAGES + 1,
-  ).filter((r) => r.kind !== 'system' && r.id !== excludeMessageId).slice(0, CONTEXT_MESSAGES).reverse();
-  if (!rows.length) return '';
-  const lines = rows.map((r) => `${r.sender_name || '成员'}: ${truncate(r.body.replace(/\s+/g, ' '), 300)}`);
-  return `[最近的对话上下文]\n${lines.join('\n')}\n[/上下文]\n\n`;
+const sessionRow = (key, conversationId) =>
+  get('SELECT * FROM hapi_sessions WHERE agent_key = ? AND conversation_id = ?', key, conversationId);
+
+function upsertSessionRow(key, conversationId, sessionId) {
+  run(
+    `INSERT INTO hapi_sessions (agent_key, conversation_id, session_id, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(agent_key, conversation_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at`,
+    key, conversationId, sessionId, now(),
+  );
 }
 
-/** 新会话的开场白：工作目录里的人设文件（方案 §E）还没铺好之前，这段就是底线守则。 */
-function introBlock(agentName) {
-  return `（你是团队 IM「Loop IM」里的成员「${agentName}」。接下来会收到带来源前缀的消息，`
-    + `例如「群『发版』的 张三：…」。你的回复会原样贴回那个聊天，请用中文、直接说结论、`
-    + `Markdown 排版；不要复述前缀，也不要把这段说明当成对话内容。）\n\n`;
+/** 新会话的开场白：这条 hapi 会话对应哪个场合、前缀怎么读，只说这一次。 */
+function introBlock(agentName, convo) {
+  const place = convo.type === 'group'
+    ? `群聊「${convo.title || '未命名群聊'}」，群里有多个人，之后每条消息开头是发言人的名字`
+    : '一段一对一私聊，之后收到的就是对方的原话';
+  return `（你是团队 IM「Loop IM」里的成员「${agentName}」，这条会话对应那边的${place}。`
+    + `你的回复会原样贴回聊天，请用中文、直接说结论、Markdown 排版；`
+    + `不要复述名字前缀，也不要把这段说明当成对话内容。）\n\n`;
 }
 
-function originPrefix(convo, senderName) {
-  return convo.type === 'group'
-    ? `群『${convo.title || '未命名群聊'}』的 ${senderName}`
-    : `与你私聊的 ${senderName}`;
-}
-
-// ---- 会话保活（§C.3：判活 → resume → spawn） -----------------------------
+// ---- 会话保活（判活 → resume → spawn；每个「Agent × 会话」一条） ----------
 
 /**
  * spawn/resume 返回 id 只代表「hub 受理了」：runner 上的 Agent 进程要几秒才起来，
@@ -126,8 +120,8 @@ async function waitActive(sessionId, { timeoutMs = 60_000 } = {}) {
   }
 }
 
-async function ensureSession(key) {
-  const row = agentRow(key);
+async function ensureSession(key, conversationId) {
+  const row = sessionRow(key, conversationId);
   let isNew = false;
   let sessionId = row?.session_id || null;
 
@@ -146,10 +140,11 @@ async function ensureSession(key) {
   }
   if (!sessionId) {
     const { workroot } = hapiConfig();
+    // 同一 Agent 的所有会话共用同一个工作目录：记忆文件是它这个「个体」的，不分场合。
     sessionId = await spawnSession({ directory: `${workroot.replace(/\/$/, '')}/${key}`, agent: key, yolo: true });
     isNew = true;
   }
-  if (sessionId !== row?.session_id) setAgentSession(key, sessionId);
+  if (sessionId !== row?.session_id) upsertSessionRow(key, conversationId, sessionId);
   if (!(await waitActive(sessionId))) throw new Error(`session ${sessionId} not active in time`);
   return { sessionId, isNew };
 }
@@ -190,7 +185,7 @@ function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents }) {
           const text = extractAgentText(event.message?.content);
           if (text) {
             lastText = text;
-            armQuiet();                                    // 没有 thinking 翻转的兜底：文本后安静几秒算结束
+            armQuiet();
           }
         } else if (event.type === 'session-updated' && event.sessionId === sessionId) {
           const thinking = event.data?.thinking;
@@ -217,7 +212,7 @@ function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents }) {
  * postReply 由路由注入：以 Agent 用户的身份把一条 Markdown 消息贴回会话
  * （入库 + SSE 广播 + 推送），返回无所谓。
  */
-export function runAgentTurns({ convo, sender, body, messageId, roster, audience, targets, postReply }, deps = {}) {
+export function runAgentTurns({ convo, sender, body, roster, audience, targets, postReply }, deps = {}) {
   const {
     emit = emitTo,
     ensure = ensureSession,
@@ -227,7 +222,7 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
     quietMs = QUIET_MS(),
   } = deps;
 
-  const jobs = targets.map((target) => {
+  for (const target of targets) {
     const say = (text) => {
       try {
         postReply(target, text);
@@ -247,15 +242,16 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
         }
         let ensured;
         try {
-          ensured = await ensure(target.key);
+          ensured = await ensure(target.key, convo.id);
         } catch (err) {
           logWarn('hapi.turn.session_unavailable', { agent: target.key, detail: String(err.message || err) });
           say(AGENT_UNAVAILABLE(target.name));
           return;
         }
-        const text = (ensured.isNew ? introBlock(target.name) : '')
-          + contextBlock(convo.id, messageId)
-          + `${originPrefix(convo, sender.name)}：${body}`;
+        // 消息原样转发（§C.3'）：上下文在 hapi 会话里自然延续，由 Agent 自己管理。
+        // 群聊补一个署名前缀（接口没有发送者字段）；私聊原文直达。
+        const text = (ensured.isNew ? introBlock(target.name, convo) : '')
+          + (convo.type === 'group' ? `${sender.name}：${body}` : body);
 
         // 先挂事件流、**等它真正连上**再发消息——回合再快也不会漏事件。
         const waiter = wait({ sessionId: ensured.sessionId, timeoutMs, quietMs });
@@ -286,11 +282,7 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
       }
     };
 
-    return { target, job };
-  });
-
-  for (const { target, job } of jobs) {
-    if (enqueue(target.key, job)) continue;
+    if (enqueue(`${target.key}:${convo.id}`, job)) continue;
     try {
       postReply(target, AGENT_BUSY(target.name));           // 队列满：立刻回话，不静默丢
     } catch (err) {
