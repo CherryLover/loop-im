@@ -210,6 +210,7 @@ export async function syncAgentsWithHub({ fetchImpl } = {}) {
   }
 
   for (const row of enabledAgents()) {
+    provisionAgentWorkdir(row.agent_key);          // 幂等：老的启用记录也要有人设文件
     const user = get('SELECT * FROM users WHERE id = ?', row.user_id);
     if (!user) continue;
     if (online && user.disabled_at) {
