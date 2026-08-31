@@ -43,7 +43,7 @@ export function CreateGroupModal({
     <Modal onClose={onClose}>
       <div>
         <div className="modal__title">创建群聊</div>
-        <div className="modal__sub">至少选 1 名成员，建完还能随时增减；AI 助手默认加入</div>
+        <div className="modal__sub">至少选 1 名成员，建完还能随时增减；想要 AI 参与就把它勾进来</div>
       </div>
 
       <input className="input" placeholder="群名称" value={name} onChange={(e) => setName(e.target.value)} />
