@@ -364,11 +364,18 @@ describe('埋点 · 错误与 SSE', () => {
 
     const cap = await capture(async () => {
       const ac = new AbortController();
-      await fetch(`${api.baseUrl}/api/stream?token=${token}`, { signal: ac.signal });
+      const res = await fetch(`${api.baseUrl}/api/stream?token=${token}`, { signal: ac.signal });
+      // 必须握住 body 并持续读：没人引用响应体时 undici 会把连接垃圾回收掉，
+      // 慢机器上 GC 一来连接提前断开，停用时就没有连接可掐（CI 上真实发生过）。
+      const reader = res.body.getReader();
+      const draining = (async () => {
+        try { for (;;) { const { done } = await reader.read(); if (done) break; } } catch { /* abort 收尾 */ }
+      })();
       await new Promise((r) => setTimeout(r, 120));
       await api.post(`/api/users/${yan.id}/disable`, {}, admin);
       await new Promise((r) => setTimeout(r, 150));
       ac.abort();
+      await draining;
     });
 
     const row = oneRow(cap, 'sse.force_disconnected');
