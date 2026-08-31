@@ -163,6 +163,7 @@ export interface AgentInfo {
   name: string;
   userId: string;
   enabled: boolean;
+  available: boolean;
   online: boolean;
 }
 

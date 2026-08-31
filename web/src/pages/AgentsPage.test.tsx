@@ -23,8 +23,8 @@ const status = (over: Partial<AgentsStatus> = {}): AgentsStatus => ({
   machineHost: 'Test-Runner',
   hubError: null,
   agents: [
-    { key: 'claude', label: 'Claude', defaultName: 'Claude', name: 'Claude', userId: 'ai-claude', enabled: false, online: false },
-    { key: 'grok', label: 'Grok Build', defaultName: 'Grok-Build', name: 'Grok-Build', userId: 'ai-grok', enabled: true, online: true },
+    { key: 'claude', label: 'Claude', defaultName: 'Claude', name: 'Claude', userId: 'ai-claude', enabled: false, available: false, online: false },
+    { key: 'grok', label: 'Grok Build', defaultName: 'Grok-Build', name: 'Grok-Build', userId: 'ai-grok', enabled: true, available: true, online: true },
   ],
   ...over,
 });
@@ -41,6 +41,8 @@ describe('AgentsPage', () => {
 
     const switches = screen.getAllByRole('switch');
     expect(switches).toHaveLength(2);
+    expect(screen.getByText(/Grok Build · 本机可用/)).toBeInTheDocument();
+    expect(screen.getByText(/Claude · 未检测到/)).toBeInTheDocument();
     const grok = screen.getByRole('switch', { name: /Grok-Build/ });
     expect(grok).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('switch', { name: /Claude/ })).toHaveAttribute('aria-checked', 'false');
@@ -58,7 +60,7 @@ describe('AgentsPage', () => {
     mockApi.agentsStatus.mockResolvedValue(status({
       machineOnline: false,
       agents: [
-        { key: 'grok', label: 'Grok Build', defaultName: 'Grok-Build', name: 'Grok-Build', userId: 'ai-grok', enabled: true, online: false },
+        { key: 'grok', label: 'Grok Build', defaultName: 'Grok-Build', name: 'Grok-Build', userId: 'ai-grok', enabled: true, available: true, online: false },
       ],
     }));
     render(<AgentsPage />);

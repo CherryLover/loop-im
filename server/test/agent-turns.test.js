@@ -10,6 +10,7 @@ process.env.HAPI_QUEUE_MAX = '1';            // 排队上限压到 1，好测「
 process.env.HAPI_TURN_QUIET_MS = '150';      // 文本后安静这么久算收工（测试里别等 5 秒）
 process.env.HAPI_TURN_TIMEOUT_MS = '60000';  // 单独的超时用例里再压小
 process.env.HAPI_ACTIVE_POLL_MS = '50';      // 等会话 active 的轮询间隔（测试里别真等 1 秒）
+process.env.HAPI_AGENTS = 'none';            // 本文件手动启用，避免探测在不同机器上不确定
 
 let api, hub, admin, chen, chenToken, room;
 

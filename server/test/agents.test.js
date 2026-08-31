@@ -6,6 +6,9 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { startMockHub } from './hapi-mock.js';
 
+// 探测在真机上不确定（开发机装了一堆 CLI，CI 一个都没有），测试一律显式指定。
+process.env.HAPI_AGENTS = 'none';
+
 let api, hub, admin, memberToken;
 
 before(async () => {
@@ -30,13 +33,14 @@ describe('Agent 管理 · 权限与状态', () => {
     assert.equal((await api.post('/api/agents/test', {}, memberToken)).status, 403);
   });
 
-  it('状态页列出全部 10 种 Agent，带机器在线状态', async () => {
+  it('状态页列出全部 9 种 Agent（gemini 已被 0.27.3 hub 拒绝，剔除），带机器在线与本机可用状态', async () => {
     const res = await api.get('/api/agents', admin);
     assert.equal(res.status, 200);
     assert.equal(res.body.configured, true);
     assert.equal(res.body.machineOnline, true);
     assert.equal(res.body.machineHost, 'Test-Runner');
-    assert.equal(res.body.agents.length, 10);
+    assert.equal(res.body.agents.length, 9);
+    assert.ok(!res.body.agents.some((a) => a.key === 'gemini'));
     const claude = res.body.agents.find((a) => a.key === 'claude');
     assert.deepEqual(
       { enabled: claude.enabled, name: claude.name, userId: claude.userId },
@@ -110,6 +114,60 @@ describe('Agent 管理 · 启用与用户联动', () => {
 
   it('未知的 Agent 类型 → 404', async () => {
     assert.equal((await api.put('/api/agents/skynet', { enabled: true }, admin)).status, 404);
+  });
+});
+
+describe('Agent 管理 · 自动接入（机器支持哪些就都加进去）', () => {
+  it("HAPI_AGENTS 列表里的 Agent 在对账时自动建成用户", async () => {
+    process.env.HAPI_AGENTS = 'codex,pi';
+    try {
+      const res = await api.get('/api/agents', admin);        // GET 顺带对账
+      const codex = res.body.agents.find((a) => a.key === 'codex');
+      const pi = res.body.agents.find((a) => a.key === 'pi');
+      assert.deepEqual([codex.enabled, codex.available, pi.enabled, pi.available], [true, true, true, true]);
+      const users = (await api.get('/api/users', admin)).body.users;
+      assert.ok(users.some((u) => u.id === 'ai-codex') && users.some((u) => u.id === 'ai-pi'), '联系人里应自动出现两位 Agent');
+    } finally {
+      process.env.HAPI_AGENTS = 'none';
+    }
+  });
+
+  it('管理员手动关掉的不会被自动拉回；清单外的不自动加', async () => {
+    process.env.HAPI_AGENTS = 'codex,pi';
+    try {
+      await api.put('/api/agents/codex', { enabled: false }, admin);   // 管理员的选择
+      const res = await api.get('/api/agents', admin);                 // 再对一次账
+      assert.equal(res.body.agents.find((a) => a.key === 'codex').enabled, false, '手动关掉的要尊重');
+      assert.equal(res.body.agents.find((a) => a.key === 'pi').enabled, true);
+      assert.equal(res.body.agents.find((a) => a.key === 'agy').enabled, false, '清单外的不该被自动加');
+    } finally {
+      process.env.HAPI_AGENTS = 'none';
+      await api.put('/api/agents/pi', { enabled: false }, admin);      // 收尾，别影响其他用例
+    }
+  });
+
+  it('探测模式（auto）：按 PATH 里的真实命令探测', async () => {
+    const { mkdtempSync, writeFileSync, chmodSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { availableAgentKeys } = await import('../src/hapi/agents.js');
+    const dir = mkdtempSync(join(tmpdir(), 'agent-bins-'));
+    for (const bin of ['claude', 'cursor-agent']) {
+      const f = join(dir, bin);
+      writeFileSync(f, '#!/bin/sh\n');
+      chmodSync(f, 0o755);
+    }
+    const savedSpec = process.env.HAPI_AGENTS;
+    const savedPath = process.env.PATH;
+    try {
+      delete process.env.HAPI_AGENTS;                                  // auto 档
+      process.env.PATH = dir;                                          // 只认这个目录
+      const keys = availableAgentKeys();
+      assert.deepEqual([...keys].sort(), ['claude', 'cursor'], 'cursor 探测的是 cursor-agent 这个命令名');
+    } finally {
+      process.env.HAPI_AGENTS = savedSpec;
+      process.env.PATH = savedPath;
+    }
   });
 });
 

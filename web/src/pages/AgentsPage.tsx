@@ -72,8 +72,8 @@ export function AgentsPage() {
         ) : null}
 
         <div className="page__hint">
-          勾选要接入的 Agent，系统会自动创建对应的 AI 用户，@ 它即可对话。
-          名字不能带空格（提及按整名匹配），用连字符代替。
+          机器上检测到的 Agent 会自动创建对应的 AI 用户，@ 它即可对话；不想用的可以随手关掉。
+          未检测到的也可以手动打开（探测偶有漏网）。名字不能带空格（提及按整名匹配），用连字符代替。
         </div>
 
         <div className="card">
@@ -150,6 +150,7 @@ function AgentRow({ agent, disabled, onChanged }: { agent: AgentInfo; disabled: 
         )}
         <div className="rule__note" id={`${rowId}-note`}>
           {agent.label}
+          {agent.available ? ' · 本机可用' : ' · 未检测到'}
           {rowError ? ` · ${rowError}` : agent.enabled && !agent.online ? ' · 暂不可用（机器离线）' : ''}
         </div>
       </div>

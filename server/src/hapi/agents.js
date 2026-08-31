@@ -1,9 +1,11 @@
 // hapi Agent → 本系统 AI 用户 的映射与联动（docs/hapi-Agent-接入方案.md §C.2）。
 //
-// 0.27.3 的现实：hub 没有「这台机器装了哪些 Agent」的接口（agent-availability 是
-// 后来主干上的新东西），所以可用性只到「配置的那台机器在不在线」这一层——
-// 机器在线 = 管理员启用的 Agent 全部可用；机器离线 = 全体停用。
-// 某个 Agent 其实没装的情形，等真正 @ 它开会话失败时按 D6 回「暂不可用」。
+// 可用性两层：机器层（配置的 runner 在不在线，来自 hub）+ Agent 层（机器上装没装
+// 这家 CLI，见 availableAgentKeys——0.27.3 的 hub 没有远程探测接口，探测是我们
+// 自己做的）。机器在线时，可用的 Agent 自动建成用户；离线全体隐身。
+// 探测漏网的（false negative）仍可手动启用，真没装的等 @ 时按 D6 回「暂不可用」。
+import { accessSync, constants } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { all, get, run, now } from '../db.js';
 import { emitAll } from '../events.js';
 import { publicUser } from '../auth.js';
@@ -13,19 +15,52 @@ import { configuredMachine, isHapiConfigured, isMachineOnline } from './client.j
 /**
  * 0.27.3 支持的全部 Agent 类型与官方显示名（shared/src/flavors.ts 的 FLAVOR_LABELS）。
  * 用户名按 D3 规则由显示名派生：空格换连字符。管理员可改名，但这是默认值。
+ * bin 是各家 CLI 的真实命令名，供本机探测（`HAPI_AGENTS=auto`）用。
+ * gemini 不在清单里：0.27.3 的 hub 对它写死拒绝启动（Google 已下线其 CLI）。
  */
 export const AGENT_FLAVORS = [
-  { key: 'claude', label: 'Claude' },
-  { key: 'codex', label: 'Codex' },
-  { key: 'gemini', label: 'Gemini' },
-  { key: 'kimi', label: 'Kimi' },
-  { key: 'copilot', label: 'Copilot' },
-  { key: 'grok', label: 'Grok Build' },
-  { key: 'cursor', label: 'Cursor' },
-  { key: 'opencode', label: 'OpenCode' },
-  { key: 'pi', label: 'Pi' },
-  { key: 'agy', label: 'Antigravity' },
+  { key: 'claude', label: 'Claude', bin: 'claude' },
+  { key: 'codex', label: 'Codex', bin: 'codex' },
+  { key: 'kimi', label: 'Kimi', bin: 'kimi' },
+  { key: 'copilot', label: 'Copilot', bin: 'copilot' },
+  { key: 'grok', label: 'Grok Build', bin: 'grok' },
+  { key: 'cursor', label: 'Cursor', bin: 'cursor-agent' },
+  { key: 'opencode', label: 'OpenCode', bin: 'opencode' },
+  { key: 'pi', label: 'Pi', bin: 'pi' },
+  { key: 'agy', label: 'Antigravity', bin: 'agy' },
 ];
+
+/**
+ * 这台机器（runner 所在机器）上有哪些 Agent 可用。
+ *
+ * `HAPI_AGENTS` 三档：
+ * - 不设 / 'auto'：在本机 PATH 里逐个找各家 CLI 命令。前提是 Loop IM 与 runner
+ *   同机同环境——本地开发正是如此；hub 侧没有可靠的远程探测（0.27.3 的
+ *   paths/exists 只认目录，配置目录残留会误报，实测 copilot/opencode 中招）。
+ * - 显式列表（如 'claude,codex'）：就这些。线上 Loop IM 跑在容器里、runner 在
+ *   宿主机，容器里探测不到宿主的命令，部署时在 .env 里写清单（装了哪些写哪些）。
+ * - 'all'：全部类型都算可用（不想探测时的开关）；'none'：一个都不自动加（测试用）。
+ */
+export function availableAgentKeys() {
+  const spec = (process.env.HAPI_AGENTS || 'auto').trim();
+  if (spec === 'all') return new Set(AGENT_FLAVORS.map((f) => f.key));
+  if (spec === 'none') return new Set();
+  if (spec && spec !== 'auto') {
+    return new Set(spec.split(',').map((x) => x.trim()).filter((x) => flavorOf(x)));
+  }
+  const dirs = (process.env.PATH || '').split(delimiter).filter(Boolean);
+  const found = new Set();
+  for (const f of AGENT_FLAVORS) {
+    for (const dir of dirs) {
+      try {
+        accessSync(join(dir, f.bin), constants.X_OK);
+        found.add(f.key);
+        break;
+      } catch { /* 这个目录没有，接着找 */ }
+    }
+  }
+  return found;
+}
 
 export const flavorOf = (key) => AGENT_FLAVORS.find((f) => f.key === key) || null;
 export const agentUserId = (key) => `ai-${key}`;
@@ -118,6 +153,18 @@ export async function syncAgentsWithHub({ fetchImpl } = {}) {
   }
   const online = isMachineOnline(machine);
 
+  // 机器上可用的 Agent **自动**建成用户（用户拍板：支持哪些就都加进去）。
+  // 只做加法：管理员手动关掉的（行在但 enabled=0）尊重其选择，不强行拉回。
+  const available = availableAgentKeys();
+  if (online) {
+    for (const key of available) {
+      if (!agentRow(key)) {
+        enableAgent(key);
+        logEvent('hapi.agent.auto_enabled', { agent: key });
+      }
+    }
+  }
+
   for (const row of enabledAgents()) {
     const user = get('SELECT * FROM users WHERE id = ?', row.user_id);
     if (!user) continue;
@@ -129,7 +176,7 @@ export async function syncAgentsWithHub({ fetchImpl } = {}) {
     }
   }
   if (!online) logEvent('hapi.sync.machine_offline', { hubError });
-  return { configured: true, machineOnline: online, machine, hubError };
+  return { configured: true, machineOnline: online, machine, hubError, available };
 }
 
 /** 管理页的完整状态：连接情况 + 每种 Agent 的启用/用户信息。 */
@@ -144,6 +191,7 @@ export async function agentsOverview({ fetchImpl } = {}) {
       label: f.label,
       defaultName: defaultAgentName(f.key),
       enabled: !!row?.enabled,
+      available: sync.available ? sync.available.has(f.key) : false,
       name: user?.name || defaultAgentName(f.key),
       userId: row?.user_id || agentUserId(f.key),
       online: !!(row?.enabled && sync.machineOnline),
