@@ -4,7 +4,7 @@
 > 把 hapi 里的 AI Agent（Claude Code / Codex / Grok 等）映射成系统里的 **AI 用户**，
 > 大家在聊天里 @ 它们干活。现有的 Aria（供应商直连 + 画像那一套）**整体退役**。
 
-最后更新：2026-08-28 · 状态：**方案评审中，未动代码**
+最后更新：2026-08-28 · 状态：**PR1（Aria 退役与清除）已完成合入**，PR2 进行中
 
 ---
 
@@ -78,7 +78,7 @@ hapi hub 提供完整的 HTTP API（客户端契约见其仓库 `docs/api/client
 | 变量 | 说明 |
 | --- | --- |
 | `HAPI_BASE_URL` | hub 地址。本地开发：自己的 hapi-server；线上：Sophie 那套 |
-| `HAPI_TOKEN` | access token。**加密落库/不进 git**，与 AI Key 同等对待 |
+| `HAPI_TOKEN` | access token。只存 `.env`，**绝不进 git**（本仓库公开） |
 | `HAPI_MACHINE_ID` | 用哪台机器（本地：Mac runner；线上：Sophie-VPS runner） |
 | `HAPI_WORKROOT` | Agent 工作目录的根，如 `~/Code/Chat/loop-im-agents`（线上按 Sophie-VPS 的目录约定） |
 
@@ -189,21 +189,21 @@ loop-im-agents/
 
 ## F. Aria 退役方案（D11）
 
-**产品层面删干净，数据层面保历史。**
+**彻底清除，不留任何痕迹**（2026-08-28 拍板：线上没人跟它聊过，不需要兼容）。
 
 | 项 | 处置 |
 | --- | --- |
-| Aria 用户（`id='ai'`） | **保留行但永久停用**（不能删行：历史消息、群成员记录都外键着它）。从联系人、拉人名单、@ 别名里全部消失；历史消息里名字头像照常显示 |
+| Aria 用户（`id='ai'`） | **连数据一起删**：启动时一次性清除它的用户行、发过的消息（各群欢迎语）、AI 私聊会话、群成员行与已读行（`db.js` 的 `purgeLegacyAi()`，幂等） |
 | 供应商直连（OpenAI/Grok/Codex endpoint）、`callProvider` | 删代码 |
-| 画像与学习（`ai_profiles`、`learnAbout`、`ai_visible` 判定） | 删代码；`ai_profiles` 表与 `messages.ai_visible` 列**留在库里不再读写**（不做删列迁移，风险大收益小） |
+| 画像与学习（`ai_profiles`、`learnAbout`、`ai_visible` 判定） | 删代码；`ai_settings` / `ai_profiles` 两张表老库里 **DROP 掉**、新库不再创建；`messages.ai_visible` 列新库不建、老库遗留列不再读写（SQLite 删列要重建整表，不值得） |
 | 静默读取开关、@全员触发开关、AI 私聊开关 | 随 `ai_settings` 一起退役 |
 | AI 管理页 | 重做为「hapi Agent 管理」：连接状态、Agent 勾选列表、测试连通性。画像二级页、统计（今日被 @）删除 |
 | 建群自动拉 Aria | 删除。新群默认没有任何 AI，管理员按需拉（D8） |
-| bootstrap 创建 Aria | 改为幂等的「存在即停用」迁移 |
+| bootstrap 创建 Aria | 删除；清库由 db.js 的 purgeLegacyAi() 负责 |
 | 相关测试（ai.test.js、issue-1、画像、@Aria e2e 等，约几十个文件） | 删除或改写为 hapi 版等价用例 |
 | README、docs/测试用例.md 的 L/M 两节 | 全量改写 |
 
-升级注意：升级后老用户会看到 Aria 从联系人里消失、群里变灰，历史聊天不受影响。
+升级注意：升级后 Aria 从联系人、群成员、历史消息里**整体消失**（它发过的欢迎语一并删除），人类之间的聊天一个字不动。
 
 ---
 

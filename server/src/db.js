@@ -25,8 +25,6 @@ db.exec(readFileSync(join(here, 'schema.sql'), 'utf8'));
 
 // 老库升级：CREATE TABLE IF NOT EXISTS 补不上新增的列，这里缺什么补什么，启动即生效。
 const MIGRATIONS = [
-  // messages.ai_visible：历史消息按当时的行为默认可见，不改动已有数据。
-  ['messages', 'ai_visible', 'ALTER TABLE messages ADD COLUMN ai_visible INTEGER NOT NULL DEFAULT 1'],
   // users.auth_version：改密码时 +1，让之前签发的 token 全部作废。
   ['users', 'auth_version', 'ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1'],
   // messages.kind：系统提示（谁加入/退出群、群名改了）与普通消息分开渲染。
@@ -136,6 +134,39 @@ function backfillAttachmentRefs() {
   return n;
 }
 backfillAttachmentRefs();
+
+/**
+ * Aria 彻底清除（2026-08-28 拍板：线上没人跟它聊过，不需要兼容，全部干掉）。
+ *
+ * 删的东西：AI 私聊会话（type='ai'）整个、Aria 发过的消息（各群的欢迎语）、
+ * 它的群成员行与已读行、users 里的那一行，以及 ai_settings / ai_profiles 两张表。
+ * 人类之间的会话与消息一个字不动。天然幂等：删空之后每次启动都查不到东西可删。
+ * 老库里遗留的 messages.ai_visible 列留在原地不再读写（SQLite 删列要重建整表，不值得）。
+ */
+export function purgeLegacyAi() {
+  db.exec('DROP TABLE IF EXISTS ai_profiles');
+  db.exec('DROP TABLE IF EXISTS ai_settings');
+  const hadUser = db.prepare("SELECT 1 AS x FROM users WHERE id = 'ai'").get();
+  const aiDms = db.prepare("SELECT id FROM conversations WHERE type = 'ai'").all();
+  if (!hadUser && aiDms.length === 0) return false;
+
+  const delMessagesReactions = db.prepare(
+    'DELETE FROM message_reactions WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?)');
+  for (const { id } of aiDms) {
+    delMessagesReactions.run(id);
+    db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(id);
+    db.prepare('DELETE FROM conversation_members WHERE conversation_id = ?').run(id);
+    db.prepare('DELETE FROM conversation_reads WHERE conversation_id = ?').run(id);
+    db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+  }
+  db.exec(`DELETE FROM message_reactions WHERE message_id IN (SELECT id FROM messages WHERE sender_id = 'ai')`);
+  db.exec(`DELETE FROM messages WHERE sender_id = 'ai'`);
+  db.exec(`DELETE FROM conversation_members WHERE user_id = 'ai'`);
+  db.exec(`DELETE FROM conversation_reads WHERE user_id = 'ai'`);
+  db.exec(`DELETE FROM users WHERE id = 'ai'`);
+  return true;
+}
+purgeLegacyAi();
 
 export const all = (sql, ...params) => db.prepare(sql).all(...params);
 export const get = (sql, ...params) => db.prepare(sql).get(...params);

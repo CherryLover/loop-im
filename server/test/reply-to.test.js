@@ -146,8 +146,8 @@ describe('被引用消息不可用时的降级', () => {
     db.db.exec('PRAGMA foreign_keys = OFF');
     try {
       db.run(
-        `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, kind, created_at)
-         VALUES ('m_orphan', ?, 'u_已经没有这个人了', '孤儿消息', '[]', 0, 'user', ?)`,
+        `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, kind, created_at)
+         VALUES ('m_orphan', ?, 'u_已经没有这个人了', '孤儿消息', '[]', 'user', ?)`,
         roomA.id, ts,
       );
     } finally {

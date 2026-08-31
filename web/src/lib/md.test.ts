@@ -391,7 +391,7 @@ describe('恶意输入仍然被转义', () => {
 describe('头像首字', () => {
   it('中文取第一个字，Aria 用两位缩写', () => {
     expect(initialOf('林悦')).toBe('林');
-    expect(initialOf('Aria')).toBe('Ar');
+    expect(initialOf('Anna')).toBe('A');  // Aria 清除后没有任何特例，一律取第一个字素
     expect(initialOf('')).toBe('?');
   });
 });

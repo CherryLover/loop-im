@@ -244,4 +244,4 @@ export function renderMarkdown(source: string): string {
  * 取「第一个字」用 truncate 而不是 slice(0, 1)：名字以 emoji 开头时 slice 只拿到半个
  * 代理对，头像里就是一个 �（见 text.ts）。
  */
-export const initialOf = (name: string) => (name === 'Aria' ? 'Ar' : truncate((name || '?').trim(), 1));
+export const initialOf = (name: string) => truncate((name || '?').trim(), 1);

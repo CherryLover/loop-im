@@ -107,7 +107,7 @@ describe('前端摘要用的是同一把尺子', () => {
 
   it('头像首字：名字以 emoji 开头时取一整颗，不是半个代理对', () => {
     expect(initialOf('林悦')).toBe('林');
-    expect(initialOf('Aria')).toBe('Ar');
+    expect(initialOf('Anna')).toBe('A');  // Aria 清除后没有任何特例，一律取第一个字素
     expect(initialOf('')).toBe('?');
     for (const [name, emoji] of SAMPLES) {
       const got = initialOf(`${emoji}小明`);

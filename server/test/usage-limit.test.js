@@ -221,20 +221,19 @@ describe("'ai' 档限流", () => {
 // ---- AI 用户自己发的消息不受限 -------------------------------------------
 
 describe('AI 用户不受限流', () => {
-  it("两代 AI 的 id 在任何档位上都豁免：退役的 'ai' 与 hapi Agent 的 'ai-<agent>'", () => {
+  it("hapi Agent 的 'ai-<agent>' 在任何档位上都豁免", () => {
     const restore = limit.configureUsageLimit('message', { max: 1, windowMs: 60_000 });
     try {
-      for (const aiId of ['ai', 'ai-claude']) {
-        for (let i = 0; i < 50; i += 1) limit.consumeQuota('message', aiId);
-        assert.equal(limit.quotaState('message', aiId).allowed, true, `${aiId} 不该被自己的额度挡住`);
-        assert.equal(limit.quotaState('ai', aiId).allowed, true);
-      }
+      for (let i = 0; i < 50; i += 1) limit.consumeQuota('message', 'ai-claude');
+      assert.equal(limit.quotaState('message', 'ai-claude').allowed, true, '不该被自己的额度挡住');
+      assert.equal(limit.quotaState('ai', 'ai-claude').allowed, true);
       // 同一时刻普通用户是会被挡住的，说明豁免确实是针对 AI 而不是限流没生效。
       limit.consumeQuota('message', 'u_lin');
       assert.equal(limit.quotaState('message', 'u_lin').allowed, false);
-      // 豁免认的是「'ai' 本人或 'ai-' 前缀」，不是「id 里带 ai」——普通用户沾不上光。
+      // 豁免只认 'ai-' 前缀，不是「id 里带 ai」——普通用户沾不上光；
+      // 老 Aria 的裸 'ai' 已随清除一起失效。
       assert.equal(limit.isInternalSender('aid'), false);
-      assert.equal(limit.isInternalSender('ai'), true);
+      assert.equal(limit.isInternalSender('ai'), false);
       assert.equal(limit.isInternalSender('ai-claude'), true);
     } finally {
       restore();

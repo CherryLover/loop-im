@@ -64,9 +64,9 @@ const bucketKey = (action, userId) => `${action}:${userId}`;
  * AI 用户自己发的消息走服务端内部路径，压根不经过这些路由，正常情况下碰不到限流。
  * 这里再显式豁免一次，是为了万一将来有人给 AI 用户接上一条 HTTP 出口，也不会出现
  * 「用户把额度用完了，AI 就哑了」——AI 的回复是系统行为，不该算进任何人的额度。
- * 覆盖两代 AI 的 id 约定：退役的 Aria（'ai'）与 hapi Agent 用户（'ai-<agent>'）。
+ * id 约定见 docs/hapi-Agent-接入方案.md：hapi Agent 用户一律 'ai-<agent>'。
  */
-export const isInternalSender = (userId) => userId === 'ai' || String(userId || '').startsWith('ai-');
+export const isInternalSender = (userId) => String(userId || '').startsWith('ai-');
 
 /** 取出窗口内还有效的那些时间戳，顺手把过期的丢掉（窗口自然滑动，不会永久锁死）。 */
 function hits(action, userId, now) {

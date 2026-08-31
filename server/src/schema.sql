@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   email         TEXT NOT NULL UNIQUE,
   dept          TEXT NOT NULL DEFAULT '成员',
   role          TEXT NOT NULL DEFAULT 'member',   -- admin | member | ai
-  password_hash TEXT,                             -- NULL for the AI account
+  password_hash TEXT,                             -- AI 用户（role='ai'）无密码，为 NULL
   avatar_url    TEXT,
   auth_version  INTEGER NOT NULL DEFAULT 1,       -- 改密码时递增，之前签发的 token 立即失效
   disabled_at   INTEGER,                          -- 账号停用时刻；NULL = 正常。停用不删数据
@@ -50,7 +50,6 @@ CREATE TABLE IF NOT EXISTS messages (
   sender_id       TEXT NOT NULL REFERENCES users(id),
   body            TEXT NOT NULL,                  -- Markdown
   mentions        TEXT NOT NULL DEFAULT '[]',     -- JSON array of user ids, 'all' for @全员
-  ai_visible      INTEGER NOT NULL DEFAULT 1,     -- 发出时 AI 是否被允许读到这条消息
   kind            TEXT NOT NULL DEFAULT 'user',   -- user | system（成员变动等系统提示）
   reply_to        TEXT,                           -- 引用回复指向的原消息 id；不设外键，原消息没了要能降级显示
   created_at      INTEGER NOT NULL
@@ -118,5 +117,6 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 );
 
--- 退役的 Aria 留下的两张表（ai_settings / ai_profiles）不再创建：新库用不上，
--- 老库里的那两张原样保留、不再读写（见 docs/hapi-Agent-接入方案.md §F）。
+-- 退役的 Aria 不留任何痕迹：ai_settings / ai_profiles 两张表不再创建，
+-- 老库里的连同 Aria 的用户行、消息、会话由 db.js 的 purgeLegacyAi() 一次性清除
+--（用户拍板不需要兼容，见 docs/hapi-Agent-接入方案.md §F）。

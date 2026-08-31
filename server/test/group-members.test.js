@@ -174,22 +174,12 @@ describe('退出群聊', () => {
   });
 });
 
-describe('消息不进 AI 学习', () => {
-  it('系统提示的 ai_visible 恒为 0', async () => {
-    const room = await freshGroup('系统提示不学');
-    await addMembers(room.id, [zhou.id], adminToken);
+describe('系统提示', () => {
+  it('成员变动留下 system 标记的系统提示，与普通消息分开', async () => {
+    const room = await freshGroup('系统提示');
+    await removeMember(room.id, chen.id, adminToken);
     const { all } = await import('../src/db.js');
-    const rows = all("SELECT ai_visible FROM messages WHERE conversation_id = ? AND kind = 'system'", room.id);
-    assert.ok(rows.length > 0);
-    assert.ok(rows.every((r) => r.ai_visible === 0), '系统提示不应进入 AI 的可读范围');
-  });
-
-  it('普通消息的 ai_visible 也恒为 0（Aria 退役后写库时一律定档为 0）', async () => {
-    const room = await freshGroup('普通消息不学');
-    await api.post(`/api/conversations/${room.id}/messages`, { body: '这条不该进 AI 学习' }, chenToken);
-    const raw = (await messagesOf(room.id, adminToken)).at(-1);
-    assert.equal(raw.body, '这条不该进 AI 学习');
-    const { get } = await import('../src/db.js');
-    assert.equal(get('SELECT ai_visible FROM messages WHERE id = ?', raw.id).ai_visible, 0);
+    const rows = all("SELECT kind FROM messages WHERE conversation_id = ? AND kind = 'system'", room.id);
+    assert.ok(rows.length > 0, '成员变动应该留下系统提示');
   });
 });

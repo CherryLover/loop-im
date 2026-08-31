@@ -4,21 +4,6 @@ import bcrypt from 'bcryptjs';
 import { get, run, now, uid } from './db.js';
 import { isEncryptionConfigured } from './secret-box.js';
 
-// 退役的 Aria 在老库里的固定 id。新装的库不会再有这一行。
-const LEGACY_AI_ID = 'ai';
-
-/**
- * Aria 退役（docs/hapi-Agent-接入方案.md §F）：老库里它那一行**保留但永久停用**——
- * 历史消息、群成员记录都外键着它，删行会把历史一起带走。停用后它自然从联系人
- * 列表、拉人名单、在线统计里消失，历史消息里名字头像照常显示。幂等，每次启动跑。
- */
-export function retireLegacyAi() {
-  const existing = get('SELECT * FROM users WHERE id = ?', LEGACY_AI_ID);
-  if (!existing || existing.disabled_at) return false;
-  run('UPDATE users SET disabled_at = ?, last_seen_at = 0 WHERE id = ?', now(), LEGACY_AI_ID);
-  return true;
-}
-
 export function createAccount({ name, email, dept = '成员', role = 'member', password }) {
   const id = uid('u');
   run(
@@ -63,13 +48,12 @@ export function bootstrapDemoUsers(spec = process.env.DEMO_USERS, password = pro
   return created;
 }
 
-/** 启动时跑一次：退役老 AI + 管理员 + 可选的本地联系人。 */
+/** 启动时跑一次：管理员 + 可选的本地联系人（老库里的 Aria 数据由 db.js 的 purgeLegacyAi 清除）。 */
 export function bootstrap({ log = () => {} } = {}) {
   // 只告警不拦启动：现有部署没配这个变量，不能因为加了加密就起不来。
   if (!isEncryptionConfigured() && process.env.NODE_ENV === 'production') {
     log('⚠ 未设置 ENCRYPTION_KEY，需要加密落库的凭据（如后续的 hapi token）将以明文存库（见 server/.env.example）');
   }
-  if (retireLegacyAi()) log('已停用退役的系统 AI（Aria），历史消息不受影响');
   const admin = bootstrapAdmin();
   if (admin.created) log(`已创建管理员 ${admin.user.email}`);
   else if (admin.reason === 'missing-config') log('未配置 ADMIN_EMAIL / ADMIN_PASSWORD，跳过管理员初始化');

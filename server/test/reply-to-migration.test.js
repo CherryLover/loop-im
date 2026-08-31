@@ -2,7 +2,7 @@
 // 表机制（缺什么列补什么列），不是把 schema.sql 改一改就算数 —— CREATE TABLE
 // IF NOT EXISTS 对已经存在的表什么也不做。
 //
-// 这里造一个「升级前」的库：messages 只有最早那几列（连 ai_visible、kind 都还没有），
+// 这里造一个「升级前」的库：messages 只有最早那几列（连 kind 都还没有），
 // 里面已经有数据。然后在子进程里以它为 DATA_DIR 引一次 db.js，看列补上了没有、
 // 老数据还在不在。必须用子进程：db.js 在模块顶层就打开了库，同一个进程里换不了 DATA_DIR。
 import './helpers.js';
@@ -49,7 +49,7 @@ before(async () => {
       conversation_id TEXT NOT NULL, user_id TEXT NOT NULL, joined_at INTEGER NOT NULL,
       PRIMARY KEY (conversation_id, user_id)
     );
-    -- 升级前的 messages：没有 ai_visible、没有 kind、更没有 reply_to
+    -- 升级前的 messages：没有 kind、更没有 reply_to
     CREATE TABLE messages (
       id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, sender_id TEXT NOT NULL,
       body TEXT NOT NULL, mentions TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL
@@ -75,9 +75,10 @@ describe('messages.reply_to 的库迁移', () => {
     const { columns, rows } = inspect(dir, COLUMNS_AND_ROWS);
 
     assert.ok(columns.includes('reply_to'), '应当补上 reply_to 列');
-    // 同一套机制补的另外两列也顺带确认一下，说明迁移链是整条跑通的
-    assert.ok(columns.includes('ai_visible'));
+    // 同一套机制补的另一列也顺带确认一下，说明迁移链是整条跑通的
+    // （ai_visible 已随 Aria 清除不再补列，老库里已有的留在原地不再读写）
     assert.ok(columns.includes('kind'));
+    assert.ok(!columns.includes('ai_visible'), 'ai_visible 不该再被迁移补出来');
 
     assert.equal(rows.length, 2, '升级不能丢数据');
     assert.deepEqual(rows.map((r) => r.id), ['m_old_1', 'm_old_2']);

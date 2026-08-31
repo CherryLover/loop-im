@@ -222,8 +222,7 @@ export function serializeMessage(row, sender, reactions = []) {
     body: row.body,
     mentions: JSON.parse(row.mentions || '[]'),
     createdAt: row.created_at,
-    // 兼容两代 AI：退役的 Aria（sender_id 固定 'ai'）与将来的 hapi Agent 用户（role='ai'）。
-    isAI: sender?.role === 'ai' || row.sender_id === 'ai',
+    isAI: sender?.role === 'ai',
     kind: row.kind || 'user',
     replyTo: row.reply_to || null,               // 被引用消息的 id，前端据此跳转
     quote: quoteOf(row.reply_to, row.conversation_id),
@@ -233,13 +232,13 @@ export function serializeMessage(row, sender, reactions = []) {
 
 /**
  * 成员变动、改群名之类的系统提示。挂在操作者名下但标成 system：
- * 不能借任何成员的口说，也不该被 AI 当成对话内容学习，所以 ai_visible 一律为 0。
+ * 不能借任何成员的口说。
  */
 function insertSystemMessage(conversationId, actorId, body) {
   const id = uid('m');
   run(
-    `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, kind, created_at)
-     VALUES (?, ?, ?, ?, '[]', 0, 'system', ?)`,
+    `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, kind, created_at)
+     VALUES (?, ?, ?, ?, '[]', 'system', ?)`,
     id, conversationId, actorId, body, now(),
   );
   const row = get('SELECT * FROM messages WHERE id = ?', id);
@@ -605,8 +604,7 @@ router.post('/:id/messages', (req, res) => {
   if (!state.allowed) return rejectOverQuota(res, 'message', state, { userId: req.user.id, route: req.originalUrl });
 
   const id = uid('m');
-  // ai_visible 列已随 Aria 退役停用（列保留，统一写 0），见 docs/hapi-Agent-接入方案.md §F。
-  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, reply_to, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)',
+  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     id, convo.id, req.user.id, body, JSON.stringify(mentions), replyTo, now());
   consumeQuota('message', req.user.id);
   // 正文里引用到的附件挂到这个会话上：附件的下载鉴权就是查这张关联表（见 attachment-access.js）。

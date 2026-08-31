@@ -118,8 +118,8 @@ describe('@ 我的未读计数 · id 互为前缀不误算', () => {
     }
     const msg = (id, sender, mentions) =>
       db.run(
-        `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, kind, created_at)
-         VALUES (?, 'c_prefix', ?, '正文', ?, 0, 'user', ?)`,
+        `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, kind, created_at)
+         VALUES (?, 'c_prefix', ?, '正文', ?, 'user', ?)`,
         id, sender, JSON.stringify(mentions), ts,
       );
     msg('m_p1', 'u_12', ['u_12']);          // 只 @ 了 u_12
@@ -143,8 +143,8 @@ describe('@ 我的未读计数 · id 互为前缀不误算', () => {
   it('id 里的下划线不当 LIKE 通配符用', () => {
     // 不转义时 "u_1" 这个 LIKE 模式会把 ["uX1"] 也匹配上。
     db.run(
-      `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, kind, created_at)
-       VALUES ('m_p4', 'c_prefix', 'u_12', '正文', ?, 0, 'user', ?)`,
+      `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, kind, created_at)
+       VALUES ('m_p4', 'c_prefix', 'u_12', '正文', ?, 'user', ?)`,
       JSON.stringify(['uX1']), Date.now(),
     );
     assert.equal(mentionUnreadCount('c_prefix', 'u_1'), 1, '@uX1 不该算到 u_1 头上');
@@ -153,8 +153,8 @@ describe('@ 我的未读计数 · id 互为前缀不误算', () => {
 
   it('@全员 计入每个人，唯独不计发送者自己', () => {
     db.run(
-      `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, ai_visible, kind, created_at)
-       VALUES ('m_p5', 'c_prefix', 'u_12', '正文', ?, 0, 'user', ?)`,
+      `INSERT INTO messages (id, conversation_id, sender_id, body, mentions, kind, created_at)
+       VALUES ('m_p5', 'c_prefix', 'u_12', '正文', ?, 'user', ?)`,
       JSON.stringify(['all']), Date.now(),
     );
     assert.equal(mentionUnreadCount('c_prefix', 'u_1'), 2);

@@ -95,8 +95,9 @@ DEMO_PASSWORD=只在本地用的密码
   触发时提示里写明几点几分可以再试，限流日志一个窗口只记一条且不含正文。
 
 **AI 用户（改造中）**
-- 原内置 AI「Aria」已整体退役（2026-08）：供应商直连、画像学习、静默读取、AI 管理后台全部下线；
-  它的历史消息照常可读，账号已永久停用并从联系人里消失。
+- 原内置 AI「Aria」已整体退役并**彻底清除**（2026-08）：供应商直连、画像学习、静默读取、
+  AI 管理后台全部下线，老库里它的账号、消息与 AI 私聊会话由启动逻辑一次性删除（线上从未有人
+  与它对话，拍板不留兼容）。
 - 下一步接入自托管 [hapi](https://github.com/tiann/hapi)：hub 里的每个 Agent（Claude Code / Codex / Grok 等）
   映射为系统里的一个 AI 用户，@ 它即可让真 Agent 干活。方案与分期见
   [docs/hapi-Agent-接入方案.md](docs/hapi-Agent-接入方案.md)。
@@ -183,14 +184,15 @@ docker run -d -p 4000:4000 \
   分 PR1（外壳）/ PR2（Web Push）两步落地，真机验收清单与已知平台限制都在方案里。
 - 主题「跟随系统」修复（2026-08-26）：旧版首次加载会把系统颜色当成手动选择存下来，
   之后系统切深浅色应用不再跟随；现在没手动选过就实时跟随，手动切换过才记忆。
-- Aria 退役（2026-08-28）：内置 AI 及其供应商直连、画像、静默读取、AI 管理后台整体下线，
-  历史消息保留；系统转向 hapi Agent 接入（见 [docs/hapi-Agent-接入方案.md](docs/hapi-Agent-接入方案.md)）。
-  升级后 Aria 从联系人与群成员名单里消失，属预期行为。
+- Aria 退役并彻底清除（2026-08-28）：内置 AI 及其供应商直连、画像、静默读取、AI 管理后台
+  整体下线，老库里它的账号与消息一并清除；系统转向 hapi Agent 接入
+  （见 [docs/hapi-Agent-接入方案.md](docs/hapi-Agent-接入方案.md)）。升级后 Aria 从联系人、
+  群成员与历史消息里消失，属预期行为。
 
 ## 测试与 CI
 
 ```bash
-npm run test          # 后端 896 条 + 前端 923 条（约 1 分钟）
+npm run test          # 后端 898 条 + 前端 923 条（约 1 分钟）
 npm run test:server   # node:test，跑在临时 SQLite 库上，不碰 server/data
 npm run test:web      # vitest（jsdom + testing-library）
 npm run test:e2e      # 构建前端后用 Playwright 跑 13 条真实浏览器冒烟
@@ -201,7 +203,7 @@ npm run test:deployed # 对跑起来的部署再跑 20 条真实浏览器验证�
 
 | 层次 | 用例 | 覆盖内容 |
 | --- | --- | --- |
-| 后端 `server/test` | 896（55 文件） | 登录 / 权限 / 限流 / 会话与群管理 / 消息与 @ 机制 / 已读回执 / 表情回应 / 引用回复 / 搜索 / 附件安全（嗅探、鉴权、Range）/ 对象存储 / Web Push（加密、订阅、该不该推）/ 安全默认值与日志脱敏 |
+| 后端 `server/test` | 898（56 文件） | 登录 / 权限 / 限流 / 会话与群管理 / 消息与 @ 机制 / 已读回执 / 表情回应 / 引用回复 / 搜索 / 附件安全（嗅探、鉴权、Range）/ 对象存储 / Web Push（加密、订阅、该不该推）/ 安全默认值与日志脱敏 |
 | 前端 `web/src/**/*.test.*` | 923（76 文件） | Markdown 渲染与 XSS 转义 / 乐观发送与合并排序 / 输入框与 @ 提及 / 通知状态机 / 推送订阅与 sw.js 源码约束 / 主题跟随系统与手动记忆 / 各组件交互 |
 | 端到端 `e2e` | 13 | 登录 → 建群 → @提及全链路、移动端布局与跳转、Toast 不挡按钮、深色主题、主题跟随系统 |
 | 部署后 `e2e/deployed` | 20 | 对真实部署跑：附件、已读回执、搜索、表情回应、个人资料 |
@@ -215,7 +217,7 @@ GitHub Actions（`.github/workflows/ci.yml`）在每次 push 与 PR 上跑三个
 ```
 server/                Express + node:sqlite 后端
   src/schema.sql        表结构（users / conversations / messages / attachments / ai_settings / ai_profiles）
-  src/bootstrap.js      账号初始化：.env 里的管理员与本地联系人（并停用退役的老 AI）
+  src/bootstrap.js      账号初始化：.env 里的管理员与本地联系人
   src/auth.js           bcrypt + JWT（15 天）、在线判定
   src/mentions.js       @提及 解析（@某人 / @全员，最长匹配、跳过邮箱）
   src/attachments.js    附件类型判定（magic number 嗅探）与 /uploads 回源响应头策略
