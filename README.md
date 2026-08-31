@@ -198,7 +198,7 @@ docker run -d -p 4000:4000 \
 ## 测试与 CI
 
 ```bash
-npm run test          # 后端 930 条 + 前端 929 条（约 1 分钟）
+npm run test          # 后端 934 条 + 前端 929 条（约 1 分钟）
 npm run test:server   # node:test，跑在临时 SQLite 库上，不碰 server/data
 npm run test:web      # vitest（jsdom + testing-library）
 npm run test:e2e      # 构建前端后用 Playwright 跑 13 条真实浏览器冒烟
@@ -209,7 +209,7 @@ npm run test:deployed # 对跑起来的部署再跑 20 条真实浏览器验证�
 
 | 层次 | 用例 | 覆盖内容 |
 | --- | --- | --- |
-| 后端 `server/test` | 930（59 文件） | 登录 / 权限 / 限流 / 会话与群管理 / 消息与 @ 机制 / 已读回执 / 表情回应 / 引用回复 / 搜索 / 附件安全（嗅探、鉴权、Range）/ 对象存储 / Web Push（加密、订阅、该不该推）/ 安全默认值与日志脱敏 |
+| 后端 `server/test` | 934（59 文件） | 登录 / 权限 / 限流 / 会话与群管理 / 消息与 @ 机制 / 已读回执 / 表情回应 / 引用回复 / 搜索 / 附件安全（嗅探、鉴权、Range）/ 对象存储 / Web Push（加密、订阅、该不该推）/ 安全默认值与日志脱敏 |
 | 前端 `web/src/**/*.test.*` | 929（77 文件） | Markdown 渲染与 XSS 转义 / 乐观发送与合并排序 / 输入框与 @ 提及 / 通知状态机 / 推送订阅与 sw.js 源码约束 / 主题跟随系统与手动记忆 / 各组件交互 |
 | 端到端 `e2e` | 13 | 登录 → 建群 → @提及全链路、移动端布局与跳转、Toast 不挡按钮、深色主题、主题跟随系统 |
 | 部署后 `e2e/deployed` | 20 | 对真实部署跑：附件、已读回执、搜索、表情回应、个人资料 |

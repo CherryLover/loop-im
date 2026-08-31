@@ -47,6 +47,16 @@ describe('Aria 彻底清除', () => {
   it('老库里的 Aria 用户、AI 私聊、欢迎语、成员行全被删掉，人类数据原样', async () => {
     const human = await member('清除测试甲');
     seedLegacyAria(human.id);
+    // 同时造一个 hapi Agent 的私聊：它也是 type='ai'，但成员是 ai-claude 不是老 Aria，
+    // 清除绝不能殃及（真实环境踩过：按类型一刀切，重启就把 Agent 的聊天记录删了）。
+    const bot = await member('Claude-Code', { role: 'ai' });
+    const ts = Date.now();
+    db.run(`INSERT INTO conversations (id, type, title, created_by, created_at) VALUES ('c_botdm', 'ai', NULL, ?, ?)`, human.id, ts);
+    for (const uid of [human.id, bot.id]) {
+      db.run(`INSERT INTO conversation_members (conversation_id, user_id, joined_at) VALUES ('c_botdm', ?, ?)`, uid, ts);
+    }
+    db.run(`INSERT INTO messages (id, conversation_id, sender_id, body, mentions, created_at)
+            VALUES ('m_bot1', 'c_botdm', ?, '这条要留住', '[]', ?)`, bot.id, ts);
 
     assert.equal(purgeLegacyAi(), true, '有东西可删时应返回 true');
 
@@ -59,6 +69,10 @@ describe('Aria 彻底清除', () => {
     assert.equal(db.get(`SELECT count(*) AS n FROM conversation_reads WHERE user_id = 'ai'`).n, 0);
     assert.equal(db.get(`SELECT count(*) AS n FROM message_reactions WHERE message_id = 'm_hello'`).n, 0,
       'Aria 消息上的表情回应要跟着消息一起走');
+
+    // hapi Agent 的私聊与消息原封不动
+    assert.equal(db.get(`SELECT 1 AS x FROM conversations WHERE id = 'c_botdm'`).x, 1, 'Agent 私聊不该被清');
+    assert.equal(db.get(`SELECT body FROM messages WHERE id = 'm_bot1'`).body, '这条要留住');
 
     // 人类的群、消息、回应一个不少
     assert.equal(db.get(`SELECT 1 AS x FROM conversations WHERE id = 'c_grp'`).x, 1);

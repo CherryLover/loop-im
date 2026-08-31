@@ -149,7 +149,7 @@ backfillAttachmentRefs();
 /**
  * Aria 彻底清除（2026-08-28 拍板：线上没人跟它聊过，不需要兼容，全部干掉）。
  *
- * 删的东西：AI 私聊会话（type='ai'）整个、Aria 发过的消息（各群的欢迎语）、
+ * 删的东西：老 Aria 的私聊会话（成员含 id='ai' 的那些）、它发过的消息（各群的欢迎语）、
  * 它的群成员行与已读行、users 里的那一行，以及 ai_settings / ai_profiles 两张表。
  * 人类之间的会话与消息一个字不动。天然幂等：删空之后每次启动都查不到东西可删。
  * 老库里遗留的 messages.ai_visible 列留在原地不再读写（SQLite 删列要重建整表，不值得）。
@@ -158,7 +158,12 @@ export function purgeLegacyAi() {
   db.exec('DROP TABLE IF EXISTS ai_profiles');
   db.exec('DROP TABLE IF EXISTS ai_settings');
   const hadUser = db.prepare("SELECT 1 AS x FROM users WHERE id = 'ai'").get();
-  const aiDms = db.prepare("SELECT id FROM conversations WHERE type = 'ai'").all();
+  // 只清「成员里有老 Aria（id='ai'）」的 AI 私聊。type='ai' 这一档现在也承载
+  // hapi Agent（ai-<agent>）的私聊，按类型一刀切会把新会话连着聊天记录一起误删
+  //（2026-08-31 真实环境踩到：重启一次，Claude 的私聊没了）。
+  const aiDms = db.prepare(`SELECT DISTINCT c.id FROM conversations c
+                            JOIN conversation_members m ON m.conversation_id = c.id
+                            WHERE c.type = 'ai' AND m.user_id = 'ai'`).all();
   if (!hadUser && aiDms.length === 0) return false;
 
   const delMessagesReactions = db.prepare(

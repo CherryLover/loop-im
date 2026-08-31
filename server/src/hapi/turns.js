@@ -110,6 +110,22 @@ function originPrefix(convo, senderName) {
 
 // ---- 会话保活（§C.3：判活 → resume → spawn） -----------------------------
 
+/**
+ * spawn/resume 返回 id 只代表「hub 受理了」：runner 上的 Agent 进程要几秒才起来，
+ * 期间会话是 inactive，消息发过去会被 hub 以 409 拒掉（真实环境实测踩到）。
+ * 所以起完要轮询到 active 再发。
+ */
+async function waitActive(sessionId, { timeoutMs = 60_000 } = {}) {
+  const intervalMs = Number(process.env.HAPI_ACTIVE_POLL_MS || 1000);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const s = await session(sessionId);
+    if (s?.active) return true;
+    if (Date.now() > deadline) return false;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 async function ensureSession(key) {
   const row = agentRow(key);
   let isNew = false;
@@ -134,6 +150,7 @@ async function ensureSession(key) {
     isNew = true;
   }
   if (sessionId !== row?.session_id) setAgentSession(key, sessionId);
+  if (!(await waitActive(sessionId))) throw new Error(`session ${sessionId} not active in time`);
   return { sessionId, isNew };
 }
 
@@ -156,6 +173,11 @@ function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents }) {
       resolve(outcome);
     };
     const armQuiet = () => {
+      // 只在**从没见过 thinking 信号**时才用「安静几秒算结束」的兜底。
+      // 见过 thinking=true 就以 thinking=false 为准：Agent 干活前常先说一句
+      //「我来看一下…」，随后跑几十秒工具——这时安静计时器一响，就把中场白
+      // 当成最终回复贴出去了（真实环境踩到）。
+      if (started) return;
       clearTimeout(quietTimer);
       quietTimer = setTimeout(() => finish({ kind: 'done', text: lastText }), quietMs);
     };
@@ -174,7 +196,7 @@ function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents }) {
           const thinking = event.data?.thinking;
           if (thinking === true) {
             started = true;
-            clearTimeout(quietTimer);                      // 还在干活，别让安静计时器提前收工
+            clearTimeout(quietTimer);                      // 从此只认 thinking 翻转，安静兜底退场
           } else if (thinking === false && started) {
             finish({ kind: 'done', text: lastText });
           }
@@ -239,7 +261,15 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
         const waiter = wait({ sessionId: ensured.sessionId, timeoutMs, quietMs });
         await waiter.ready;
         try {
-          await send(ensured.sessionId, text);
+          try {
+            await send(ensured.sessionId, text);
+          } catch (err) {
+            // 竞态兜底：active 轮询和真正可收消息之间仍可能差一口气，409 就再等一轮重发一次。
+            if (err.status !== 409) throw err;
+            logWarn('hapi.turn.send_409_retry', { agent: target.key });
+            await waitActive(ensured.sessionId, { timeoutMs: 30_000 });
+            await send(ensured.sessionId, text);
+          }
         } catch (err) {
           logWarn('hapi.turn.send_failed', { agent: target.key, detail: String(err.message || err) });
           say(AGENT_UNAVAILABLE(target.name));

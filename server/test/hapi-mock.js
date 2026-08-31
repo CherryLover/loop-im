@@ -40,6 +40,11 @@ export async function startMockHub({ accessToken = 'test-access-token' } = {}) {
       const spawn = url.pathname.match(/^\/api\/machines\/([^/]+)\/spawn$/);
       if (req.method === 'POST' && spawn) {
         state.lastSpawn = { machineId: spawn[1], ...body };
+        // 真 hub 受理 spawn 后 Agent 进程要几秒才 active；mock 默认立刻 active，
+        // 想模拟启动慢的用例自己把 sessions 里那行改成 inactive 再定时翻回来。
+        if (state.spawnResult?.type === 'success' && !state.sessions.has(state.spawnResult.sessionId)) {
+          state.sessions.set(state.spawnResult.sessionId, { id: state.spawnResult.sessionId, active: true, thinking: false });
+        }
         return json(200, state.spawnResult);
       }
       const msgs = url.pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/);
@@ -49,7 +54,11 @@ export async function startMockHub({ accessToken = 'test-access-token' } = {}) {
         return json(200, { ok: true });
       }
       const resume = url.pathname.match(/^\/api\/sessions\/([^/]+)\/resume$/);
-      if (resume && req.method === 'POST') return json(200, { type: 'success', sessionId: resume[1] });
+      if (resume && req.method === 'POST') {
+        const sess = state.sessions.get(resume[1]);
+        if (sess) sess.active = true;                     // resume 成功即恢复 active（对齐真 hub）
+        return json(200, { type: 'success', sessionId: resume[1] });
+      }
       const sess = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
       if (sess && req.method === 'GET') {
         const s = state.sessions.get(sess[1]);
