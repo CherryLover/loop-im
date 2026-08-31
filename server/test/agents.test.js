@@ -171,6 +171,24 @@ describe('Agent 管理 · 自动接入（机器支持哪些就都加进去）', 
   });
 });
 
+describe('Agent 管理 · 工作目录人设文件', () => {
+  it('启用时自动铺 CLAUDE.md / AGENTS.md；已有内容绝不覆盖', async () => {
+    const { readFileSync, writeFileSync, rmSync, existsSync } = await import('node:fs');
+    rmSync('/tmp/loop-agents/cursor', { recursive: true, force: true });
+    await api.put('/api/agents/cursor', { enabled: true }, admin);
+    assert.ok(existsSync('/tmp/loop-agents/cursor/CLAUDE.md'), 'Claude 系认 CLAUDE.md');
+    assert.ok(existsSync('/tmp/loop-agents/cursor/AGENTS.md'), 'Codex 系认 AGENTS.md');
+    assert.ok(readFileSync('/tmp/loop-agents/cursor/CLAUDE.md', 'utf8').includes('隐私红线'), '守则里要有隐私红线');
+
+    // 用户改过的内容是它的地盘，重新启用不许覆盖
+    writeFileSync('/tmp/loop-agents/cursor/CLAUDE.md', '# 我自己改过的人设\n');
+    await api.put('/api/agents/cursor', { enabled: false }, admin);
+    await api.put('/api/agents/cursor', { enabled: true }, admin);
+    assert.equal(readFileSync('/tmp/loop-agents/cursor/CLAUDE.md', 'utf8'), '# 我自己改过的人设\n');
+    await api.put('/api/agents/cursor', { enabled: false }, admin);
+  });
+});
+
 describe('Agent 管理 · 未配置时的降级', () => {
   it('清掉配置 → configured=false、不能启用、测试连通性给出指引', async () => {
     const saved = process.env.HAPI_BASE_URL;

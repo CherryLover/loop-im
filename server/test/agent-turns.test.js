@@ -57,9 +57,10 @@ beforeEach(() => {
 });
 
 describe('群聊 @ 触发', () => {
-  it('@Claude-Code → 开会话（目录/agent/yolo 都对）→ 消息原样转发（只带署名与一次性开场白）→ 回复贴回群里', async () => {
+  it('@Claude-Code → 开会话（目录/agent/yolo 都对）→ 消息原样转发（第一条也只有署名+原文）→ 回复贴回群里', async () => {
     // 先铺两条普通聊天：它们**不该**被拼进递话（上下文由 hapi 会话自己延续，
     // 没被 @ 的闲聊本来就不是说给 Agent 的——参照 HapiKmp：只发这条消息）。
+    // 人设/规矩在工作目录的 CLAUDE.md 里（启用时自动铺设），会话内容零注入。
     await api.post(`/api/conversations/${room.id}/messages`, { body: '回归测试只剩一天了' }, admin);
     await api.post(`/api/conversations/${room.id}/messages`, { body: '接口还有两项没完成' }, chenToken);
     const send = await api.post(`/api/conversations/${room.id}/messages`,
@@ -70,12 +71,8 @@ describe('群聊 @ 触发', () => {
     // hub 侧收到 spawn（第一次没有存过会话）+ 消息
     await waitFor(() => hub.state.lastMessage);
     assert.deepEqual(hub.state.lastSpawn, { machineId: 'm_1', directory: '/tmp/loop-agents/claude', agent: 'claude', yolo: true });
-    const delivered = hub.state.lastMessage.text;
-    assert.ok(delivered.includes('你是团队 IM「Loop IM」里的成员「Claude-Code」'), '新会话要带一次性开场白');
-    assert.ok(delivered.includes('群聊「发版讨论」'), '开场白里说清对应哪个群');
-    assert.ok(delivered.endsWith('陈子航：@Claude-Code 帮我看看 CI 为什么红了'), '正文只有署名 + 原文');
-    assert.ok(!delivered.includes('回归测试只剩一天了') && !delivered.includes('接口还有两项没完成'),
-      '此前的闲聊不拼进去——上下文由 hapi 会话在底层携带');
+    assert.equal(hub.state.lastMessage.text, '陈子航：@Claude-Code 帮我看看 CI 为什么红了',
+      '第一条也是「署名：原文」，没有开场白、没有上下文拼接');
 
     pushTurn('s_claude_1', '看完了：红在 lint，`no-unused-vars` 两处。');
     const reply = await waitFor(() => lastAgentMessage(room.id, chenToken));
@@ -157,8 +154,7 @@ describe('Agent 私聊', () => {
     await api.post(`/api/conversations/${dm.id}/messages`, { body: '帮我总结今天的排期' }, chenToken);
     await waitFor(() => hub.state.lastMessage);
     assert.equal(hub.state.lastMessage.sessionId, 's_claude_dm', '私聊有自己的会话，不和群混');
-    assert.ok(hub.state.lastMessage.text.includes('一对一私聊'), '新私聊会话带一次开场白');
-    assert.ok(hub.state.lastMessage.text.endsWith('帮我总结今天的排期'), '私聊原文直达，连署名都不加');
+    assert.equal(hub.state.lastMessage.text, '帮我总结今天的排期', '私聊原文直达：不加署名、不加开场白');
 
     pushTurn('s_claude_dm', '排期总结：……');
     await waitFor(async () => (await lastAgentMessage(dm.id, chenToken))?.body.includes('排期总结'));

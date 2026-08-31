@@ -4,13 +4,13 @@
 // 这家 CLI，见 availableAgentKeys——0.27.3 的 hub 没有远程探测接口，探测是我们
 // 自己做的）。机器在线时，可用的 Agent 自动建成用户；离线全体隐身。
 // 探测漏网的（false negative）仍可手动启用，真没装的等 @ 时按 D6 回「暂不可用」。
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { all, get, run, now } from '../db.js';
 import { emitAll } from '../events.js';
 import { publicUser } from '../auth.js';
 import { logEvent, logWarn } from '../log.js';
-import { configuredMachine, isHapiConfigured, isMachineOnline } from './client.js';
+import { configuredMachine, hapiConfig, isHapiConfigured, isMachineOnline } from './client.js';
 
 /**
  * 0.27.3 支持的全部 Agent 类型与官方显示名（shared/src/flavors.ts 的 FLAVOR_LABELS）。
@@ -71,6 +71,49 @@ export const isValidAgentName = (name) =>
   typeof name === 'string' && name.trim().length > 0 && name.trim().length <= 32 && !/\s/.test(name.trim());
 
 /**
+ * Agent 工作目录里的人设文件（方案 §E）。会话里零注入——规矩由各家 CLI 的原生
+ * 机制（CLAUDE.md / AGENTS.md）在启动时自己读。内容刻意不写名字：改名不留陈迹。
+ */
+const PERSONA = `# Loop IM 团队成员守则
+
+这个目录是你在团队 IM「Loop IM」里的家，你收到的每条消息都来自那边的聊天。
+
+- 群聊消息的开头是发言人的名字（如「张三：…」）；一对一私聊则是对方原话。
+- 你的回复会原样贴回聊天：请用中文、直接说结论、Markdown 排版，不要复述名字前缀。
+- 值得长期记住的事（某人的偏好、项目约定、没做完的活）随手记到这个目录的文件里，
+  新会话开始时先翻一翻恢复记忆。
+- 隐私红线：从某个人的私聊里得知的内容，不得在别人的对话里引用或透露。
+- 干活产生的文件放在这个目录里，别往目录外写。
+`;
+
+/**
+ * 把人设文件铺进 Agent 的工作目录。只在文件**不存在**时写入——目录是用户/Agent 的
+ * 地盘，改过的内容绝不覆盖。CLAUDE.md 与 AGENTS.md 各写一份（Claude 认前者，
+ * Codex/OpenCode 等认后者）。Loop IM 摸不到 workroot 时静默跳过（线上跑在容器里、
+ * runner 在宿主机——那边的人设文件是部署清单的一部分，见方案 §J）。
+ */
+export function provisionAgentWorkdir(key) {
+  const { workroot } = hapiConfig();
+  if (!workroot) return false;
+  try {
+    const dir = join(workroot, key);
+    mkdirSync(dir, { recursive: true });
+    let wrote = false;
+    for (const file of ['CLAUDE.md', 'AGENTS.md']) {
+      const target = join(dir, file);
+      if (!existsSync(target)) {
+        writeFileSync(target, PERSONA);
+        wrote = true;
+      }
+    }
+    return wrote;
+  } catch (err) {
+    logWarn('hapi.agent.provision_skipped', { agent: key, detail: String(err.message || err) });
+    return false;
+  }
+}
+
+/**
  * 启用一个 Agent：建（或复活）它的用户行 + hapi_agents 记录。幂等，id 稳定，
  * 反复开关不会产生重复用户（docs §C.2）。返回它的公开用户对象。
  */
@@ -94,6 +137,7 @@ export function enableAgent(key) {
      ON CONFLICT(agent_key) DO UPDATE SET enabled = 1, updated_at = excluded.updated_at`,
     key, id, ts,
   );
+  provisionAgentWorkdir(key);
   const user = publicUser(get('SELECT * FROM users WHERE id = ?', id));
   emitAll(existing ? 'user-updated' : 'user-created', { user });
   return user;

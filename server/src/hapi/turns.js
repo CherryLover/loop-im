@@ -8,7 +8,8 @@
 // 不做任何上下文拼接（参照 HapiKmp 手机客户端：请求体就是 {text, localId}）。
 // 唯一进文本的额外内容是群聊里的署名「张三：」——发消息接口没有「发送者」元数据
 // 字段，而群里有多个人在跟同一条会话说话；私聊连署名都不加，原文直达。
-// 会话对应哪个群、名字前缀怎么读，在新会话的开场白里说一次。
+// 人设与前缀的读法在 Agent 工作目录的 CLAUDE.md / AGENTS.md 里（启用时自动铺设，
+// 见 agents.js 的 provisionAgentWorkdir）——会话内容里零注入，第一条也不例外。
 //
 // 串行队列按「Agent × 会话」分：不同群里可以并行（各自是独立的 hapi 会话/进程），
 // 同一会话内一次一件事。队列积压超上限直接回「排队请求过多」。在途请求不落库（D9）。
@@ -92,16 +93,6 @@ function upsertSessionRow(key, conversationId, sessionId) {
   );
 }
 
-/** 新会话的开场白：这条 hapi 会话对应哪个场合、前缀怎么读，只说这一次。 */
-function introBlock(agentName, convo) {
-  const place = convo.type === 'group'
-    ? `群聊「${convo.title || '未命名群聊'}」，群里有多个人，之后每条消息开头是发言人的名字`
-    : '一段一对一私聊，之后收到的就是对方的原话';
-  return `（你是团队 IM「Loop IM」里的成员「${agentName}」，这条会话对应那边的${place}。`
-    + `你的回复会原样贴回聊天，请用中文、直接说结论、Markdown 排版；`
-    + `不要复述名字前缀，也不要把这段说明当成对话内容。）\n\n`;
-}
-
 // ---- 会话保活（判活 → resume → spawn；每个「Agent × 会话」一条） ----------
 
 /**
@@ -122,7 +113,6 @@ async function waitActive(sessionId, { timeoutMs = 60_000 } = {}) {
 
 async function ensureSession(key, conversationId) {
   const row = sessionRow(key, conversationId);
-  let isNew = false;
   let sessionId = row?.session_id || null;
 
   if (sessionId) {
@@ -142,11 +132,10 @@ async function ensureSession(key, conversationId) {
     const { workroot } = hapiConfig();
     // 同一 Agent 的所有会话共用同一个工作目录：记忆文件是它这个「个体」的，不分场合。
     sessionId = await spawnSession({ directory: `${workroot.replace(/\/$/, '')}/${key}`, agent: key, yolo: true });
-    isNew = true;
   }
   if (sessionId !== row?.session_id) upsertSessionRow(key, conversationId, sessionId);
   if (!(await waitActive(sessionId))) throw new Error(`session ${sessionId} not active in time`);
-  return { sessionId, isNew };
+  return { sessionId };
 }
 
 // ---- 等回复：SSE 上收文本，thinking 翻回 false 即收工 ---------------------
@@ -249,9 +238,9 @@ export function runAgentTurns({ convo, sender, body, roster, audience, targets, 
           return;
         }
         // 消息原样转发（§C.3'）：上下文在 hapi 会话里自然延续，由 Agent 自己管理。
-        // 群聊补一个署名前缀（接口没有发送者字段）；私聊原文直达。
-        const text = (ensured.isNew ? introBlock(target.name, convo) : '')
-          + (convo.type === 'group' ? `${sender.name}：${body}` : body);
+        // 群聊补一个署名前缀（接口没有发送者字段）；私聊原文直达。第一条也不例外——
+        // 人设在工作目录的 CLAUDE.md / AGENTS.md 里，不在会话内容里。
+        const text = convo.type === 'group' ? `${sender.name}：${body}` : body;
 
         // 先挂事件流、**等它真正连上**再发消息——回合再快也不会漏事件。
         const waiter = wait({ sessionId: ensured.sessionId, timeoutMs, quietMs });
