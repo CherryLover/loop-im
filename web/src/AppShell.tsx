@@ -25,7 +25,7 @@ import { documentVisible, reportVisibility, startVisibilityReporting } from './l
 import { startKeyboardInsetTracking } from './lib/keyboard';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
-import type { Conversation, Message, MessageReaction, ReadState, User } from './lib/types';
+import type { Conversation, Message, MessageReaction, ReadState, TypingAgent, User } from './lib/types';
 
 type Tab = 'chat' | 'contacts' | 'agents';
 
@@ -71,6 +71,9 @@ export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justS
   // 每个会话里其他人的已读位置，用来把自己的气泡标成「已读」。
   const [reads, setReads] = useState<Record<string, ReadState[]>>({});
   const [typing, setTyping] = useState<Record<string, boolean>>({});
+  // 每个会话里此刻正在干活的 Agent（按开工顺序）。多 Agent 并行时，指示器要能说清
+  // 是谁在忙；老服务端的事件不带 agents，这里保持空数组，界面退回通用的「AI」指示器。
+  const [typingAgents, setTypingAgents] = useState<Record<string, TypingAgent[]>>({});
   // 手机端「会话列表 / 会话详情」的开合状态放在这里，切换底部 tab 时不会被重置。
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [modal, setModal] = useState<'group' | 'contact' | 'profile' | null>(null);
@@ -448,7 +451,11 @@ export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justS
       // 已读不在这里报：消息进了列表、而且详情确实在眼前时，上面那个 effect 会报。
       // 只按会话 id 判断的话，人在联系人页 / AI 页 / 手机会话列表也会被标成已读（issue #20）。
     },
-    onTyping: (conversationId, isTyping) => setTyping((t) => ({ ...t, [conversationId]: isTyping })),
+    onTyping: (conversationId, isTyping, agents) => {
+      setTyping((t) => ({ ...t, [conversationId]: isTyping }));
+      // 不带 agents 的事件（老服务端）置成空数组：不能留着上一次的名单继续亮着。
+      setTypingAgents((t) => ({ ...t, [conversationId]: agents ?? [] }));
+    },
     onConversationCreated: () => background(refreshConversations(), '刷新会话列表'),
     // 改名 / 换头像 / 停用：事件里带着完整的一份 user，够把界面上那些拷贝就地改掉了。
     // 只有 user-created（新开通的账号，走的是同一个回调）名单里还没有这个人，才值得
@@ -719,6 +726,7 @@ export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justS
             activeId={activeId}
             messages={activeMessages}
             typing={activeId ? !!typing[activeId] : false}
+            typingAgents={activeId ? typingAgents[activeId] || [] : []}
             canCreateGroup={isAdmin}
             showChatOnMobile={mobileChatOpen}
             reads={activeReads}

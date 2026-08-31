@@ -71,6 +71,15 @@ export interface ReplyTarget {
   preview: string;
 }
 
+/**
+ * 「输入中」指示器里的一个 Agent（ai-typing 事件的 agents 字段成员，按开工顺序排）。
+ * 老服务端的事件不带这个字段，前端要能在没有它时退回通用的「AI」指示器。
+ */
+export interface TypingAgent {
+  id: string;
+  name: string;
+}
+
 /** 某人在某个会话里读到了哪一刻。 */
 export interface ReadState {
   userId: string;

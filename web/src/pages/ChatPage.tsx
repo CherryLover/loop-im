@@ -6,7 +6,7 @@ import { Composer } from '../components/Composer';
 import { api } from '../lib/api';
 import { listTime, unreadAriaLabel, unreadBadgeClass, unreadLabel } from '../lib/format';
 import { plainTextOf, replyTargetOf } from '../lib/messages';
-import type { Conversation, Message, MessageSearchResult, ReadState, ReplyTarget, User } from '../lib/types';
+import type { Conversation, Message, MessageSearchResult, ReadState, ReplyTarget, TypingAgent, User } from '../lib/types';
 
 /** 搜索框里输入多久没动就发请求：每敲一个字都打一次服务端太浪费。 */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -24,6 +24,8 @@ interface ChatPageProps {
   activeId: string | null;
   messages: Message[];
   typing: boolean;
+  /** 正在干活的 Agent 列表（按开工顺序），原样透传给 MessageList。不传就退回通用「AI」指示器。 */
+  typingAgents?: TypingAgent[];
   canCreateGroup: boolean;
   showChatOnMobile: boolean;
   reads: ReadState[];
@@ -309,6 +311,7 @@ export function ChatPage(props: ChatPageProps) {
               meId={me.id}
               showSenderName={active.type === 'group'}
               typing={typing}
+              typingAgents={props.typingAgents}
               reads={props.reads}
               showReaderCount={active.type === 'group'}
               hasOlder={props.hasOlder}

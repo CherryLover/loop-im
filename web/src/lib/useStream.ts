@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { getToken } from './api';
 import { deviceId } from './push';
 import { pageStreamId } from './visibility';
-import type { Message, MessageReaction, User } from './types';
+import type { Message, MessageReaction, TypingAgent, User } from './types';
 
 export interface StreamHandlers {
   /**
@@ -14,7 +14,12 @@ export interface StreamHandlers {
    */
   onOpen?: () => void;
   onMessage?: (message: Message) => void;
-  onTyping?: (conversationId: string, typing: boolean) => void;
+  /**
+   * AI「输入中」状态变了。typing 是老语义的总开关（最后一个 Agent 收工才为 false）；
+   * agents 是此刻正在这个会话里干活的全部 Agent（按开工顺序），老服务端不带这个
+   * 字段时为 undefined —— 回调第三个参数是可选的，就是为了这份向后兼容。
+   */
+  onTyping?: (conversationId: string, typing: boolean, agents?: TypingAgent[]) => void;
   onConversationCreated?: (conversationId: string) => void;
   onUserChanged?: (user: User) => void;
   onPresence?: (userId: string, online: boolean) => void;
@@ -55,8 +60,8 @@ export function useStream(enabled: boolean, handlers: StreamHandlers) {
 
     es.addEventListener('message', (e) => ref.current.onMessage?.(json<{ message: Message }>(e).message));
     es.addEventListener('ai-typing', (e) => {
-      const d = json<{ conversationId: string; typing: boolean }>(e);
-      ref.current.onTyping?.(d.conversationId, d.typing);
+      const d = json<{ conversationId: string; typing: boolean; agents?: TypingAgent[] }>(e);
+      ref.current.onTyping?.(d.conversationId, d.typing, d.agents);
     });
     es.addEventListener('conversation-created', (e) =>
       ref.current.onConversationCreated?.(json<{ conversationId: string }>(e).conversationId));

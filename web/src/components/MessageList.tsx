@@ -13,6 +13,12 @@ interface MessageListProps {
   meId: string;
   showSenderName: boolean;
   typing: boolean;
+  /**
+   * 正在干活的 Agent 列表（按开工顺序）。有值时每个 Agent 各渲染一行自己的指示器
+   * （自己的头像 + 名字），多 Agent 并行时才分得清是谁在忙；为空或不传但 typing
+   * 为真时，退回原来那行通用的「AI」指示器（老服务端的事件不带这份名单）。
+   */
+  typingAgents?: { id: string; name: string }[];
   hasOlder?: boolean;
   loadingOlder?: boolean;
   onLoadOlder?: () => void;
@@ -30,7 +36,7 @@ interface MessageListProps {
 }
 
 export function MessageList({
-  messages, meId, showSenderName, typing, hasOlder, loadingOlder, onLoadOlder,
+  messages, meId, showSenderName, typing, typingAgents, hasOlder, loadingOlder, onLoadOlder,
   reads = [], showReaderCount = false, onReply, onReact,
 }: MessageListProps) {
   /**
@@ -261,7 +267,8 @@ export function MessageList({
 
   useEffect(() => {
     if (typing) endRef.current?.scrollIntoView({ block: 'end' });
-  }, [typing]);
+    // 第二个 Agent 中途加入时 typing 布尔不变、指示器却多了一行，同样要跟着贴到底。
+  }, [typing, typingAgents?.length]);
 
   // 视线贴底时，容器变矮也要跟着贴底。容器变矮有两个来路：输入框写到多行长高了、
   // 手机上软键盘弹起把整个壳压扁了。浏览器在容器缩水时保持的是 scrollTop 而不是
@@ -375,7 +382,27 @@ export function MessageList({
         );
       })}
 
-      {typing ? (
+      {typingAgents && typingAgents.length > 0 ? (
+        // 知道是谁在忙就一人一行：自己的头像 + 名字（名字的写法与上面 AI 消息行一致，
+        // 群里几个 Agent 同时被 @ 时，各自的指示灯亮在各自名下）。
+        typingAgents.map((a) => (
+          <div key={a.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <Avatar name={a.name} isAI size={32} radius={10} />
+            <div className="msg__col">
+              <div className="msg__name--ai">
+                <span>{a.name}</span>
+                <AiBadge />
+              </div>
+              <div className="typing">
+                <span />
+                <span />
+                <span />
+              </div>
+            </div>
+          </div>
+        ))
+      ) : typing ? (
+        // 不知道是谁（老服务端的事件不带 agents）就保留原来的通用「AI」一行。
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <Avatar name="AI" isAI size={32} radius={10} />
           <div className="typing">
