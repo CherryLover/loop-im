@@ -304,6 +304,100 @@ describe('排队与限流', () => {
   });
 });
 
+describe('「输入中」带上是谁在干活（ai-typing 的 agents 字段）', () => {
+  // 这两条直接调 runAgentTurns、用 deps 注入假的 emit/ensure/send/wait：
+  // 要盯的是 setTyping 的聚合逻辑本身，走完整 HTTP + SSE 反而抓不住事件顺序。
+  // 会话 id 用独享的，别和上面用例共享队列与计数。
+
+  it('开工时 agents 含该 Agent 的 id/name；收工后 typing=false 且 agents 为空', async () => {
+    const { runAgentTurns } = await import('../src/hapi/turns.js');
+    const events = [];
+    let finish;                                  // 捏在测试手里的「收工」开关
+    const deps = {
+      emit: (audience, type, payload) => { if (type === 'ai-typing') events.push(payload); },
+      ensure: async () => ({ sessionId: 's_typing_solo' }),
+      send: async () => {},
+      wait: () => ({
+        ready: Promise.resolve(),
+        promise: new Promise((resolve) => { finish = () => resolve({ kind: 'done', text: '看完了。' }); }),
+      }),
+    };
+    runAgentTurns({
+      convo: { id: 'c_typing_solo', type: 'group' },
+      sender: { id: chen.id, name: '陈子航', role: 'member' },
+      body: '@Claude-Code 谁在忙',
+      roster: [], audience: [chen.id],
+      targets: [{ key: 'claude', userId: 'ai-claude', name: 'Claude-Code' }],
+      postReply: () => {},
+    }, deps);
+
+    await waitFor(() => (events.length >= 1 ? true : null));
+    assert.deepEqual(events[0], {
+      conversationId: 'c_typing_solo', typing: true,
+      agents: [{ id: 'ai-claude', name: 'Claude-Code' }],
+    }, '开工的那份事件要指名道姓');
+
+    await waitFor(() => (finish ? true : null));   // 等 job 真正挂上 wait，收工开关才在手里
+    finish();
+    await waitFor(() => (events.length >= 2 ? true : null));
+    assert.deepEqual(events[1], { conversationId: 'c_typing_solo', typing: false, agents: [] },
+      '收工后 typing 熄灯（老语义不变），agents 也清空');
+  });
+
+  it('两个 Agent 并行：agents 按开工顺序聚合，先收工的只摘掉自己、灯不灭', async () => {
+    // codex 在前面的用例里被停掉了，这条要它真的能进 job，先启回来
+    await api.put('/api/agents/codex', { enabled: true }, admin);
+    try {
+      const { runAgentTurns } = await import('../src/hapi/turns.js');
+      const events = [];
+      const finishers = new Map();               // sessionId -> 收工开关
+      const deps = {
+        emit: (audience, type, payload) => { if (type === 'ai-typing') events.push(payload); },
+        ensure: async (key) => ({ sessionId: `s_typing_${key}` }),
+        send: async () => {},
+        wait: ({ sessionId }) => ({
+          ready: Promise.resolve(),
+          promise: new Promise((resolve) => {
+            finishers.set(sessionId, () => resolve({ kind: 'done', text: '收工。' }));
+          }),
+        }),
+      };
+      runAgentTurns({
+        convo: { id: 'c_typing_duo', type: 'group' },
+        sender: { id: chen.id, name: '陈子航', role: 'member' },
+        body: '@Claude-Code @Codex 一起上',
+        roster: [], audience: [chen.id],
+        // 两个 Agent 各有各的队列（按「Agent × 会话」分），所以是真并行
+        targets: [
+          { key: 'claude', userId: 'ai-claude', name: 'Claude-Code' },
+          { key: 'codex', userId: 'ai-codex', name: 'Codex' },
+        ],
+        postReply: () => {},
+      }, deps);
+
+      await waitFor(() => (events.length >= 2 ? true : null));
+      assert.deepEqual(events[1].agents,
+        [{ id: 'ai-claude', name: 'Claude-Code' }, { id: 'ai-codex', name: 'Codex' }],
+        '两个都开工后，名单按开工顺序列全');
+
+      // 先放 claude 收工：codex 的灯不能被关掉——这正是当年按会话计数要防的事
+      await waitFor(() => (finishers.size === 2 ? true : null));
+      finishers.get('s_typing_claude')();
+      await waitFor(() => (events.length >= 3 ? true : null));
+      assert.deepEqual(events[2], {
+        conversationId: 'c_typing_duo', typing: true,
+        agents: [{ id: 'ai-codex', name: 'Codex' }],
+      }, '先收工的只摘掉自己，还在干活的照亮');
+
+      finishers.get('s_typing_codex')();
+      await waitFor(() => (events.length >= 4 ? true : null));
+      assert.deepEqual(events[3], { conversationId: 'c_typing_duo', typing: false, agents: [] });
+    } finally {
+      await api.put('/api/agents/codex', { enabled: false }, admin);   // 恢复原状，别影响别的用例
+    }
+  });
+});
+
 describe('触发判定（agentTargetsFor 纯函数）', () => {
   it('AI 发的消息永不触发（D5）；没有 Agent 的会话返回空', async () => {
     const { agentTargetsFor } = await import('../src/hapi/turns.js');

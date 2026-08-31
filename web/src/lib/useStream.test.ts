@@ -146,11 +146,22 @@ describe('事件分发', () => {
     expect(onMessage).toHaveBeenCalledWith({ id: 'm1', body: '你好' });
   });
 
-  it('ai-typing 事件带出会话与状态', () => {
+  it('ai-typing 事件带出会话与状态；老服务端不带 agents 时第三个参数是 undefined', () => {
     const onTyping = vi.fn();
     mount({ onTyping });
     latest().emit('ai-typing', { conversationId: 'c1', typing: true });
-    expect(onTyping).toHaveBeenCalledWith('c1', true);
+    expect(onTyping).toHaveBeenCalledWith('c1', true, undefined);
+  });
+
+  it('ai-typing 带 agents 时把名单一并交给回调——多 Agent 并行要靠它分辨谁在忙', () => {
+    const onTyping = vi.fn();
+    const agents = [{ id: 'ai-claude', name: 'Claude-Code' }, { id: 'ai-codex', name: 'Codex' }];
+    mount({ onTyping });
+    latest().emit('ai-typing', { conversationId: 'c1', typing: true, agents });
+    expect(onTyping).toHaveBeenCalledWith('c1', true, agents);
+    // 收工事件：typing 熄灯的同时名单清空
+    latest().emit('ai-typing', { conversationId: 'c1', typing: false, agents: [] });
+    expect(onTyping).toHaveBeenLastCalledWith('c1', false, []);
   });
 
   it('presence 事件带出成员与在线状态', () => {

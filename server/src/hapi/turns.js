@@ -66,15 +66,27 @@ function enqueue(queueKey, job) {
   return true;
 }
 
-// 「输入中」按会话计数：一个会话里可能同时有多个 Agent 在干活，
-// 最后一个收工才熄灯，不然先完成的会把别人的指示灯关掉。
-const typingCount = new Map();                             // conversationId -> number
-function setTyping(audience, conversationId, on, emit) {
-  const n = (typingCount.get(conversationId) || 0) + (on ? 1 : -1);
-  typingCount.set(conversationId, Math.max(0, n));
-  const visible = (typingCount.get(conversationId) || 0) > 0;
+// 「输入中」按会话计数，且细到每个 Agent：一个会话里可能同时有多个 Agent 在干活，
+// 最后一个收工才熄灯（typing 布尔的老语义），不然先完成的会把别人的指示灯关掉。
+// 计数结构是「会话 → (Agent 用户 id → 计数)」：同一 Agent 排队多条时只累计数，
+// agents 列表里不重复出现；Map 的插入序天然就是「谁先开工」的顺序。
+// payload 里 typing 布尔保留不动（老前端只认它），agents 是新增字段，
+// 让前端能把指示器细到「是哪几个 Agent 在忙」。
+const typingByConvo = new Map();                           // conversationId -> Map(agentUserId -> { name, count })
+function setTyping(audience, conversationId, target, on, emit) {
+  const perConvo = typingByConvo.get(conversationId) || new Map();
+  typingByConvo.set(conversationId, perConvo);
+  const entry = perConvo.get(target.userId);
+  if (on) {
+    if (entry) entry.count += 1;
+    else perConvo.set(target.userId, { name: target.name, count: 1 });
+  } else if (entry) {
+    entry.count -= 1;
+    if (entry.count <= 0) perConvo.delete(target.userId);
+  }
+  const agents = [...perConvo.entries()].map(([id, e]) => ({ id, name: e.name }));
   try {
-    emit(audience, 'ai-typing', { conversationId, typing: visible });
+    emit(audience, 'ai-typing', { conversationId, typing: agents.length > 0, agents });
   } catch (err) {
     logWarn('hapi.turn.typing_emit_failed', { detail: String(err) });
   }
@@ -226,7 +238,7 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
     };
 
     const job = async () => {
-      setTyping(audience, convo.id, true, emit);
+      setTyping(audience, convo.id, target, true, emit);
       try {
         // D6：停用中（机器离线/取消勾选后残留在群里）或整体没配置 → 固定文案
         const userRow = get('SELECT * FROM users WHERE id = ?', target.userId);
@@ -272,7 +284,7 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
         else if (!outcome.text) say(AGENT_NO_TEXT(target.name));
         else say(outcome.text);
       } finally {
-        setTyping(audience, convo.id, false, emit);
+        setTyping(audience, convo.id, target, false, emit);
       }
     };
 
