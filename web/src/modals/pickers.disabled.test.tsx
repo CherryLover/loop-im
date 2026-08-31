@@ -17,18 +17,21 @@ const person = (id: string, name: string, extra: Partial<User> = {}): User => ({
 const ME = person('u_me', '我');
 const CHEN = person('u_chen', '陈子航');
 const GONE = person('u_gone', '周离职', { disabled: true, online: false });
-const ARIA = person('ai', 'Aria', { role: 'ai', isAI: true });
+const BOT = person('ai-claude', 'Claude-Code', { role: 'ai', isAI: true });
+const BOT_OFFLINE = person('ai-grok', 'Grok-Build', { role: 'ai', isAI: true, disabled: true, online: false });
 
 describe('建群的可选名单', () => {
   it('停用的人不出现在可选名单里，正常成员照常', () => {
     render(
-      <CreateGroupModal users={[ME, CHEN, GONE, ARIA]} meId={ME.id} onClose={vi.fn()} onCreated={vi.fn()} />,
+      <CreateGroupModal users={[ME, CHEN, GONE, BOT, BOT_OFFLINE]} meId={ME.id} onClose={vi.fn()} onCreated={vi.fn()} />,
     );
     expect(screen.getByText('陈子航')).toBeInTheDocument();
     expect(screen.queryByText('周离职')).not.toBeInTheDocument();
-    // 自己和 AI 本来就不在名单里，这里顺带确认没被改坏
+    // 自己不在名单里；可用的 Agent 用户可以被管理员拉进群（D8），
+    // 停用中的 Agent（机器离线）和停用成员一样不出现。
     expect(screen.queryByText('我')).not.toBeInTheDocument();
-    expect(screen.queryByText('Aria')).not.toBeInTheDocument();
+    expect(screen.getByText('Claude-Code')).toBeInTheDocument();
+    expect(screen.queryByText('Grok-Build')).not.toBeInTheDocument();
   });
 });
 

@@ -205,12 +205,19 @@ function unwrapEnvelope(value) {
  * 'message-received'（带 message: DecryptedMessage）、'session-updated'（thinking 翻转）、
  * 'session-ended'、'heartbeat'。
  *
- * 返回 { close }。断线自动重连（指数退避，封顶 30 秒）；close() 后不再重连。
+ * 返回 { close, ready }。ready 在事件流**真正挂上**时兑现——调用方要先 await ready
+ * 再触发会产生事件的动作，否则「订阅还在握手、事件已经发完」这个竞态会把回合漏掉。
+ * 断线自动重连（指数退避，封顶 30 秒）；close() 后不再重连。
  * onEvent 抛错不会打断读取（记日志继续），一条坏事件不该弄死整个订阅。
  */
 export function openEvents({ sessionId, onEvent, fetchImpl = fetch }) {
   let closed = false;
   let backoff = 1000;
+  let readyResolve;
+  const ready = new Promise((resolve) => { readyResolve = resolve; });
+  // close() 必须真的掐断在途连接：光设标记的话，流上没有新字节时 for-await 永远
+  // 醒不过来，连接和进程句柄就一直挂着（测试进程因此退不出去，生产则是慢性泄漏）。
+  const controller = new AbortController();
 
   const connect = async () => {
     while (!closed) {
@@ -220,10 +227,12 @@ export function openEvents({ sessionId, onEvent, fetchImpl = fetch }) {
         const qs = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '?all=true';
         const res = await fetchImpl(`${baseUrl}/api/events${qs}`, {
           headers: { 'user-agent': UA, authorization: `Bearer ${jwt}`, accept: 'text/event-stream' },
+          signal: controller.signal,
         });
         if (res.status === 401) { jwt = null; continue; }
         if (!res.ok || !res.body) throw new Error(`hapi events → ${res.status}`);
         backoff = 1000;
+        readyResolve();
         await readSse(res.body, (event) => {
           try { onEvent(event); } catch (err) { logWarn('hapi.events.handler_failed', { detail: String(err) }); }
         }, () => closed);
@@ -231,14 +240,20 @@ export function openEvents({ sessionId, onEvent, fetchImpl = fetch }) {
       } catch (err) {
         if (!closed) logWarn('hapi.events.disconnected', { detail: String(err) });
       }
-      if (closed) return;
-      await new Promise((r) => setTimeout(r, backoff));
+      if (closed) break;
+      // 重连退避挂在可中止的计时器上：close() 时立刻醒来退出，不拖住进程。
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, backoff);
+        controller.signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+      });
       backoff = Math.min(backoff * 2, 30_000);
     }
+    readyResolve();                                       // close 后也要放行等 ready 的人
   };
   const running = connect();
   return {
-    close: () => { closed = true; },
+    close: () => { closed = true; controller.abort(); },
+    ready,
     // 测试用：等 connect 循环退出，避免悬着的定时器
     _done: running,
   };

@@ -107,7 +107,7 @@ router.get('/search', (req, res) => {
   // kind = 'user'：系统提示（谁加入/退出群、群名改了）是界面生成的说明文字，
   // 不是聊天内容；把它们算进来，搜一个人名就会被入群通知刷屏。
   const rows = all(
-    `SELECT m.*, u.name AS sender_name, u.avatar_url, c.type AS convo_type, c.title AS convo_title
+    `SELECT m.*, u.name AS sender_name, u.avatar_url, u.role AS sender_role, c.type AS convo_type, c.title AS convo_title
      FROM messages m
      JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = ?
      JOIN conversations c ON c.id = m.conversation_id
@@ -125,7 +125,7 @@ router.get('/search', (req, res) => {
   res.json({
     query: q,
     results: page.map((r) => ({
-      ...serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url }, reactions.get(r.id) || []),
+      ...serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url, role: r.sender_role }, reactions.get(r.id) || []),
       conversationTitle: titleOf(r),
       conversationType: r.convo_type,
     })),

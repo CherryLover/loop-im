@@ -98,11 +98,15 @@ DEMO_PASSWORD=只在本地用的密码
 - 原内置 AI「Aria」已整体退役并彻底清除（2026-08），系统转向接入自托管
   [hapi](https://github.com/tiann/hapi)：hub 里的每个 Agent（Claude / Codex / Grok 等 10 种）
   映射为系统里的一个 AI 用户。方案与分期见 [docs/hapi-Agent-接入方案.md](docs/hapi-Agent-接入方案.md)。
-- **已就绪（PR2）**：管理员在「AI 管理」页勾选要接入的 Agent，系统自动创建对应 AI 用户
-  （出现在联系人里、可拉进群）；机器离线自动隐身、恢复自动回来；可改显示名（不许带空格，
-  提及按整名匹配）；「测试连通性」一键验 hub / 机器 / 工作目录三层。
-- **待完成（PR3）**：@ 它之后把消息递到 hapi 会话并把 Agent 的回复贴回聊天（触发、排队、
-  会话保活、超时与「暂不可用」文案）。在此之前 Agent 用户还不会说话。
+- **管理**：管理员在「AI 管理」页勾选要接入的 Agent，系统自动创建对应 AI 用户
+  （出现在联系人里、管理员可拉进群）；机器离线自动隐身、恢复自动回来；可改显示名
+  （不许带空格，提及按整名匹配）；「测试连通性」一键验 hub / 机器 / 工作目录三层。
+- **对话**：群里 `@<Agent名>` 必回，与 Agent 私聊每条都回；消息带来源前缀与最近 20 条
+  上下文递进它在 hapi 的专属会话（每个 Agent 一个，挂了自动 resume / 重开，记忆靠
+  工作目录里的文件）；回合结束把**最终回复**贴回聊天（中间的工具调用过程不转发）。
+  同一 Agent 串行排队（期间显示「输入中」），排队过多 / 不可用 / 超时都有明确回话。
+- **硬规则**：AI 用户发的消息永不触发任何 AI（防互相 @ 死循环）；@全员 不触发；
+  触发 Agent 的消息走更严的 @AI 限流档。
 
 **个人资料**
 - 侧栏底部头像进入弹窗：改昵称、上传头像（走同一套对象存储）、改密码、切换浅色/深色、退出登录。
@@ -194,7 +198,7 @@ docker run -d -p 4000:4000 \
 ## 测试与 CI
 
 ```bash
-npm run test          # 后端 920 条 + 前端 929 条（约 1 分钟）
+npm run test          # 后端 930 条 + 前端 929 条（约 1 分钟）
 npm run test:server   # node:test，跑在临时 SQLite 库上，不碰 server/data
 npm run test:web      # vitest（jsdom + testing-library）
 npm run test:e2e      # 构建前端后用 Playwright 跑 13 条真实浏览器冒烟
@@ -205,7 +209,7 @@ npm run test:deployed # 对跑起来的部署再跑 20 条真实浏览器验证�
 
 | 层次 | 用例 | 覆盖内容 |
 | --- | --- | --- |
-| 后端 `server/test` | 920（58 文件) | 登录 / 权限 / 限流 / 会话与群管理 / 消息与 @ 机制 / 已读回执 / 表情回应 / 引用回复 / 搜索 / 附件安全（嗅探、鉴权、Range）/ 对象存储 / Web Push（加密、订阅、该不该推）/ 安全默认值与日志脱敏 |
+| 后端 `server/test` | 930（59 文件） | 登录 / 权限 / 限流 / 会话与群管理 / 消息与 @ 机制 / 已读回执 / 表情回应 / 引用回复 / 搜索 / 附件安全（嗅探、鉴权、Range）/ 对象存储 / Web Push（加密、订阅、该不该推）/ 安全默认值与日志脱敏 |
 | 前端 `web/src/**/*.test.*` | 929（77 文件） | Markdown 渲染与 XSS 转义 / 乐观发送与合并排序 / 输入框与 @ 提及 / 通知状态机 / 推送订阅与 sw.js 源码约束 / 主题跟随系统与手动记忆 / 各组件交互 |
 | 端到端 `e2e` | 13 | 登录 → 建群 → @提及全链路、移动端布局与跳转、Toast 不挡按钮、深色主题、主题跟随系统 |
 | 部署后 `e2e/deployed` | 20 | 对真实部署跑：附件、已读回执、搜索、表情回应、个人资料 |
@@ -233,7 +237,7 @@ server/                Express + node:sqlite 后端
   src/push-decide.js    「该不该推」的五条规则（按设备判定，与前端 notify 逻辑对齐）
   src/push-store.js     推送订阅的存取（含设备可见性状态）
   src/web-push.js       Web Push 协议：VAPID 签名 + RFC 8291 payload 加密（不引第三方 SDK）
-  src/hapi/             hapi hub 客户端（认证/机器/会话/SSE）与 Agent→AI 用户映射
+  src/hapi/             hapi hub 客户端（认证/机器/会话/SSE）、Agent→AI 用户映射、消息流转（turns）
   src/routes/           auth / users / conversations / uploads / upload-files / push / search / agents
 web/                   Vite + React + TypeScript 前端
   public/               PWA 外壳：manifest.webmanifest、图标、sw.js（只做推送，永不缓存页面）

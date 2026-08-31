@@ -19,7 +19,8 @@ export function CreateGroupModal({
 
   // 停用的账号登不进来，拉进新群只会多一个永远不说话的人，所以不进可选名单
   // （服务端也会拒，见 routes/conversations.js）。他在别处照常显示，这里只是不给选。
-  const pickable = users.filter((u) => u.id !== meId && !u.isAI && !u.disabled);
+  // 建群是管理员专属入口，AI Agent 用户也可以在这里直接拉进群（D8）。
+  const pickable = users.filter((u) => u.id !== meId && !u.disabled);
 
   function toggle(id: string) {
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));

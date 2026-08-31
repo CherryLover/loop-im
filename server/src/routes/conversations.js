@@ -4,6 +4,7 @@ import { authenticate, isDisabled, publicUser, requireAdmin } from '../auth.js';
 import { emitTo } from '../events.js';
 import { queuePush, reportPushFailure } from '../push-decide.js';
 import { parseMentions } from '../mentions.js';
+import { agentTargetsFor, runAgentTurns } from '../hapi/turns.js';
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
 import { linkAttachmentsToMessage } from '../attachment-access.js';
@@ -497,13 +498,13 @@ router.get('/:id/messages', (req, res) => {
   // 多取一条用来判断还有没有更早的，不用再跑一次 count。
   const rows = anchor
     ? all(
-      `SELECT m.*, u.name AS sender_name, u.avatar_url FROM messages m JOIN users u ON u.id = m.sender_id
+      `SELECT m.*, u.name AS sender_name, u.avatar_url, u.role AS sender_role FROM messages m JOIN users u ON u.id = m.sender_id
        WHERE m.conversation_id = ? AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < ?))
        ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
       convo.id, anchor.created_at, anchor.created_at, anchor.rowid, limit + 1,
     )
     : all(
-      `SELECT m.*, u.name AS sender_name, u.avatar_url FROM messages m JOIN users u ON u.id = m.sender_id
+      `SELECT m.*, u.name AS sender_name, u.avatar_url, u.role AS sender_role FROM messages m JOIN users u ON u.id = m.sender_id
        WHERE m.conversation_id = ? ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
       convo.id, limit + 1,
     );
@@ -513,7 +514,7 @@ router.get('/:id/messages', (req, res) => {
   // 整页的回应一次查完再分发给每条消息：逐条去查就是一页 200 次往返。
   const reactions = reactionsOf(page.map((r) => r.id), req.user.id);
   res.json({
-    messages: page.map((r) => serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url }, reactions.get(r.id) || [])),
+    messages: page.map((r) => serializeMessage(r, { name: r.sender_name, avatar_url: r.avatar_url, role: r.sender_role }, reactions.get(r.id) || [])),
     hasMore,
     nextBefore: hasMore && page.length ? page[0].id : null,          // 下一页从本页最早那条往前翻
     reads: readsOf(convo.id, req.user.id),                          // 谁读到了哪一刻，前端据此标已读
@@ -595,28 +596,57 @@ router.post('/:id/messages', (req, res) => {
   const roster = memberRows(convo.id);
   const mentions = parseMentions(body, roster);
   const audience = roster.map((m) => m.id);
+  // 这条消息触发哪些 hapi Agent（群里被 @ 的 / 私聊的那位；AI 发的永不触发，见 D5）。
+  const targets = agentTargetsFor({ convo, roster, mentions, sender: req.user });
 
   // ---- 限流 -------------------------------------------------------------
   // 检查放在参数校验之后、写库之前：空消息、非法引用这类 400 不该白吃掉额度。
   // 计数放在写库成功之后，所以这一档数的是「成功发出去几条」——语义上和登录那套
   // 「只数失败、成功清零」正相反，两者各用各的模块，见 usage-limit.js 开头。
-  const state = quotaState('message', req.user.id);
-  if (!state.allowed) return rejectOverQuota(res, 'message', state, { userId: req.user.id, route: req.originalUrl });
+  // 触发 Agent 的消息额外走更严的 'ai' 档：一次触发 = 一次真实的 Agent 任务，还要排队。
+  for (const action of targets.length ? ['message', 'ai'] : ['message']) {
+    const state = quotaState(action, req.user.id);
+    if (!state.allowed) return rejectOverQuota(res, action, state, { userId: req.user.id, route: req.originalUrl });
+  }
 
   const id = uid('m');
   run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     id, convo.id, req.user.id, body, JSON.stringify(mentions), replyTo, now());
   consumeQuota('message', req.user.id);
+  if (targets.length) consumeQuota('ai', req.user.id);
   // 正文里引用到的附件挂到这个会话上：附件的下载鉴权就是查这张关联表（见 attachment-access.js）。
   linkAttachmentsToMessage({ body, conversationId: convo.id, messageId: id, senderId: req.user.id });
   const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), req.user);
   emitTo(audience, 'message', { message });
   res.status(201).json({ message });
 
-  // 响应已经发出去了。推送是「发射后不管」，失败不影响这次发消息的结果
+  // 响应已经发出去了。下面两步都是「发射后不管」，失败不影响这次发消息的结果
   // （消息已经入库、201 已经回了）。
   pushForMessage(convo, message, audience);
+
+  // hapi Agent 回合：排队、递消息、等回复、贴回来（turns.js 自己兜住全部错误）。
+  if (targets.length) {
+    runAgentTurns({
+      convo, sender: req.user, body, messageId: id, roster, audience, targets,
+      postReply: (target, text) => postAgentReply(convo, target, text, audience),
+    });
+  }
 });
+
+/**
+ * 以 Agent 用户的身份把回复贴回会话：入库 + SSE 广播 + 推送，一条龙。
+ * 和人类发消息共用同一套 serializeMessage / pushForMessage，规则零特例。
+ */
+export function postAgentReply(convo, target, text, audience = memberIds(convo.id)) {
+  const id = uid('m');
+  run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    id, convo.id, target.userId, String(text || '').trim() || '（空回复）', '[]', now());
+  const sender = get('SELECT * FROM users WHERE id = ?', target.userId);
+  const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), sender || { name: target.name, role: 'ai' });
+  emitTo(audience, 'message', { message });
+  pushForMessage(convo, message, audience);
+  return message;
+}
 
 // ---- 消息表情回应 -------------------------------------------------------
 // 给消息点 👍 ❤️ 之类，省掉一屏「收到」「好的」。加和取消是两个接口，各自幂等：

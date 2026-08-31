@@ -57,6 +57,9 @@ export async function startMockHub({ accessToken = 'test-access-token' } = {}) {
       }
       if (req.method === 'GET' && url.pathname === '/api/events') {
         res.writeHead(200, { 'content-type': 'text/event-stream' });
+        // 真 hub 一连上就先发一条 connection-changed；不写点东西的话 Node 会把响应头
+        // 一直攒在缓冲里，客户端的 fetch 等不到响应、ready 永远不兑现。
+        res.write(`data: ${JSON.stringify({ type: 'connection-changed', data: { resume: 'none' } })}\n\n`);
         const client = res;
         state.sseClients.add(client);
         res.on('close', () => state.sseClients.delete(client));

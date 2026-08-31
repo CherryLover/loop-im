@@ -135,8 +135,8 @@ describe('hapi 客户端 · SSE', () => {
     }
     hub.pushEvent({ type: 'message-received', sessionId: 's_1', message: { id: 'hm1', content: {} } });
     await new Promise((r) => setTimeout(r, 100));
-    assert.equal(events.length, 1);
-    assert.equal(events[0].type, 'message-received');
+    // mock 连上时先发一条 connection-changed（真 hub 也这样），这里只关心业务事件
+    assert.equal(events.filter((e) => e.type === 'message-received').length, 1);
 
     sub.close();
     for (const c of hub.state.sseClients) c.end();
