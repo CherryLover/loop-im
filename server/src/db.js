@@ -87,6 +87,17 @@ const MIGRATIONS = [
   [null, null, 'CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subs_endpoint ON push_subscriptions(endpoint)'],
   // 推送前的热路径是「这一批收件人名下有哪些订阅」，按 user_id 建索引。
   [null, null, 'CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id)'],
+  // hapi_agents：hapi 里的 Agent → 本系统 AI 用户 的映射与启用状态
+  //（docs/hapi-Agent-接入方案.md §C.5）。一种 Agent 一行；session_id 是它当前的
+  // hapi 会话（会话是可抛弃的现场，重开就地覆盖，不留历史）。
+  // 放 MIGRATIONS 的理由同 push_subscriptions：新表写 schema.sql 老库补不上。
+  [null, null, `CREATE TABLE IF NOT EXISTS hapi_agents (
+                  agent_key   TEXT PRIMARY KEY,
+                  user_id     TEXT NOT NULL,
+                  enabled     INTEGER NOT NULL DEFAULT 0,
+                  session_id  TEXT,
+                  updated_at  INTEGER NOT NULL
+                )`],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
   // column 为 null：这条迁移不是补列（索引、新表之类），DDL 自己保证幂等，直接跑。

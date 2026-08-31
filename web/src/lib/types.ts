@@ -154,3 +154,22 @@ export interface MessageSearchPage {
   nextBefore: string | null;
 }
 
+
+/** hapi Agent 管理页（管理员）：一种 Agent 一行的状态。 */
+export interface AgentInfo {
+  key: string;
+  label: string;
+  defaultName: string;
+  name: string;
+  userId: string;
+  enabled: boolean;
+  online: boolean;
+}
+
+export interface AgentsStatus {
+  configured: boolean;
+  machineOnline: boolean;
+  machineHost: string | null;
+  hubError: string | null;
+  agents: AgentInfo[];
+}

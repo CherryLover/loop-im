@@ -14,6 +14,7 @@ import { router as uploadRoutes } from './routes/uploads.js';
 import { router as uploadFileRoutes } from './routes/upload-files.js';
 import { router as searchRoutes } from './routes/search.js';
 import { router as pushRoutes } from './routes/push.js';
+import { router as agentRoutes } from './routes/agents.js';
 import { logError } from './log.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -79,6 +80,7 @@ export function createApp({ serveClient = true, clientDist } = {}) {
   app.use('/api/messages', searchRoutes);
   app.use('/api/uploads', uploadRoutes);
   app.use('/api/push', pushRoutes);
+  app.use('/api/agents', agentRoutes);
 
   // Serve the built frontend when it exists, so `npm start` is enough in production.
   const dist = clientDist || join(here, '..', '..', 'web', 'dist');

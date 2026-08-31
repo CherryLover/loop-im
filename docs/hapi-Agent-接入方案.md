@@ -4,7 +4,7 @@
 > 把 hapi 里的 AI Agent（Claude Code / Codex / Grok 等）映射成系统里的 **AI 用户**，
 > 大家在聊天里 @ 它们干活。现有的 Aria（供应商直连 + 画像那一套）**整体退役**。
 
-最后更新：2026-08-28 · 状态：**PR1（Aria 退役与清除）已完成合入**，PR2 进行中
+最后更新：2026-08-31 · 状态：**PR1（Aria 退役与清除）、PR2（hub 对接与 Agent 管理）已完成合入**，PR3 待开工
 
 ---
 
@@ -49,15 +49,16 @@ IM 用户 ──@ Claude-Code──▶ Loop IM 服务端 ──HTTP API──▶
 
 ## B. hapi 侧的事实（对接依据）
 
-hapi hub 提供完整的 HTTP API（客户端契约见其仓库 `docs/api/client-contract/`），要用到的：
+hapi hub 提供完整的 HTTP API。⚠️ **以线上实际部署的 0.27.3 为准**（其仓库 `docs/api/client-contract/`
+是主干新版的文档，个别接口 0.27.3 还没有）。要用到的（已逐条对过 v0.27.3 tag 的 hub 源码，
+并对真实 hub 验证过）：
 
 | 端点 | 用途 |
 | --- | --- |
 | `POST /api/auth` | 拿 access token 换 JWT（**4 小时过期**，401 时用存着的 token 重换） |
 | `GET /health` | 连通性与协议版本 |
 | `GET /api/machines` | 列出在线机器（我们只认配置里指定的那一台） |
-| `GET /api/machines/:id/agent-availability` | 本机哪些 Agent 可用 → 配置页的勾选列表 |
-| `POST /api/machines/:id/spawn` | 开会话：`{directory, agent, permissionMode, ...}` |
+| `POST /api/machines/:id/spawn` | 开会话：`{directory, agent, yolo, ...}`，回 `{type:'success', sessionId}` |
 | `GET /api/sessions/:id` | 查会话状态（`agentState` 判活） |
 | `POST /api/sessions/:id/resume` / `reopen` | 复活断掉的会话 |
 | `POST /api/sessions/:id/messages` | 发消息（回复经 SSE 到达） |
@@ -65,7 +66,13 @@ hapi hub 提供完整的 HTTP API（客户端契约见其仓库 `docs/api/client
 | `GET /api/events`（SSE） | 实时事件流：Agent 的回复从这里来 |
 
 认证链路：hub 的 `CLI_API_TOKEN` 是根令牌 → 派生 access token（长期有效）→ 换 JWT（4h）。
-服务端集成拿着 access token 就能全自动运转。
+服务端集成拿着 access token 就能全自动运转。请求要带自定义 UA（Cloudflare 拦默认 UA）。
+
+**0.27.3 的一个现实**：没有「这台机器装了哪些 Agent」的查询接口（`agent-availability`
+是后来主干上的新东西）。所以 D2 的「可用 Agent 列表」退化为**固定的 10 种官方类型**
+（claude / codex / gemini / kimi / copilot / grok / cursor / opencode / pi / agy），
+可用性只到「配置的那台机器在不在线」这一层：机器在线 = 启用的 Agent 全部可用；
+离线 = 全体临时停用（勾选保留）。某个 Agent 其实没装的情形，等 @ 它开会话失败时按 D6 兜住。
 
 ---
 
@@ -84,7 +91,7 @@ hapi hub 提供完整的 HTTP API（客户端契约见其仓库 `docs/api/client
 
 **产品层配置（AI 配置页，存库）**：
 
-- 「可用 Agent」列表：实时从 `agent-availability` 拉，勾选启用哪些；
+- 「可用 Agent」列表：固定的 10 种官方类型（见 §B 的 0.27.3 现实），勾选启用哪些；
 - 每个 Agent 的显示名（默认按 D3 规则生成，可改）；
 - 「测试连通性」按钮保留：打 `GET /health` + 列机器 + 列 Agent，一次把三层都验了。
 
@@ -260,7 +267,7 @@ loop-im-agents/
 | 阶段 | 内容 | 出口条件 |
 | --- | --- | --- |
 | PR1 | **Aria 退役**（§F 全部）+ 文档与测试全量对齐。此阶段结束后系统暂时没有任何 AI，纯人类 IM | 全套测试绿；README/测试用例集改写完 |
-| PR2 | hub 客户端（auth/判活/spawn/messages/SSE）+ 配置 + Agent→用户映射与联动 | mock 下全绿；本地真 hub 手工验通 |
+| PR2 ✅ | hub 客户端（auth/判活/spawn/messages/SSE/回复文本抽取）+ 配置 + Agent→用户映射与联动 + 管理页 | **已达成**（2026-08-31）：假 hub 下 22 条用例全绿；真 hub 验通（Avz-Studio 在线、启用 claude 即建出 ai-claude、停用即隐身） |
 | PR3 | 消息流转全链路：@ 触发、队列、上下文前缀、回复贴回、D6 文案、超时 | 本地 hub 群聊/私聊真跑通 |
 | 上线 | Sophie-VPS 侧准备（决定 Agent 清单、建工作目录、放人设文件、必要时装 Claude Code）→ 切配置部署 | 线上真机验收 |
 

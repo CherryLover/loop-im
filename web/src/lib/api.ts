@@ -1,5 +1,5 @@
 import type {
-  Conversation, Message, MessagePage,
+  AgentsStatus, Conversation, Message, MessagePage,
   MessageReaction, MessageSearchPage, UploadResult, User,
 } from './types';
 
@@ -283,4 +283,11 @@ export const api = {
       keepalive: true,
     }),
 
+  // ---- hapi Agent 管理（管理员） ----
+  agentsStatus: () => request<AgentsStatus>('/agents'),
+  setAgentEnabled: (key: string, enabled: boolean) =>
+    request<{ ok: true }>(`/agents/${key}`, { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  renameAgent: (key: string, name: string) =>
+    request<{ ok: true }>(`/agents/${key}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  testAgents: () => request<{ ok: boolean; lines: string[] }>('/agents/test', { method: 'POST' }),
 };

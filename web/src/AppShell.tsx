@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageCircle, Users } from 'lucide-react';
+import { Bot, MessageCircle, Users } from 'lucide-react';
 import { Logo } from './components/Logo';
 import { Toast } from './components/Toast';
 import { ChatPage } from './pages/ChatPage';
 import { ContactsPage } from './pages/ContactsPage';
+import { AgentsPage } from './pages/AgentsPage';
 import { CreateGroupModal } from './modals/CreateGroupModal';
 import { AddContactModal } from './modals/AddContactModal';
 import { ProfileModal } from './modals/ProfileModal';
@@ -26,7 +27,7 @@ import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
 import type { Conversation, Message, MessageReaction, ReadState, User } from './lib/types';
 
-type Tab = 'chat' | 'contacts';
+type Tab = 'chat' | 'contacts' | 'agents';
 
 // 与 styles.css 里 `@media (max-width: 720px)` 的断点一致：手机布局下会话列表和聊天详情
 // 是前后两屏（.chat--hidden），桌面布局下两者并排常驻。判断「详情露出来没有」得先知道是哪一种。
@@ -657,6 +658,7 @@ export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justS
       { key: 'chat', label: '会话', short: '会话', icon: MessageCircle },
       { key: 'contacts', label: '联系人', short: '联系人', icon: Users },
     ];
+    if (isAdmin) items.push({ key: 'agents', label: 'AI 管理', short: 'AI', icon: Bot });
     return items;
   }, [isAdmin]);
 
@@ -753,6 +755,8 @@ export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justS
             }}
           />
         ) : null}
+
+        {tab === 'agents' && isAdmin ? <AgentsPage /> : null}
 
       </div>
 
