@@ -1,6 +1,6 @@
-// Agent 回合的「执行过程」（D15，src/hapi/steps.js）：中间文字和工具动作按步落库、
-// 挂到回复消息上、按需查询；进行中实时推 ai-progress。hub 是假的（hapi-mock），
-// 事件序列由测试亲手推，Loop IM 服务端是真的。
+// Agent 回合的「执行过程」（D15'，src/hapi/steps.js）：中间文字和工具动作按步落库、
+// 挂到回复消息上并**整份内嵌**在消息里（progress 数组，历史一进来就可见）；
+// 进行中实时推 ai-progress。hub 是假的（hapi-mock），事件序列由测试亲手推。
 import { startServer, waitFor } from './helpers.js';
 import { member } from './fixtures.js';
 import { after, before, describe, it } from 'node:test';
@@ -66,26 +66,18 @@ describe('过程落库并挂到回复上', () => {
       const last = await lastAgentMessage(room.id, chenToken);
       return last?.body === '画好了，请查收。' ? last : null;
     });
-    assert.equal(reply.progressCount, 3, '一段中间文字 + 两次工具调用；重复状态更新和回复原文都不算');
-
-    const steps = (await api.get(`/api/conversations/${room.id}/messages/${reply.id}/steps`, chenToken)).body.steps;
-    assert.deepEqual(steps.map((s) => [s.kind, s.content]), [
+    // 过程整份内嵌在消息里（D15'）：列表接口直接带回，翻历史不用再点开去拉
+    assert.deepEqual(reply.progress.map((s) => [s.kind, s.content]), [
       ['text', '我先看看要画什么。'],
       ['tool', '执行命令：ls 素材目录'],
       ['tool', '生成图片'],
-    ], '顺序保持；shell 包装剥掉；工具自带的描述优先当标签');
-    assert.ok(steps.every((s, i) => s.seq === steps[0].seq + i && s.createdAt > 0));
+    ], '一段中间文字 + 两次工具调用；重复状态更新和回复原文都不算；shell 包装剥掉；描述优先当标签');
+    assert.ok(reply.progress.every((s, i) => s.seq === reply.progress[0].seq + i && s.createdAt > 0));
   });
 
-  it('人类消息 progressCount 恒为 0；非成员查过程 404（口径与回应接口一致）', async () => {
+  it('人类消息 progress 恒为空数组', async () => {
     const mine = (await messagesOf(room.id, chenToken)).find((m) => m.senderId === chen.id);
-    assert.equal(mine.progressCount, 0);
-
-    const outsider = await member('外人');
-    const outsiderToken = await api.login(outsider.email);
-    const reply = await lastAgentMessage(room.id, chenToken);
-    const res = await api.get(`/api/conversations/${room.id}/messages/${reply.id}/steps`, outsiderToken);
-    assert.equal(res.status, 404);
+    assert.deepEqual(mine.progress, []);
   });
 
   it('超时的固定文案也挂过程——出事时更要能看它卡在哪一步', async () => {
@@ -102,9 +94,7 @@ describe('过程落库并挂到回复上', () => {
         return list.length > before ? list.at(-1) : null;
       }, { timeout: 5000 });
       assert.match(reply.body, /处理超时/);
-      assert.equal(reply.progressCount, 1);
-      const steps = (await api.get(`/api/conversations/${room.id}/messages/${reply.id}/steps`, chenToken)).body.steps;
-      assert.deepEqual(steps.map((s) => s.content), ['一个跑不完的活']);
+      assert.deepEqual(reply.progress.map((s) => s.content), ['一个跑不完的活']);
     } finally {
       process.env.HAPI_TURN_TIMEOUT_MS = '60000';
     }

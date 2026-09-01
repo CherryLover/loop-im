@@ -27,7 +27,7 @@ interface ChatPageProps {
   /** 正在干活的 Agent 列表（按开工顺序），原样透传给 MessageList。不传就退回通用「AI」指示器。 */
   typingAgents?: TypingAgent[];
   /** 每个正在干活的 Agent 的最新一步（D15），键是 Agent 用户 id；透传给 MessageList。 */
-  typingSteps?: Record<string, AgentStep>;
+  typingSteps?: Record<string, AgentStep[]>;
   canCreateGroup: boolean;
   showChatOnMobile: boolean;
   reads: ReadState[];

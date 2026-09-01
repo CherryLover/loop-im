@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, CornerUpLeft, MessageSquare, SmilePlus, Wrench } from 'lucide-react';
+import { CornerUpLeft, SmilePlus, Wrench } from 'lucide-react';
 import { Avatar, AiBadge } from './Avatar';
 import { MarkdownBody } from './MarkdownBody';
 import { ImageViewer } from './ImageViewer';
 import type { GalleryImage, ViewerOrigin } from './ImageViewer';
-import { api } from '../lib/api';
 import { clock, dayLabel } from '../lib/format';
 import { REACTION_EMOJIS } from '../lib/reactions';
 import type { AgentStep, Message, ReadState } from '../lib/types';
@@ -21,10 +20,10 @@ interface MessageListProps {
    */
   typingAgents?: { id: string; name: string }[];
   /**
-   * 每个正在干活的 Agent 的最新一步（键是 Agent 用户 id）。有值时显示在该 Agent
-   * 「正在输入」指示行下面，让人知道它此刻具体在干嘛（D15）。
+   * 每个正在干活的 Agent 已累积的过程步子（键是 Agent 用户 id）。气泡跟着一步步
+   * 往下长——中间说的话直接是正文、工具动作带小扳手，尾部保留跳动的点（D15'）。
    */
-  typingSteps?: Record<string, AgentStep>;
+  typingSteps?: Record<string, AgentStep[]>;
   hasOlder?: boolean;
   loadingOlder?: boolean;
   onLoadOlder?: () => void;
@@ -381,12 +380,21 @@ export function MessageList({
                     <div className="msg__name">{m.senderName}</div>
                   ) : null}
                   {quoteBlock(m)}
-                  <MarkdownBody
-                    className={`md bubble ${m.isAI ? 'bubble--ai' : 'bubble--other'}`}
-                    body={m.body}
-                    onOpenImage={openImage}
-                  />
-                  {m.isAI ? <AgentProcess message={m} /> : null}
+                  {m.isAI && m.progress?.length ? (
+                    // Agent 的回复像它「慢慢写出来」的样子（D15'）：过程平铺在气泡里，
+                    // 分割线下面才是最终结论——翻历史一进来就是这副全貌，不用点开。
+                    <div className="bubble bubble--ai bubble--flow">
+                      <StepsFlow steps={m.progress} />
+                      <div className="flow__divider" role="separator" aria-label="以上是执行过程，以下是最终回复" />
+                      <MarkdownBody className="md" body={m.body} onOpenImage={openImage} />
+                    </div>
+                  ) : (
+                    <MarkdownBody
+                      className={`md bubble ${m.isAI ? 'bubble--ai' : 'bubble--other'}`}
+                      body={m.body}
+                      onOpenImage={openImage}
+                    />
+                  )}
                   {reactionRow(m)}
                   <div className="msg__meta">
                     {clock(m.createdAt)}
@@ -402,29 +410,32 @@ export function MessageList({
       {typingAgents && typingAgents.length > 0 ? (
         // 知道是谁在忙就一人一行：自己的头像 + 名字（名字的写法与上面 AI 消息行一致，
         // 群里几个 Agent 同时被 @ 时，各自的指示灯亮在各自名下）。
-        typingAgents.map((a) => (
-          <div key={a.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-            <Avatar name={a.name} isAI size={32} radius={10} />
-            <div className="msg__col">
-              <div className="msg__name--ai">
-                <span>{a.name}</span>
-                <AiBadge />
-              </div>
-              <div className="typing">
-                <span />
-                <span />
-                <span />
-              </div>
-              {typingSteps?.[a.id] ? (
-                // 它此刻具体在干嘛（D15）：最新一步实时刷新，工具动作带个小扳手。
-                <div className="steps__live" role="status">
-                  {typingSteps[a.id].kind === 'tool' ? <Wrench size={11} /> : <MessageSquare size={11} />}
-                  <span>{typingSteps[a.id].content}</span>
+        typingAgents.map((a) => {
+          const steps = typingSteps?.[a.id] ?? [];
+          return (
+            <div key={a.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+              <Avatar name={a.name} isAI size={32} radius={10} />
+              <div className="msg__col">
+                <div className="msg__name--ai">
+                  <span>{a.name}</span>
+                  <AiBadge />
                 </div>
-              ) : null}
+                {/*
+                  干活中的气泡在一步步长出来（D15'）：过程内容平铺其中，尾部的三个点
+                  表示「还没写完」。一步都还没有时就是原来那个纯打点的气泡。
+                */}
+                <div className={`bubble bubble--ai bubble--flow${steps.length ? '' : ' bubble--dots'}`} role="status" aria-label={`${a.name} 正在处理`}>
+                  {steps.length ? <StepsFlow steps={steps} /> : null}
+                  <div className="typing typing--inline">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        ))
+          );
+        })
       ) : typing ? (
         // 不知道是谁（老服务端的事件不带 agents）就保留原来的通用「AI」一行。
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -459,58 +470,23 @@ export function MessageList({
 }
 
 /**
- * Agent 回复下面的「执行过程」行（D15）：默认折叠只显示步数，点开按需拉步子
- * 展开成时间线，再点收起。步子拉过一次就留在组件里，反复开合不重复请求。
- * 没有过程（progressCount 为 0 / 缺省）什么也不渲染，不占地方。
+ * 过程步子的平铺流（D15'）：中间文字直接排成段落（像正文一样读），工具动作
+ * 缩成一小行带扳手的灰字。历史气泡和进行中的气泡共用同一个渲染——
+ * 收工瞬间从「实时长出来的」切到「消息里带的」，长相不变，看不出接缝。
  */
-function AgentProcess({ message }: { message: Message }) {
-  const [open, setOpen] = useState(false);
-  const [steps, setSteps] = useState<AgentStep[] | null>(null);
-  const [error, setError] = useState('');
-  const count = message.progressCount || 0;
-  if (!count) return null;
-
-  const toggle = async () => {
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    setOpen(true);
-    if (steps) return;
-    try {
-      setSteps((await api.messageSteps(message.conversationId, message.id)).steps);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '过程加载失败');
-    }
-  };
-
+function StepsFlow({ steps }: { steps: AgentStep[] }) {
   return (
-    <div className="steps">
-      <button
-        type="button"
-        className="steps__toggle"
-        aria-expanded={open}
-        aria-label={`查看 ${message.senderName} 的执行过程（${count} 步）`}
-        onClick={() => void toggle()}
-      >
-        <Wrench size={11} />
-        <span>执行过程 · {count} 步</span>
-        <ChevronDown size={12} className={`steps__chev${open ? ' steps__chev--open' : ''}`} />
-      </button>
-      {open ? (
-        error ? <div className="steps__hint">{error}</div>
-          : !steps ? <div className="steps__hint">加载中…</div>
-            : (
-              <ol className="steps__list">
-                {steps.map((s) => (
-                  <li key={s.seq} className="steps__item">
-                    {s.kind === 'tool' ? <Wrench size={11} /> : <MessageSquare size={11} />}
-                    <span>{s.content}</span>
-                  </li>
-                ))}
-              </ol>
-            )
-      ) : null}
-    </div>
+    <>
+      {steps.map((s) => (
+        s.kind === 'tool' ? (
+          <div key={s.seq} className="flow__tool">
+            <Wrench size={11} />
+            <span>{s.content}</span>
+          </div>
+        ) : (
+          <p key={s.seq} className="flow__say">{s.content}</p>
+        )
+      ))}
+    </>
   );
 }

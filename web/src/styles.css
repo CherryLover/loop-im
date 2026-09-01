@@ -389,7 +389,10 @@ input, textarea { font-family: inherit; }
 
 .msg--me { display: flex; justify-content: flex-end; }
 .msg--other { display: flex; gap: 10px; align-items: flex-start; }
-.msg__col { max-width: 520px; display: flex; flex-direction: column; gap: 4px; }
+/* min-width: 0：flex 项默认不许缩到内容最小宽以下，引用块单行 nowrap 的长文字会把
+   整列顶到 max-width、在窄窗口里把气泡挤出可视区（D15' 实测抓到）。放开收缩后，
+   引用回到省略号，气泡老实待在容器里。 */
+.msg__col { max-width: 520px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .msg__col--me { align-items: flex-end; }
 .msg__name { font-size: 12px; color: var(--muted); }
 .msg__name--ai { display: flex; align-items: center; gap: 6px; }
@@ -408,33 +411,24 @@ input, textarea { font-family: inherit; }
 .typing span:nth-child(2) { animation-delay: .2s; }
 .typing span:nth-child(3) { animation-delay: .4s; }
 
-/* Agent 执行过程（D15）：进行中的实时状态行 + 回复下可展开的过程时间线 */
-.steps__live {
-  margin-top: 4px; max-width: min(420px, 72vw);
-  display: flex; align-items: center; gap: 5px;
-  font-size: 12px; color: var(--muted);
+/* Agent 执行过程（D15'）：过程平铺在气泡里，像它一步步写出来的。
+   中间说的话是略淡的段落，工具动作是带扳手的小灰行，分割线下面才是最终结论；
+   进行中的气泡同款布局，尾部保留跳动的点。 */
+.bubble--flow { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; max-width: min(560px, 78vw); }
+.bubble--flow > .md { align-self: stretch; }
+.bubble--dots { padding: 11px 14px; }
+.flow__say {
+  margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.steps__live svg { flex: none; }
-.steps__live span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.steps { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 2px; }
-.steps__toggle {
-  display: inline-flex; align-items: center; gap: 5px;
-  border: none; background: none; padding: 2px 0; cursor: pointer;
-  font-size: 12px; color: var(--muted);
+.flow__tool {
+  display: flex; gap: 6px; align-items: flex-start;
+  font-size: 12px; color: var(--faint);
 }
-.steps__toggle:hover { color: var(--text); }
-.steps__chev { transition: transform .15s ease; }
-.steps__chev--open { transform: rotate(180deg); }
-.steps__hint { font-size: 12px; color: var(--faint); }
-.steps__list {
-  list-style: none; margin: 0; padding: 4px 0 4px 10px;
-  border-left: 2px solid var(--border2);
-  display: flex; flex-direction: column; gap: 7px;
-  max-width: min(560px, 78vw);
-}
-.steps__item { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; color: var(--muted); }
-.steps__item svg { flex: none; margin-top: 2px; }
-.steps__item span { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.flow__tool svg { flex: none; margin-top: 2px; }
+.flow__tool span { min-width: 0; overflow-wrap: anywhere; }
+.flow__divider { align-self: stretch; height: 1px; background: var(--accent-line); margin: 2px 0; }
+.typing--inline { background: none; border: none; padding: 2px 0 0; }
 
 .silent-hint {
   flex: none; margin: 0 14px 6px; font-size: 11px; color: var(--faint);

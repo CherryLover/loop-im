@@ -1,19 +1,11 @@
-// Agent 执行过程（D15）：进行中「正在输入」行下的实时状态行，
-// 和回复气泡下可展开的过程时间线（步子点开才拉、拉过缓存、可收起）。
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+// Agent 执行过程（D15'）：过程平铺在气泡里——历史一进来就全可见（不用点开），
+// 进行中的气泡随步子一步步长出来，尾部保留跳动的点；分割线下面才是最终结论。
+import { describe, expect, it } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import { MessageList } from './MessageList';
-import { api } from '../lib/api';
 import type { AgentStep, Message } from '../lib/types';
 
-vi.mock('../lib/api', () => ({
-  api: { messageSteps: vi.fn() },
-  attachmentUrl: (u: string) => u,
-}));
-const mockApi = vi.mocked(api);
-
-const aiReply = (progressCount: number): Message => ({
+const aiReply = (progress: AgentStep[]): Message => ({
   id: 'm_ai',
   conversationId: 'c1',
   senderId: 'ai-codex',
@@ -23,7 +15,7 @@ const aiReply = (progressCount: number): Message => ({
   mentions: [],
   createdAt: 1_700_000_000_000,
   isAI: true,
-  progressCount,
+  progress,
 });
 
 const steps: AgentStep[] = [
@@ -32,42 +24,35 @@ const steps: AgentStep[] = [
   { seq: 3, kind: 'text', content: '图片正在生成。', createdAt: 3 },
 ];
 
-beforeEach(() => vi.clearAllMocks());
+describe('历史里的过程气泡', () => {
+  it('过程平铺直给：中间文字、工具行、分割线、最终结论全在一个气泡里，无需任何点击', () => {
+    render(<MessageList messages={[aiReply(steps)]} meId="u_me" showSenderName typing={false} />);
 
-describe('回复气泡下的过程行', () => {
-  it('点开拉步子并展开，再点收起；拉过一次不重复请求', async () => {
-    mockApi.messageSteps.mockResolvedValue({ steps });
-    render(<MessageList messages={[aiReply(3)]} meId="u_me" showSenderName typing={false} />);
-
-    const toggle = screen.getByRole('button', { name: /执行过程（3 步）/ });
-    expect(toggle).toHaveTextContent('执行过程 · 3 步');
-    await userEvent.click(toggle);
-    expect(mockApi.messageSteps).toHaveBeenCalledWith('c1', 'm_ai');
-    expect(await screen.findByText('执行命令：python3 gen.py')).toBeInTheDocument();
     expect(screen.getByText('我先想想构图。')).toBeInTheDocument();
-
-    await userEvent.click(toggle);                          // 收起
-    expect(screen.queryByText('我先想想构图。')).not.toBeInTheDocument();
-    await userEvent.click(toggle);                          // 再展开：用缓存，不再请求
-    expect(await screen.findByText('我先想想构图。')).toBeInTheDocument();
-    expect(mockApi.messageSteps).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('执行命令：python3 gen.py')).toBeInTheDocument();
+    expect(screen.getByText('图片正在生成。')).toBeInTheDocument();
+    expect(screen.getByText('画好了，请查收。')).toBeInTheDocument();
+    expect(screen.getByRole('separator')).toBeInTheDocument();
+    // 顺序：过程在分割线上面，结论在下面
+    const bubble = document.querySelector('.bubble--flow')!;
+    const order = Array.from(bubble.children).map((el) => el.className.split(' ')[0]);
+    expect(order.at(-1)).toBe('md');
+    expect(order).toContain('flow__divider');
+    expect(order.indexOf('flow__divider')).toBe(order.length - 2);
+    // 不再有「点开才看」的入口
+    expect(screen.queryByRole('button', { name: /执行过程/ })).not.toBeInTheDocument();
   });
 
-  it('progressCount 为 0 或缺省时不渲染过程行；接口失败就地提示', async () => {
-    mockApi.messageSteps.mockRejectedValue(new Error('过程加载失败'));
-    const { rerender } = render(
-      <MessageList messages={[aiReply(0)]} meId="u_me" showSenderName typing={false} />,
-    );
-    expect(screen.queryByRole('button', { name: /执行过程/ })).not.toBeInTheDocument();
-
-    rerender(<MessageList messages={[aiReply(2)]} meId="u_me" showSenderName typing={false} />);
-    await userEvent.click(screen.getByRole('button', { name: /执行过程（2 步）/ }));
-    await waitFor(() => expect(screen.getByText('过程加载失败')).toBeInTheDocument());
+  it('没有过程的 AI 回复还是普通气泡：没有分割线、不套流式布局', () => {
+    render(<MessageList messages={[aiReply([])]} meId="u_me" showSenderName typing={false} />);
+    expect(screen.getByText('画好了，请查收。')).toBeInTheDocument();
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+    expect(document.querySelector('.bubble--flow')).toBeNull();
   });
 });
 
-describe('「正在输入」下的实时状态行', () => {
-  it('有该 Agent 的最新一步就显示内容；没有的 Agent 只有三点', () => {
+describe('进行中的气泡', () => {
+  it('步子累积着往下排（文字成段、工具带扳手行），尾部保留跳动的点；没步子的 Agent 是纯打点气泡', () => {
     render(
       <MessageList
         messages={[]}
@@ -78,11 +63,25 @@ describe('「正在输入」下的实时状态行', () => {
           { id: 'ai-codex', name: 'Codex' },
           { id: 'ai-grok', name: 'Grok-Build' },
         ]}
-        typingSteps={{ 'ai-codex': { seq: 5, kind: 'tool', content: '执行命令：ls', createdAt: 9 } }}
+        typingSteps={{
+          'ai-codex': [
+            { seq: 1, kind: 'text', content: '我来画一下。', createdAt: 8 },
+            { seq: 2, kind: 'tool', content: '执行命令：ls', createdAt: 9 },
+          ],
+        }}
       />,
     );
-    expect(screen.getByText('执行命令：ls')).toBeInTheDocument();
-    expect(document.querySelectorAll('.steps__live')).toHaveLength(1);
-    expect(document.querySelectorAll('.typing')).toHaveLength(2);
+    // Codex 的气泡里过程已经长出来了，且点还在跳（还没写完）
+    const codexBubble = screen.getByRole('status', { name: 'Codex 正在处理' });
+    expect(codexBubble).toHaveTextContent('我来画一下。');
+    expect(codexBubble).toHaveTextContent('执行命令：ls');
+    expect(codexBubble.querySelector('.typing')).not.toBeNull();
+    // 进行中不画分割线——线是「收工」的标志
+    expect(codexBubble.querySelector('.flow__divider')).toBeNull();
+
+    // Grok 还没动静：纯打点
+    const grokBubble = screen.getByRole('status', { name: 'Grok-Build 正在处理' });
+    expect(grokBubble.querySelector('.flow__say')).toBeNull();
+    expect(grokBubble.querySelector('.typing')).not.toBeNull();
   });
 });

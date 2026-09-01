@@ -5,7 +5,7 @@ import { emitTo } from '../events.js';
 import { queuePush, reportPushFailure } from '../push-decide.js';
 import { parseMentions } from '../mentions.js';
 import { agentTargetsFor, runAgentTurns } from '../hapi/turns.js';
-import { attachStepsToReply, stepCountOf, stepsOfMessage } from '../hapi/steps.js';
+import { attachStepsToReply, stepsOfMessage } from '../hapi/steps.js';
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
 import { linkAttachmentsToMessage } from '../attachment-access.js';
@@ -230,9 +230,9 @@ export function serializeMessage(row, sender, reactions = []) {
     replyTo: row.reply_to || null,               // 被引用消息的 id，前端据此跳转
     quote: quoteOf(row.reply_to, row.conversation_id),
     reactions,                                   // 每种表情：谁点了、多少个、我点没点
-    // Agent 回复带「执行过程」步数（D15）：前端据此渲染可展开的过程行，
-    // 步子本身走 GET /:id/messages/:messageId/steps 按需取。人类消息恒为 0。
-    progressCount: isAI ? stepCountOf(row.id) : 0,
+    // Agent 回复直接内嵌完整「执行过程」（D15'）：过程平铺在气泡里、历史一进来就可见，
+    // 不设点开才拉的二段式。步子都是短文本，一页里 AI 回复又只占少数，内嵌不构成负担。
+    progress: isAI ? stepsOfMessage(row.id) : [],
   };
 }
 
@@ -530,20 +530,6 @@ router.get('/:id/messages', (req, res) => {
  * 上报已读位置。upTo 省略时按此刻算；只允许前进，也不允许超过当前时间
  * （否则客户端传一个很大的值就能把以后收到的消息也预先标成已读）。
  */
-/**
- * Agent 回复的「执行过程」步子（D15）。列表接口只带 progressCount，
- * 步子按需来取——绝大多数翻历史的人不点开，没必要跟着每页消息走。
- * 404 口径与回应接口一致：消息不存在和不在我能看的会话里说同一句话，
- * 不然这个接口就成了消息存在性探针。
- */
-router.get('/:id/messages/:messageId/steps', (req, res) => {
-  const convo = requireMembership(req, res, req.params.id);
-  if (!convo) return;
-  const msg = get('SELECT id FROM messages WHERE id = ? AND conversation_id = ?', req.params.messageId, convo.id);
-  if (!msg) return res.status(404).json({ error: REACTION_TARGET_MISSING });
-  res.json({ steps: stepsOfMessage(msg.id) });
-});
-
 router.post('/:id/read', (req, res) => {
   const convo = requireMembership(req, res, req.params.id);
   if (!convo) return;

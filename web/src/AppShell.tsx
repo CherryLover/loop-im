@@ -76,7 +76,9 @@ export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justS
   const [typingAgents, setTypingAgents] = useState<Record<string, TypingAgent[]>>({});
   // 每个会话里、每个正在干活的 Agent 的最新一步（D15）：显示在它的「正在输入」行下面。
   // 只留最新一步——完整过程回合结束后挂在回复消息上，点开过程行再拉。
-  const [typingSteps, setTypingSteps] = useState<Record<string, Record<string, AgentStep>>>({});
+  // 进行中的过程步子（D15'）：按「会话 → Agent → 步子列表」累积，气泡跟着一步步长出来；
+  // 收工时该 Agent 的列表整体撤掉（最终消息里带着完整过程，接力显示，前后无缝）。
+  const [typingSteps, setTypingSteps] = useState<Record<string, Record<string, AgentStep[]>>>({});
   // 手机端「会话列表 / 会话详情」的开合状态放在这里，切换底部 tab 时不会被重置。
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [modal, setModal] = useState<'group' | 'contact' | 'profile' | null>(null);
@@ -467,7 +469,13 @@ export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justS
       });
     },
     onProgress: (conversationId, agent, step) => {
-      setTypingSteps((s) => ({ ...s, [conversationId]: { ...s[conversationId], [agent.id]: step } }));
+      setTypingSteps((s) => {
+        const perAgent = s[conversationId]?.[agent.id] ?? [];
+        // SSE 断线重连可能重发（按 seq 去重）；乱序到达按 seq 排回去。
+        if (perAgent.some((x) => x.seq === step.seq)) return s;
+        const next = [...perAgent, step].sort((a, b) => a.seq - b.seq);
+        return { ...s, [conversationId]: { ...s[conversationId], [agent.id]: next } };
+      });
     },
     onConversationCreated: () => background(refreshConversations(), '刷新会话列表'),
     // 改名 / 换头像 / 停用：事件里带着完整的一份 user，够把界面上那些拷贝就地改掉了。
