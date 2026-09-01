@@ -1,5 +1,5 @@
 import type {
-  AgentsStatus, Conversation, Message, MessagePage,
+  AgentsStatus, AgentStep, Conversation, Message, MessagePage,
   MessageReaction, MessageSearchPage, UploadResult, User,
 } from './types';
 
@@ -282,6 +282,10 @@ export const api = {
       body: JSON.stringify(payload),
       keepalive: true,
     }),
+
+  /** Agent 回复的执行过程步子（D15）：点开过程行才拉，列表只带步数。 */
+  messageSteps: (conversationId: string, messageId: string) =>
+    request<{ steps: AgentStep[] }>(`/conversations/${conversationId}/messages/${messageId}/steps`),
 
   // ---- hapi Agent 管理（管理员） ----
   agentsStatus: () => request<AgentsStatus>('/agents'),

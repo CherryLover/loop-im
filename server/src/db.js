@@ -115,6 +115,22 @@ const MIGRATIONS = [
   // 要跨 hapi 会话重建存活（session_id 换了，看没看过不能跟着清零）。
   // 必须排在上面的 CREATE TABLE 之后：全新库先建表、这条按「已有该列」跳过。
   ['hapi_sessions', 'last_seen_rowid', 'ALTER TABLE hapi_sessions ADD COLUMN last_seen_rowid INTEGER'],
+  // hapi_turn_steps：Agent 回合的「执行过程」，一步一行（方案 D15）。回合进行中就落库
+  //（turn_id 归组），回复贴出后补上 reply_message_id 挂到那条消息——翻历史随时能看
+  // 它当时干了什么。故意不加外键：消息删了过程还能留着排查，清理必须是显式的。
+  [null, null, `CREATE TABLE IF NOT EXISTS hapi_turn_steps (
+                  turn_id             TEXT NOT NULL,
+                  conversation_id     TEXT NOT NULL,
+                  agent_user_id       TEXT NOT NULL,
+                  trigger_message_id  TEXT,
+                  reply_message_id    TEXT,
+                  seq                 INTEGER NOT NULL,
+                  kind                TEXT NOT NULL,      -- text | tool
+                  content             TEXT NOT NULL,
+                  created_at          INTEGER NOT NULL
+                )`],
+  [null, null, 'CREATE INDEX IF NOT EXISTS idx_turn_steps_reply ON hapi_turn_steps(reply_message_id)'],
+  [null, null, 'CREATE INDEX IF NOT EXISTS idx_turn_steps_turn ON hapi_turn_steps(turn_id)'],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
   // column 为 null：这条迁移不是补列（索引、新表之类），DDL 自己保证幂等，直接跑。

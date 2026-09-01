@@ -25,7 +25,7 @@ import { documentVisible, reportVisibility, startVisibilityReporting } from './l
 import { startKeyboardInsetTracking } from './lib/keyboard';
 import { useStream } from './lib/useStream';
 import type { Theme } from './lib/theme';
-import type { Conversation, Message, MessageReaction, ReadState, TypingAgent, User } from './lib/types';
+import type { AgentStep, Conversation, Message, MessageReaction, ReadState, TypingAgent, User } from './lib/types';
 
 type Tab = 'chat' | 'contacts' | 'agents';
 
@@ -74,6 +74,9 @@ export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justS
   // 每个会话里此刻正在干活的 Agent（按开工顺序）。多 Agent 并行时，指示器要能说清
   // 是谁在忙；老服务端的事件不带 agents，这里保持空数组，界面退回通用的「AI」指示器。
   const [typingAgents, setTypingAgents] = useState<Record<string, TypingAgent[]>>({});
+  // 每个会话里、每个正在干活的 Agent 的最新一步（D15）：显示在它的「正在输入」行下面。
+  // 只留最新一步——完整过程回合结束后挂在回复消息上，点开过程行再拉。
+  const [typingSteps, setTypingSteps] = useState<Record<string, Record<string, AgentStep>>>({});
   // 手机端「会话列表 / 会话详情」的开合状态放在这里，切换底部 tab 时不会被重置。
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [modal, setModal] = useState<'group' | 'contact' | 'profile' | null>(null);
@@ -455,6 +458,16 @@ export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justS
       setTyping((t) => ({ ...t, [conversationId]: isTyping }));
       // 不带 agents 的事件（老服务端）置成空数组：不能留着上一次的名单继续亮着。
       setTypingAgents((t) => ({ ...t, [conversationId]: agents ?? [] }));
+      // 收工的 Agent 把它的状态行一并撤掉；名单是权威，不在名单里的步子不能继续亮。
+      setTypingSteps((s) => {
+        const cur = s[conversationId];
+        if (!cur) return s;
+        const keep = new Set((agents ?? []).map((a) => a.id));
+        return { ...s, [conversationId]: Object.fromEntries(Object.entries(cur).filter(([id]) => keep.has(id))) };
+      });
+    },
+    onProgress: (conversationId, agent, step) => {
+      setTypingSteps((s) => ({ ...s, [conversationId]: { ...s[conversationId], [agent.id]: step } }));
     },
     onConversationCreated: () => background(refreshConversations(), '刷新会话列表'),
     // 改名 / 换头像 / 停用：事件里带着完整的一份 user，够把界面上那些拷贝就地改掉了。
@@ -727,6 +740,7 @@ export function AppShell({ me: initialMe, theme, onToggleTheme, onSignOut, justS
             messages={activeMessages}
             typing={activeId ? !!typing[activeId] : false}
             typingAgents={activeId ? typingAgents[activeId] || [] : []}
+            typingSteps={activeId ? typingSteps[activeId] || {} : {}}
             canCreateGroup={isAdmin}
             showChatOnMobile={mobileChatOpen}
             reads={activeReads}

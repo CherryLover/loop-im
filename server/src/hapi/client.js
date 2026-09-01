@@ -189,6 +189,31 @@ export function extractAgentText(content) {
   return null;
 }
 
+/**
+ * 从一条 Agent 消息里抽出工具调用（可能多个），给过程记录用（steps.js）。
+ * codex 系：content.type='codex' 且 data.type='tool-call'（一次调用多条状态更新，
+ * 去重交给记录器按 callId 做）；claude 系：output/assistant 消息里的 tool_use 块。
+ * 返回 [{ callId, name, input }]，没有就是空数组。
+ */
+export function extractToolCalls(content) {
+  const record = unwrapEnvelope(content);
+  if (!record || record.role !== 'agent') return [];
+  const c = record.content;
+  if (!c || typeof c !== 'object') return [];
+
+  if (c.type === 'codex' && c.data?.type === 'tool-call') {
+    const d = c.data;
+    return [{ callId: d.callId || d.id || null, name: d.name || d.toolName || null, input: d.input || {} }];
+  }
+  if (c.type === 'output' && c.data?.type === 'assistant') {
+    const blocks = Array.isArray(c.data.message?.content) ? c.data.message.content : [];
+    return blocks
+      .filter((b) => b && typeof b === 'object' && b.type === 'tool_use')
+      .map((b) => ({ callId: b.id || null, name: b.name || null, input: b.input || {} }));
+  }
+  return [];
+}
+
 function unwrapEnvelope(value) {
   const isRecord = (v) => !!v && typeof v === 'object' && typeof v.role === 'string' && 'content' in v;
   if (isRecord(value)) return value;

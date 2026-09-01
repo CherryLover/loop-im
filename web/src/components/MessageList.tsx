@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { CornerUpLeft, SmilePlus } from 'lucide-react';
+import { ChevronDown, CornerUpLeft, MessageSquare, SmilePlus, Wrench } from 'lucide-react';
 import { Avatar, AiBadge } from './Avatar';
 import { MarkdownBody } from './MarkdownBody';
 import { ImageViewer } from './ImageViewer';
 import type { GalleryImage, ViewerOrigin } from './ImageViewer';
+import { api } from '../lib/api';
 import { clock, dayLabel } from '../lib/format';
 import { REACTION_EMOJIS } from '../lib/reactions';
-import type { Message, ReadState } from '../lib/types';
+import type { AgentStep, Message, ReadState } from '../lib/types';
 
 interface MessageListProps {
   messages: Message[];
@@ -19,6 +20,11 @@ interface MessageListProps {
    * 为真时，退回原来那行通用的「AI」指示器（老服务端的事件不带这份名单）。
    */
   typingAgents?: { id: string; name: string }[];
+  /**
+   * 每个正在干活的 Agent 的最新一步（键是 Agent 用户 id）。有值时显示在该 Agent
+   * 「正在输入」指示行下面，让人知道它此刻具体在干嘛（D15）。
+   */
+  typingSteps?: Record<string, AgentStep>;
   hasOlder?: boolean;
   loadingOlder?: boolean;
   onLoadOlder?: () => void;
@@ -36,7 +42,7 @@ interface MessageListProps {
 }
 
 export function MessageList({
-  messages, meId, showSenderName, typing, typingAgents, hasOlder, loadingOlder, onLoadOlder,
+  messages, meId, showSenderName, typing, typingAgents, typingSteps, hasOlder, loadingOlder, onLoadOlder,
   reads = [], showReaderCount = false, onReply, onReact,
 }: MessageListProps) {
   /**
@@ -270,6 +276,16 @@ export function MessageList({
     // 第二个 Agent 中途加入时 typing 布尔不变、指示器却多了一行，同样要跟着贴到底。
   }, [typing, typingAgents?.length]);
 
+  // 实时状态行（D15）出现/刷新会把指示器撑高：本来就贴底的人要继续贴底，
+  // 不然第一条状态刚好被输入框挡住半截（本地实测踩到）。阈值放宽到 80px
+  //（48px 贴底判据 + 状态行自身的高度——effect 跑的时候它已经把内容撑高了）；
+  // 正在翻历史的人不满足判据，不会被拽回来。
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) endRef.current?.scrollIntoView({ block: 'end' });
+  }, [typingSteps]);
+
   // 视线贴底时，容器变矮也要跟着贴底。容器变矮有两个来路：输入框写到多行长高了、
   // 手机上软键盘弹起把整个壳压扁了。浏览器在容器缩水时保持的是 scrollTop 而不是
   // 「距底部的距离」，于是最新那几条消息刚好被吃掉 —— 恰恰是正在打字的人最需要
@@ -370,6 +386,7 @@ export function MessageList({
                     body={m.body}
                     onOpenImage={openImage}
                   />
+                  {m.isAI ? <AgentProcess message={m} /> : null}
                   {reactionRow(m)}
                   <div className="msg__meta">
                     {clock(m.createdAt)}
@@ -398,6 +415,13 @@ export function MessageList({
                 <span />
                 <span />
               </div>
+              {typingSteps?.[a.id] ? (
+                // 它此刻具体在干嘛（D15）：最新一步实时刷新，工具动作带个小扳手。
+                <div className="steps__live" role="status">
+                  {typingSteps[a.id].kind === 'tool' ? <Wrench size={11} /> : <MessageSquare size={11} />}
+                  <span>{typingSteps[a.id].content}</span>
+                </div>
+              ) : null}
             </div>
           </div>
         ))
@@ -429,6 +453,63 @@ export function MessageList({
           hasOlder={hasOlder}
           origin={viewing.origin}
         />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Agent 回复下面的「执行过程」行（D15）：默认折叠只显示步数，点开按需拉步子
+ * 展开成时间线，再点收起。步子拉过一次就留在组件里，反复开合不重复请求。
+ * 没有过程（progressCount 为 0 / 缺省）什么也不渲染，不占地方。
+ */
+function AgentProcess({ message }: { message: Message }) {
+  const [open, setOpen] = useState(false);
+  const [steps, setSteps] = useState<AgentStep[] | null>(null);
+  const [error, setError] = useState('');
+  const count = message.progressCount || 0;
+  if (!count) return null;
+
+  const toggle = async () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (steps) return;
+    try {
+      setSteps((await api.messageSteps(message.conversationId, message.id)).steps);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '过程加载失败');
+    }
+  };
+
+  return (
+    <div className="steps">
+      <button
+        type="button"
+        className="steps__toggle"
+        aria-expanded={open}
+        aria-label={`查看 ${message.senderName} 的执行过程（${count} 步）`}
+        onClick={() => void toggle()}
+      >
+        <Wrench size={11} />
+        <span>执行过程 · {count} 步</span>
+        <ChevronDown size={12} className={`steps__chev${open ? ' steps__chev--open' : ''}`} />
+      </button>
+      {open ? (
+        error ? <div className="steps__hint">{error}</div>
+          : !steps ? <div className="steps__hint">加载中…</div>
+            : (
+              <ol className="steps__list">
+                {steps.map((s) => (
+                  <li key={s.seq} className="steps__item">
+                    {s.kind === 'tool' ? <Wrench size={11} /> : <MessageSquare size={11} />}
+                    <span>{s.content}</span>
+                  </li>
+                ))}
+              </ol>
+            )
       ) : null}
     </div>
   );

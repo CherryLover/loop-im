@@ -62,6 +62,16 @@ export interface Message {
   quote?: MessageQuote | null;
   /** 已有的表情回应，按第一个人点的先后排。老接口没有这个字段时按「没有回应」处理。 */
   reactions?: MessageReaction[];
+  /** Agent 回复的「执行过程」步数（D15）。>0 时气泡下有可展开的过程行；人类消息恒为 0/缺省。 */
+  progressCount?: number;
+}
+
+/** Agent 执行过程里的一步（D15）：中间说明文字，或一次工具动作的人话标签。 */
+export interface AgentStep {
+  seq: number;
+  kind: 'text' | 'tool';
+  content: string;
+  createdAt: number;
 }
 
 /** 输入框上方那块「正在回复某条消息」的引用态。 */

@@ -5,6 +5,7 @@ import { emitTo } from '../events.js';
 import { queuePush, reportPushFailure } from '../push-decide.js';
 import { parseMentions } from '../mentions.js';
 import { agentTargetsFor, runAgentTurns } from '../hapi/turns.js';
+import { attachStepsToReply, stepCountOf, stepsOfMessage } from '../hapi/steps.js';
 import { decrypt } from '../secret-box.js';
 import { escapeLike } from '../sql.js';
 import { linkAttachmentsToMessage } from '../attachment-access.js';
@@ -214,6 +215,7 @@ export function quoteOf(replyToId, conversationId) {
  * 在这里现查就是 200 次往返。刚写入的消息还不可能有回应，默认空数组即可。
  */
 export function serializeMessage(row, sender, reactions = []) {
+  const isAI = sender?.role === 'ai';
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -223,11 +225,14 @@ export function serializeMessage(row, sender, reactions = []) {
     body: row.body,
     mentions: JSON.parse(row.mentions || '[]'),
     createdAt: row.created_at,
-    isAI: sender?.role === 'ai',
+    isAI,
     kind: row.kind || 'user',
     replyTo: row.reply_to || null,               // 被引用消息的 id，前端据此跳转
     quote: quoteOf(row.reply_to, row.conversation_id),
     reactions,                                   // 每种表情：谁点了、多少个、我点没点
+    // Agent 回复带「执行过程」步数（D15）：前端据此渲染可展开的过程行，
+    // 步子本身走 GET /:id/messages/:messageId/steps 按需取。人类消息恒为 0。
+    progressCount: isAI ? stepCountOf(row.id) : 0,
   };
 }
 
@@ -525,6 +530,20 @@ router.get('/:id/messages', (req, res) => {
  * 上报已读位置。upTo 省略时按此刻算；只允许前进，也不允许超过当前时间
  * （否则客户端传一个很大的值就能把以后收到的消息也预先标成已读）。
  */
+/**
+ * Agent 回复的「执行过程」步子（D15）。列表接口只带 progressCount，
+ * 步子按需来取——绝大多数翻历史的人不点开，没必要跟着每页消息走。
+ * 404 口径与回应接口一致：消息不存在和不在我能看的会话里说同一句话，
+ * 不然这个接口就成了消息存在性探针。
+ */
+router.get('/:id/messages/:messageId/steps', (req, res) => {
+  const convo = requireMembership(req, res, req.params.id);
+  if (!convo) return;
+  const msg = get('SELECT id FROM messages WHERE id = ? AND conversation_id = ?', req.params.messageId, convo.id);
+  if (!msg) return res.status(404).json({ error: REACTION_TARGET_MISSING });
+  res.json({ steps: stepsOfMessage(msg.id) });
+});
+
 router.post('/:id/read', (req, res) => {
   const convo = requireMembership(req, res, req.params.id);
   if (!convo) return;
@@ -628,7 +647,7 @@ router.post('/:id/messages', (req, res) => {
   if (targets.length) {
     runAgentTurns({
       convo, sender: req.user, body, messageId: id, roster, audience, targets,
-      postReply: (target, text, replyTo) => postAgentReply(convo, target, text, audience, replyTo),
+      postReply: (target, text, replyTo, turnId) => postAgentReply(convo, target, text, audience, replyTo, turnId),
     });
   }
 });
@@ -639,10 +658,13 @@ router.post('/:id/messages', (req, res) => {
  * replyTo 写进 reply_to 后，引用摘要和「消息已不可用」降级也全走人类那套（quoteOf），
  * 不另起炉灶；调用方（turns.js）只在群聊传触发消息的 id，私聊传 null。
  */
-export function postAgentReply(convo, target, text, audience = memberIds(convo.id), replyTo = null) {
+export function postAgentReply(convo, target, text, audience = memberIds(convo.id), replyTo = null, turnId = null) {
   const id = uid('m');
+  const body = String(text || '').trim() || '（空回复）';
   run('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    id, convo.id, target.userId, String(text || '').trim() || '（空回复）', '[]', replyTo, now());
+    id, convo.id, target.userId, body, '[]', replyTo, now());
+  // 过程步子先挂上再序列化：广播出去的消息 progressCount 一次就对（D15）
+  attachStepsToReply(turnId, id, body);
   const sender = get('SELECT * FROM users WHERE id = ?', target.userId);
   const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), sender || { name: target.name, role: 'ai' });
   emitTo(audience, 'message', { message });

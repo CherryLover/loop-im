@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { getToken } from './api';
 import { deviceId } from './push';
 import { pageStreamId } from './visibility';
-import type { Message, MessageReaction, TypingAgent, User } from './types';
+import type { AgentStep, Message, MessageReaction, TypingAgent, User } from './types';
 
 export interface StreamHandlers {
   /**
@@ -20,6 +20,8 @@ export interface StreamHandlers {
    * 字段时为 undefined —— 回调第三个参数是可选的，就是为了这份向后兼容。
    */
   onTyping?: (conversationId: string, typing: boolean, agents?: TypingAgent[]) => void;
+  /** Agent 回合里的一步（D15）：中间文字/工具动作，实时更新「正在输入」下的状态行。 */
+  onProgress?: (conversationId: string, agent: TypingAgent, step: AgentStep) => void;
   onConversationCreated?: (conversationId: string) => void;
   onUserChanged?: (user: User) => void;
   onPresence?: (userId: string, online: boolean) => void;
@@ -62,6 +64,10 @@ export function useStream(enabled: boolean, handlers: StreamHandlers) {
     es.addEventListener('ai-typing', (e) => {
       const d = json<{ conversationId: string; typing: boolean; agents?: TypingAgent[] }>(e);
       ref.current.onTyping?.(d.conversationId, d.typing, d.agents);
+    });
+    es.addEventListener('ai-progress', (e) => {
+      const d = json<{ conversationId: string; agent: TypingAgent; step: AgentStep }>(e);
+      ref.current.onProgress?.(d.conversationId, d.agent, d.step);
     });
     es.addEventListener('conversation-created', (e) =>
       ref.current.onConversationCreated?.(json<{ conversationId: string }>(e).conversationId));

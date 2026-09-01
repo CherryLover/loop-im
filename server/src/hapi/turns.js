@@ -22,11 +22,12 @@ import { get, run, now } from '../db.js';
 import { emitTo } from '../events.js';
 import { logError, logEvent, logWarn } from '../log.js';
 import {
-  extractAgentText, hapiConfig, isHapiConfigured, openEvents,
+  extractAgentText, extractToolCalls, hapiConfig, isHapiConfigured, openEvents,
   resumeSession, sendSessionMessage, session, spawnSession,
 } from './client.js';
 import { flavorOf } from './agents.js';
 import { advanceWatermark, buildGroupBacklog } from './backlog.js';
+import { beginTurn } from './steps.js';
 
 export const AGENT_UNAVAILABLE = (name) => `${name} 暂不可用，请联系管理员`;
 export const AGENT_BUSY = (name) => `${name} 排队请求过多，请稍后再试`;
@@ -154,7 +155,7 @@ async function ensureSession(key, conversationId) {
 
 // ---- 等回复：SSE 上收文本，thinking 翻回 false 即收工 ---------------------
 
-function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents }) {
+function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents, recorder = null }) {
   let subRef = null;
   const promise = new Promise((resolve) => {
     let lastText = null;
@@ -188,7 +189,11 @@ function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents }) {
           const text = extractAgentText(event.message?.content);
           if (text) {
             lastText = text;
+            recorder?.addText(text);                       // 中间文字进过程记录（D15）
             armQuiet();
+          }
+          if (recorder) {
+            for (const call of extractToolCalls(event.message?.content)) recorder.addTool(call);
           }
         } else if (event.type === 'session-updated' && event.sessionId === sessionId) {
           const thinking = event.data?.thinking;
@@ -231,9 +236,11 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
   const replyTo = convo.type === 'group' ? messageId : null;
 
   for (const target of targets) {
+    let recorder = null;                                   // 回合的过程记录器（D15），会话就绪后开
     const say = (text) => {
       try {
-        postReply(target, text, replyTo);
+        // turnId 一起递过去：贴回复时把过程步子挂上（失败文案也挂——出事更要能看过程）
+        postReply(target, text, replyTo, recorder?.turnId);
       } catch (err) {
         logError('hapi.turn.post_failed', err);
       }
@@ -272,7 +279,11 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
         }
 
         // 先挂事件流、**等它真正连上**再发消息——回合再快也不会漏事件。
-        const waiter = wait({ sessionId: ensured.sessionId, timeoutMs, quietMs });
+        recorder = beginTurn({
+          conversationId: convo.id, agent: target,
+          triggerMessageId: messageId ?? null, audience, emit,
+        });
+        const waiter = wait({ sessionId: ensured.sessionId, timeoutMs, quietMs, recorder });
         await waiter.ready;
         try {
           try {
