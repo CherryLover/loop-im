@@ -109,6 +109,12 @@ const MIGRATIONS = [
                   updated_at       INTEGER NOT NULL,
                   PRIMARY KEY (agent_key, conversation_id)
                 )`],
+  // hapi_sessions.last_seen_rowid：这个 Agent 在这个群里「看到哪儿了」（messages.rowid 水位）。
+  // 群里没 @ 它的消息不会实时转发，下次被 @ 时把水位之后的消息一并补给它（方案 D14）。
+  // 放在 hapi_sessions 上而不是新表：键正好同为 (agent_key, conversation_id)，且水位
+  // 要跨 hapi 会话重建存活（session_id 换了，看没看过不能跟着清零）。
+  // 必须排在上面的 CREATE TABLE 之后：全新库先建表、这条按「已有该列」跳过。
+  ['hapi_sessions', 'last_seen_rowid', 'ALTER TABLE hapi_sessions ADD COLUMN last_seen_rowid INTEGER'],
 ];
 for (const [table, column, ddl] of MIGRATIONS) {
   // column 为 null：这条迁移不是补列（索引、新表之类），DDL 自己保证幂等，直接跑。

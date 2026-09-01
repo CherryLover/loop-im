@@ -4,10 +4,11 @@
 // AI（防互相 @ 出死循环的硬规则）；@全员 不触发。
 //
 // 会话模型（§C.3'，2026-08-31 修订）：**每个「Agent × IM 会话」一条 hapi 会话**。
-// 上下文由 hapi 会话自身在底层携带、由本地 Agent CLI 自己管理——消息**原样转发**，
+// 上下文由 hapi 会话自身在底层携带、由本地 Agent CLI 自己管理——**私聊消息原样转发**，
 // 不做任何上下文拼接（参照 HapiKmp 手机客户端：请求体就是 {text, localId}）。
-// 唯一进文本的额外内容是群聊里的署名「张三：」——发消息接口没有「发送者」元数据
-// 字段，而群里有多个人在跟同一条会话说话；私聊连署名都不加，原文直达。
+// 群聊自 2026-09-01 走「补课批次」（D14，见 backlog.js）：没 @ 它的消息平时不转发，
+// 被 @ 时把上次水位之后的消息带时间与署名一起补给它——不补的话那些消息它永远看不到，
+// 只能对着单句硬答（用户实测踩到）。这不违背零注入：补的是它从没收到过的，不是重复已知的。
 // 人设与前缀的读法在 Agent 工作目录的 CLAUDE.md / AGENTS.md 里（启用时自动铺设，
 // 见 agents.js 的 provisionAgentWorkdir）——会话内容里零注入，第一条也不例外。
 //
@@ -25,6 +26,7 @@ import {
   resumeSession, sendSessionMessage, session, spawnSession,
 } from './client.js';
 import { flavorOf } from './agents.js';
+import { advanceWatermark, buildGroupBacklog } from './backlog.js';
 
 export const AGENT_UNAVAILABLE = (name) => `${name} 暂不可用，请联系管理员`;
 export const AGENT_BUSY = (name) => `${name} 排队请求过多，请稍后再试`;
@@ -254,10 +256,20 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
           say(AGENT_UNAVAILABLE(target.name));
           return;
         }
-        // 消息原样转发（§C.3'）：上下文在 hapi 会话里自然延续，由 Agent 自己管理。
-        // 群聊补一个署名前缀（接口没有发送者字段）；私聊原文直达。第一条也不例外——
-        // 人设在工作目录的 CLAUDE.md / AGENTS.md 里，不在会话内容里。
-        const text = convo.type === 'group' ? `${sender.name}：${body}` : body;
+        // 私聊原样转发（§C.3'）：每条都实时送达，上下文在 hapi 会话里自然延续。
+        // 群聊走「补课批次」（D14）：没 @ 它的消息平时不转发，这次把水位之后的
+        // 一并带上，每条带 [时间] 署名，最后一条就是 @ 它的这条。人设在工作目录的
+        // CLAUDE.md / AGENTS.md 里，会话内容里依旧零注入。
+        let text = body;
+        let backlog = null;
+        if (convo.type === 'group') {
+          backlog = buildGroupBacklog({
+            agentKey: target.key, agentUserId: target.userId,
+            conversationId: convo.id, triggerMessageId: messageId,
+          });
+          // 兜底：触发消息查不到（理论上不会）就退回老式单条署名，别让回合黄掉。
+          text = backlog?.text || `${sender.name}：${body}`;
+        }
 
         // 先挂事件流、**等它真正连上**再发消息——回合再快也不会漏事件。
         const waiter = wait({ sessionId: ensured.sessionId, timeoutMs, quietMs });
@@ -277,6 +289,8 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
           say(AGENT_UNAVAILABLE(target.name));
           return;
         }
+        // 发送成功才推水位（D14）：失败/不可用时不推，这批消息下次被 @ 时重新补。
+        if (backlog) advanceWatermark(target.key, convo.id, backlog.lastRowid);
         const outcome = await waiter.promise;
         logEvent('hapi.turn.finished', { agent: target.key, conversationId: convo.id, outcome: outcome.kind, hasText: !!outcome.text });
         if (outcome.kind === 'timeout' && !outcome.text) say(AGENT_TIMEOUT(target.name));

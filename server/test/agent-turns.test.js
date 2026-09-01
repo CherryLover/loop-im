@@ -11,6 +11,7 @@ process.env.HAPI_TURN_QUIET_MS = '150';      // 文本后安静这么久算收�
 process.env.HAPI_TURN_TIMEOUT_MS = '60000';  // 单独的超时用例里再压小
 process.env.HAPI_ACTIVE_POLL_MS = '50';      // 等会话 active 的轮询间隔（测试里别真等 1 秒）
 process.env.HAPI_AGENTS = 'none';            // 本文件手动启用，避免探测在不同机器上不确定
+process.env.HAPI_TZ = 'Asia/Shanghai';       // 补课批次的 [HH:MM] 时间戳按固定时区断言
 
 let api, hub, admin, chen, chenToken, room;
 
@@ -20,6 +21,11 @@ const agentText = (text) => ({
 });
 const messagesOf = async (id, token) => (await api.get(`/api/conversations/${id}/messages`, token)).body.messages;
 const lastAgentMessage = async (id, token) => (await messagesOf(id, token)).filter((m) => m.isAI).at(-1);
+// 补课批次里每行的 [HH:MM]，与 backlog.js 同一时区规则
+const stamp = (ms) => new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
+}).format(new Date(ms));
+const line = (m) => `[${stamp(m.createdAt)}] ${m.senderName}：${m.body}`;
 
 /** 推一整个「回合」的事件：开工 → 文本 → 收工。 */
 function pushTurn(sessionId, text) {
@@ -57,12 +63,12 @@ beforeEach(() => {
 });
 
 describe('群聊 @ 触发', () => {
-  it('@Claude-Code → 开会话（目录/agent/yolo 都对）→ 消息原样转发（第一条也只有署名+原文）→ 回复贴回群里', async () => {
-    // 先铺两条普通聊天：它们**不该**被拼进递话（上下文由 hapi 会话自己延续，
-    // 没被 @ 的闲聊本来就不是说给 Agent 的——参照 HapiKmp：只发这条消息）。
-    // 人设/规矩在工作目录的 CLAUDE.md 里（启用时自动铺设），会话内容零注入。
-    await api.post(`/api/conversations/${room.id}/messages`, { body: '回归测试只剩一天了' }, admin);
-    await api.post(`/api/conversations/${room.id}/messages`, { body: '接口还有两项没完成' }, chenToken);
+  it('@Claude-Code → 开会话（目录/agent/yolo 都对）→ 递话是「补课批次」：没 @ 的闲聊一并带上 → 回复贴回群里', async () => {
+    // 先铺两条普通聊天：没 @ 它，当时不转发——但它们要随下一次 @ **一起补给它**
+    //（D14：不补的话这些消息它永远看不到，只能对着单句硬答，2026-09-01 用户实测踩到）。
+    // 每条带 [时间] 署名；人设仍在工作目录的 CLAUDE.md 里，批次之外零注入。
+    const m1 = (await api.post(`/api/conversations/${room.id}/messages`, { body: '回归测试只剩一天了' }, admin)).body.message;
+    const m2 = (await api.post(`/api/conversations/${room.id}/messages`, { body: '接口还有两项没完成' }, chenToken)).body.message;
     const send = await api.post(`/api/conversations/${room.id}/messages`,
       { body: '@Claude-Code 帮我看看 CI 为什么红了' }, chenToken);
     assert.equal(send.status, 201);
@@ -71,8 +77,9 @@ describe('群聊 @ 触发', () => {
     // hub 侧收到 spawn（第一次没有存过会话）+ 消息
     await waitFor(() => hub.state.lastMessage);
     assert.deepEqual(hub.state.lastSpawn, { machineId: 'm_1', directory: '/tmp/loop-agents/claude', agent: 'claude', yolo: true });
-    assert.equal(hub.state.lastMessage.text, '陈子航：@Claude-Code 帮我看看 CI 为什么红了',
-      '第一条也是「署名：原文」，没有开场白、没有上下文拼接');
+    assert.equal(hub.state.lastMessage.text,
+      [line(m1), line(m2), line(send.body.message)].join('\n'),
+      '批次 = 上次水位以来的全部消息，最后一条就是 @ 它的这条；每条带 [时间] 署名');
 
     pushTurn('s_claude_1', '看完了：红在 lint，`no-unused-vars` 两处。');
     const reply = await waitFor(() => lastAgentMessage(room.id, chenToken));
@@ -85,13 +92,14 @@ describe('群聊 @ 触发', () => {
     assert.ok(reply.quote.preview.includes('CI 为什么红了'), '引用摘要里要认得出原话');
   });
 
-  it('第二次 @ 复用已有会话（不再 spawn）；消息就是「署名：原文」，一个字不多', async () => {
+  it('第二次 @ 复用已有会话（不再 spawn）；水位之后没别的消息，批次就只有触发这条（自己的回复不重发）', async () => {
     hub.state.lastSpawn = null;
     hub.state.lastMessage = null;
-    await api.post(`/api/conversations/${room.id}/messages`, { body: '@Claude-Code 再确认一下' }, chenToken);
+    const send = await api.post(`/api/conversations/${room.id}/messages`, { body: '@Claude-Code 再确认一下' }, chenToken);
     await waitFor(() => hub.state.lastMessage);
     assert.equal(hub.state.lastSpawn, null, '会话还活着就不该重新 spawn');
-    assert.equal(hub.state.lastMessage.text, '陈子航：@Claude-Code 再确认一下', '老会话原样转发，零拼接');
+    assert.equal(hub.state.lastMessage.text, line(send.body.message),
+      '上一批已随发送推了水位，Agent 自己的回帖也不重发——批次里只有新的触发消息');
 
     const before = (await messagesOf(room.id, chenToken)).filter((m) => m.isAI).length;
     hub.pushEvent({ type: 'session-updated', sessionId: 's_claude_1', data: { thinking: true } });
@@ -146,6 +154,90 @@ describe('群聊 @ 触发', () => {
     assert.ok(hub.state.requests.some((r) => r.path === '/api/sessions/s_claude_1/resume'));
     pushTurn('s_claude_1', '在的。');
     await waitFor(async () => (await lastAgentMessage(room.id, chenToken))?.body === '在的。');
+  });
+});
+
+describe('群聊补课（D14：没 @ 的消息随下一次 @ 一起送达）', () => {
+  // 用独立的群和独立的 hapi 会话 id，水位从零开始，别和上面的用例串数据。
+  let room2;
+  const useRoom2Session = () => {
+    hub.state.spawnResult = { type: 'success', sessionId: 's_claude_r2' };
+    hub.state.sessions.set('s_claude_r2', { id: 's_claude_r2', active: true, thinking: false });
+  };
+  before(async () => {
+    const res = await api.post('/api/conversations/group', { title: '补课验证', memberIds: [chen.id, 'ai-claude'] }, admin);
+    assert.equal(res.status, 201);
+    room2 = res.body.conversation;
+    // 「其他 AI 的消息带上」那条要以 ai-codex 的名义插一条消息，先把这个用户造出来
+    //（开一下再关：用户行会留着，名字是默认的 Codex）。
+    await api.put('/api/agents/codex', { enabled: true }, admin);
+    await api.put('/api/agents/codex', { enabled: false }, admin);
+  });
+
+  it('没 @ 的当时不转发；下次被 @ 时补上——自己的回帖不重发，其他 AI 的消息带上', async () => {
+    useRoom2Session();
+    hub.state.lastMessage = null;
+    const idle = (await api.post(`/api/conversations/${room2.id}/messages`, { body: '你们感觉有点傻傻的呢' }, admin)).body.message;
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(hub.state.lastMessage, null, '没 @ 它的消息不实时转发');
+
+    const first = (await api.post(`/api/conversations/${room2.id}/messages`, { body: '@Claude-Code 我发的消息 没看到吗' }, chenToken)).body.message;
+    await waitFor(() => hub.state.lastMessage);
+    assert.equal(hub.state.lastMessage.sessionId, 's_claude_r2');
+    assert.equal(hub.state.lastMessage.text, [line(idle), line(first)].join('\n'),
+      '被 @ 时把之前没送达的一并补上，谁说的、几点说的都在');
+    pushTurn('s_claude_r2', '这次看到了。');
+    await waitFor(async () => (await lastAgentMessage(room2.id, chenToken))?.body === '这次看到了。');
+
+    // 第二轮：期间有普通消息 + 另一个 AI 的发言；Agent 自己的「这次看到了。」不重发
+    const { run: dbRun, uid, now: dbNow } = await import('../src/db.js');
+    const extra = (await api.post(`/api/conversations/${room2.id}/messages`, { body: '补充一点' }, admin)).body.message;
+    const codexAt = dbNow();
+    dbRun('INSERT INTO messages (id, conversation_id, sender_id, body, mentions, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      uid('m'), room2.id, 'ai-codex', '我插一句', '[]', codexAt);
+    hub.state.lastMessage = null;
+    const second = (await api.post(`/api/conversations/${room2.id}/messages`, { body: '@Claude-Code 再看看' }, chenToken)).body.message;
+    await waitFor(() => hub.state.lastMessage);
+    assert.equal(hub.state.lastMessage.text,
+      [line(extra), `[${stamp(codexAt)}] Codex：我插一句`, line(second)].join('\n'),
+      '水位之后的都补：普通消息、其他 AI 的发言；自己的回帖和更早的批次不重发');
+    pushTurn('s_claude_r2', '都看到了。');
+    await waitFor(async () => (await lastAgentMessage(room2.id, chenToken))?.body === '都看到了。');
+  });
+
+  it('批次里的站内附件降级成占位：图变 [图片]、文件变 [文件：名字]', async () => {
+    useRoom2Session();
+    const media = (await api.post(`/api/conversations/${room2.id}/messages`,
+      { body: '看下这个 ![截图](/uploads/k1.png) 和 [报告.pdf](/uploads/k2)' }, chenToken)).body.message;
+    hub.state.lastMessage = null;
+    const ask = (await api.post(`/api/conversations/${room2.id}/messages`, { body: '@Claude-Code 附件看到没' }, chenToken)).body.message;
+    await waitFor(() => hub.state.lastMessage);
+    assert.equal(hub.state.lastMessage.text,
+      [`[${stamp(media.createdAt)}] 陈子航：看下这个 [图片] 和 [文件：报告.pdf]`, line(ask)].join('\n'),
+      'Agent 反正取不到站内 URL，占位比一串死链干净');
+    pushTurn('s_claude_r2', '看到占位了。');
+    await waitFor(async () => (await lastAgentMessage(room2.id, chenToken))?.body === '看到占位了。');
+  });
+
+  it('递话失败（暂不可用）不推水位：恢复后下次被 @，漏掉的那条会重新补上', async () => {
+    hub.state.machines = [];
+    await api.get('/api/agents', admin);                    // 对账 → ai-claude 联动停用
+    const missed = (await api.post(`/api/conversations/${room2.id}/messages`, { body: '@Claude-Code 这条会失败' }, chenToken)).body.message;
+    await waitFor(async () => {
+      const last = await lastAgentMessage(room2.id, chenToken);
+      return last?.body.includes('暂不可用') ? true : null;
+    });
+
+    hub.state.machines = [hub.onlineMachine('m_1')];
+    await api.get('/api/agents', admin);                    // 恢复在线
+    useRoom2Session();
+    hub.state.lastMessage = null;
+    const retry = (await api.post(`/api/conversations/${room2.id}/messages`, { body: '@Claude-Code 现在再试' }, chenToken)).body.message;
+    await waitFor(() => hub.state.lastMessage);
+    assert.equal(hub.state.lastMessage.text, [line(missed), line(retry)].join('\n'),
+      '失败那轮没推水位，那条消息这次重新送到——宁可重见，不能永久丢');
+    pushTurn('s_claude_r2', '补上了。');
+    await waitFor(async () => (await lastAgentMessage(room2.id, chenToken))?.body === '补上了。');
   });
 });
 
