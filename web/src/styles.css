@@ -422,11 +422,13 @@ input, textarea { font-family: inherit; }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .flow__tool {
-  display: flex; gap: 6px; align-items: flex-start;
-  font-size: 12px; color: var(--faint);
+  display: inline-flex; gap: 4px; align-items: center;
+  padding: 2px 7px; border-radius: 99px;
+  background: var(--accent-line);
+  font-size: 11px; color: var(--faint); cursor: default;
 }
-.flow__tool svg { flex: none; margin-top: 2px; }
-.flow__tool span { min-width: 0; overflow-wrap: anywhere; }
+.flow__tool svg { flex: none; }
+.flow__tool-n { font-variant-numeric: tabular-nums; }
 .flow__divider { align-self: stretch; height: 1px; background: var(--accent-line); margin: 2px 0; }
 .typing--inline { background: none; border: none; padding: 2px 0 0; }
 

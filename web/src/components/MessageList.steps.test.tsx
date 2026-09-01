@@ -25,14 +25,17 @@ const steps: AgentStep[] = [
 ];
 
 describe('历史里的过程气泡', () => {
-  it('过程平铺直给：中间文字、工具行、分割线、最终结论全在一个气泡里，无需任何点击', () => {
+  it('过程平铺直给：中间文字、工具标记、分割线、最终结论全在一个气泡里，无需任何点击', () => {
     render(<MessageList messages={[aiReply(steps)]} meId="u_me" showSenderName typing={false} />);
 
     expect(screen.getByText('我先想想构图。')).toBeInTheDocument();
-    expect(screen.getByText('执行命令：python3 gen.py')).toBeInTheDocument();
     expect(screen.getByText('图片正在生成。')).toBeInTheDocument();
     expect(screen.getByText('画好了，请查收。')).toBeInTheDocument();
     expect(screen.getByRole('separator')).toBeInTheDocument();
+    // 工具步只留图标标记，不再写命令原文——明细收进悬停提示
+    expect(screen.queryByText('执行命令：python3 gen.py')).not.toBeInTheDocument();
+    const marker = document.querySelector('.flow__tool')!;
+    expect(marker).toHaveAttribute('title', '执行命令：python3 gen.py');
     // 顺序：过程在分割线上面，结论在下面
     const bubble = document.querySelector('.bubble--flow')!;
     const order = Array.from(bubble.children).map((el) => el.className.split(' ')[0]);
@@ -41,6 +44,27 @@ describe('历史里的过程气泡', () => {
     expect(order.indexOf('flow__divider')).toBe(order.length - 2);
     // 不再有「点开才看」的入口
     expect(screen.queryByRole('button', { name: /执行过程/ })).not.toBeInTheDocument();
+  });
+
+  it('连续的工具步合并成一个标记 ×N；单独一步不带 ×；文字步照常把它们隔开', () => {
+    render(
+      <MessageList
+        messages={[aiReply([
+          { seq: 1, kind: 'tool', content: '查环境', createdAt: 1 },
+          { seq: 2, kind: 'tool', content: '写提示词文件', createdAt: 2 },
+          { seq: 3, kind: 'tool', content: '执行命令：python3 gen.py', createdAt: 3 },
+          { seq: 4, kind: 'text', content: '图好了，检查一下。', createdAt: 4 },
+          { seq: 5, kind: 'tool', content: '读取文件', createdAt: 5 },
+        ])]}
+        meId="u_me" showSenderName typing={false}
+      />,
+    );
+    const markers = document.querySelectorAll('.flow__tool');
+    expect(markers).toHaveLength(2);
+    expect(markers[0]).toHaveTextContent('×3');
+    expect(markers[0]).toHaveAttribute('title', '查环境\n写提示词文件\n执行命令：python3 gen.py');
+    expect(markers[1].querySelector('.flow__tool-n')).toBeNull();
+    expect(markers[1]).toHaveAttribute('title', '读取文件');
   });
 
   it('没有过程的 AI 回复还是普通气泡：没有分割线、不套流式布局', () => {
@@ -74,7 +98,7 @@ describe('进行中的气泡', () => {
     // Codex 的气泡里过程已经长出来了，且点还在跳（还没写完）
     const codexBubble = screen.getByRole('status', { name: 'Codex 正在处理' });
     expect(codexBubble).toHaveTextContent('我来画一下。');
-    expect(codexBubble).toHaveTextContent('执行命令：ls');
+    expect(codexBubble.querySelector('.flow__tool')).toHaveAttribute('title', '执行命令：ls');
     expect(codexBubble.querySelector('.typing')).not.toBeNull();
     // 进行中不画分割线——线是「收工」的标志
     expect(codexBubble.querySelector('.flow__divider')).toBeNull();

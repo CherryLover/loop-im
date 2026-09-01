@@ -470,21 +470,30 @@ export function MessageList({
 }
 
 /**
- * 过程步子的平铺流（D15'）：中间文字直接排成段落（像正文一样读），工具动作
- * 缩成一小行带扳手的灰字。历史气泡和进行中的气泡共用同一个渲染——
- * 收工瞬间从「实时长出来的」切到「消息里带的」，长相不变，看不出接缝。
+ * 过程步子的平铺流（D15'）：中间文字直接排成段落（像正文一样读）；工具动作只留
+ * 一个小扳手图标，**连续的几步合并成一个图标 ×N**（命令明细不丢——悬停可见）。
+ * 历史气泡和进行中的气泡共用同一个渲染——收工瞬间从「实时长出来的」切到
+ * 「消息里带的」，长相不变，看不出接缝。
  */
 function StepsFlow({ steps }: { steps: AgentStep[] }) {
+  // 相邻的工具步收成一段：{kind:'tools'} 记着条数和明细，文字步原样穿插其间。
+  const segments: ({ kind: 'text'; seq: number; content: string } | { kind: 'tools'; seq: number; labels: string[] })[] = [];
+  for (const s of steps) {
+    const prev = segments.at(-1);
+    if (s.kind === 'tool' && prev?.kind === 'tools') prev.labels.push(s.content);
+    else if (s.kind === 'tool') segments.push({ kind: 'tools', seq: s.seq, labels: [s.content] });
+    else segments.push({ kind: 'text', seq: s.seq, content: s.content });
+  }
   return (
     <>
-      {steps.map((s) => (
-        s.kind === 'tool' ? (
-          <div key={s.seq} className="flow__tool">
-            <Wrench size={11} />
-            <span>{s.content}</span>
+      {segments.map((seg) => (
+        seg.kind === 'tools' ? (
+          <div key={seg.seq} className="flow__tool" title={seg.labels.join('\n')}>
+            <Wrench size={12} aria-label={`${seg.labels.length} 步工具操作`} />
+            {seg.labels.length > 1 ? <span className="flow__tool-n">×{seg.labels.length}</span> : null}
           </div>
         ) : (
-          <p key={s.seq} className="flow__say">{s.content}</p>
+          <p key={seg.seq} className="flow__say">{seg.content}</p>
         )
       ))}
     </>
