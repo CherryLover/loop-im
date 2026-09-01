@@ -53,6 +53,23 @@ export async function startMockHub({ accessToken = 'test-access-token' } = {}) {
         state.lastMessage = { sessionId: msgs[1], ...body };
         return json(200, { ok: true });
       }
+      const upload = url.pathname.match(/^\/api\/sessions\/([^/]+)\/upload$/);
+      if (upload && req.method === 'POST') {
+        // 形状照真 hub：只有活跃会话才收（这类操作由会话进程代执行）。
+        const s = state.sessions.get(upload[1]);
+        if (!s?.active) return json(409, { error: 'Session is inactive', code: 'session_inactive' });
+        const entry = { sessionId: upload[1], ...body };
+        state.uploads = state.uploads || [];
+        state.uploads.push(entry);
+        return json(200, { success: true, path: `/tmp/hapi-blobs/${upload[1]}/${body?.filename || 'file'}` });
+      }
+      const genImage = url.pathname.match(/^\/api\/sessions\/([^/]+)\/generated-images\/([^/]+)$/);
+      if (genImage && req.method === 'GET') {
+        const bytes = state.generatedImages?.get(genImage[2]);
+        if (!bytes) return json(404, { error: 'not found' });
+        res.writeHead(200, { 'content-type': 'image/png' });
+        return res.end(bytes);
+      }
       const resume = url.pathname.match(/^\/api\/sessions\/([^/]+)\/resume$/);
       if (resume && req.method === 'POST') {
         const sess = state.sessions.get(resume[1]);

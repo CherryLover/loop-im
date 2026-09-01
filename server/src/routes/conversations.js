@@ -651,6 +651,9 @@ export function postAgentReply(convo, target, text, audience = memberIds(convo.i
     id, convo.id, target.userId, body, '[]', replyTo, now());
   // 过程步子先挂上再序列化：广播出去的消息 progressCount 一次就对（D15）
   attachStepsToReply(turnId, id, body);
+  // Agent 交付的图片（D16）走的也是这条路：正文里的附件同样要挂到会话的
+  // 下载白名单上，不然群成员打不开它发的图（鉴权按 attachment_refs 查）。
+  linkAttachmentsToMessage({ body, conversationId: convo.id, messageId: id, senderId: target.userId });
   const sender = get('SELECT * FROM users WHERE id = ?', target.userId);
   const message = serializeMessage(get('SELECT * FROM messages WHERE id = ?', id), sender || { name: target.name, role: 'ai' });
   emitTo(audience, 'message', { message });

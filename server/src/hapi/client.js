@@ -143,9 +143,70 @@ export async function reopenSession(id, opts) {
   return body?.sessionId || id;
 }
 
-/** 给会话发一条消息；回复经 SSE 到达（POST 只回 { ok: true }）。 */
-export async function sendSessionMessage(id, text, opts) {
-  return request('POST', `/api/sessions/${id}/messages`, { text }, opts);
+/**
+ * 给会话发一条消息；回复经 SSE 到达（POST 只回 { ok: true }）。
+ * attachments 是可选的附件元数据数组 [{ id, filename, mimeType, size, path }]——
+ * path 来自 uploadSessionFile 的返回，和 HapiKmp 客户端的用法一致（D16）。
+ */
+export async function sendSessionMessage(id, text, opts = {}) {
+  const { attachments, ...rest } = opts;
+  const body = attachments?.length ? { text, attachments } : { text };
+  return request('POST', `/api/sessions/${id}/messages`, body, rest);
+}
+
+/**
+ * 往会话里传一个文件（D16 用户→Agent 方向）。请求体是 JSON + Base64
+ * （照 HapiKmp 的 FileApi），成功返回 { success, path }——path 是文件落在
+ * runner 机器上的绝对路径，Agent 用自己的工具就能读。
+ * 只有**活跃**会话才收（这类操作由会话进程代执行），调用方先保证判活。
+ */
+export async function uploadSessionFile(id, { filename, content, mimeType }, opts) {
+  const res = await request('POST', `/api/sessions/${id}/upload`, { filename, content, mimeType }, opts);
+  if (!res?.success || !res.path) throw new Error(res?.error || 'upload failed');
+  return res.path;
+}
+
+/**
+ * 取 Agent 用 display_image 交付的图片（D16 Agent→用户方向），返回 Buffer。
+ * 二进制响应走不了通用 request()（那边按 JSON 解析），单独实现同款「401 换签重试一次」。
+ */
+export async function fetchGeneratedImage(sessionId, imageId, { fetchImpl = fetch } = {}) {
+  const { baseUrl } = hapiConfig();
+  const doFetch = async () => {
+    if (!jwt) await authenticate(fetchImpl);
+    return fetchImpl(`${baseUrl}/api/sessions/${sessionId}/generated-images/${imageId}`, {
+      headers: { 'user-agent': UA, authorization: `Bearer ${jwt}`, accept: '*/*' },
+    });
+  };
+  let res = await doFetch();
+  if (res.status === 401) {
+    jwt = null;
+    res = await doFetch();
+  }
+  if (!res.ok) {
+    const err = new Error(`hapi generated-image ${imageId} → ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * 从一条 Agent 消息里抽出「交付了图片」的事件（codex 系 display_image 的产物）。
+ * 返回 [{ imageId, fileName, mimeType }]，没有就是空数组。
+ */
+export function extractGeneratedImages(content) {
+  const record = unwrapEnvelope(content);
+  if (!record || record.role !== 'agent') return [];
+  const c = record.content;
+  if (c?.type === 'codex' && c.data?.type === 'generated-image' && c.data.imageId) {
+    return [{
+      imageId: c.data.imageId,
+      fileName: c.data.fileName || 'image',
+      mimeType: c.data.mimeType || 'image/png',
+    }];
+  }
+  return [];
 }
 
 /** 翻会话消息（默认最新 50 条）：{ messages: [{ id, seq, content, createdAt, … }], … } */

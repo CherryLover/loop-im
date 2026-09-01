@@ -32,7 +32,11 @@ function dayOf(ms) {
   return `${p('month')}月${p('day')}日`;
 }
 
-/** 站内附件降级成占位文字：图片和文件的 Markdown 都指向 /uploads/<key>。 */
+/**
+ * 站内附件降级成占位文字：图片和文件的 Markdown 都指向 /uploads/<key>。
+ * D16 之后这是「没走附件摆渡」时的兜底形态；摆渡的注释逻辑在 files.js 的
+ * annotateAttachments（占位文案与这里保持一致）。
+ */
 export function stripAttachments(body) {
   return String(body)
     .replace(/!\[[^\]]*\]\(\/uploads\/[^)]+\)/g, '[图片]')
@@ -40,11 +44,12 @@ export function stripAttachments(body) {
 }
 
 /**
- * 组一段「从上次看到 → 这次触发」的群消息批次文本。
- * 返回 { text, lastRowid, count }；lastRowid 交给 advanceWatermark 在**发送成功后**推进
+ * 查出「从上次看到 → 这次触发」的批次原始行（含正文原文），排版交给 formatGroupBacklog。
+ * 拆成两步是为了 D16：排版前要先把行里引用的附件**异步**传进会话，再据结果注释正文。
+ * 返回 { rows, lastRowid, count }；lastRowid 交给 advanceWatermark 在**发送成功后**推进
  * ——发送失败不推，消息下次还会再补，宁可重见一次也不能永久丢。
  */
-export function buildGroupBacklog({ agentKey, agentUserId, conversationId, triggerMessageId }) {
+export function collectGroupBacklog({ agentKey, agentUserId, conversationId, triggerMessageId }) {
   if (!triggerMessageId) return null;                       // 没有触发消息 id（直调注入的测试路径）→ 走调用方兜底
   const trigger = get('SELECT rowid AS rid, * FROM messages WHERE id = ?', triggerMessageId);
   if (!trigger) return null;
@@ -67,7 +72,11 @@ export function buildGroupBacklog({ agentKey, agentUserId, conversationId, trigg
   );
   const cap = CAP();
   if (rows.length > cap) rows = rows.slice(-cap);           // 首次进老群：只补最近的，别灌历史
+  return { rows, lastRowid: trigger.rid, count: rows.length };
+}
 
+/** 批次排版：日期行 + [HH:MM] 署名行。annotate 处理每行正文（默认附件降级占位）。 */
+export function formatGroupBacklog(rows, { annotate = stripAttachments } = {}) {
   const lines = [];
   let prevDay = dayOf(now());                               // 今天的消息不用标日期
   for (const row of rows) {
@@ -76,9 +85,16 @@ export function buildGroupBacklog({ agentKey, agentUserId, conversationId, trigg
       lines.push(`—— ${day} ——`);
       prevDay = day;
     }
-    lines.push(`[${timeOf(row.created_at)}] ${row.sender_name}：${stripAttachments(row.body)}`);
+    lines.push(`[${timeOf(row.created_at)}] ${row.sender_name}：${annotate(row.body)}`);
   }
-  return { text: lines.join('\n'), lastRowid: trigger.rid, count: rows.length };
+  return lines.join('\n');
+}
+
+/** 查 + 排版一步到位（无附件摆渡的形态；单测与兜底路径用）。 */
+export function buildGroupBacklog(args) {
+  const collected = collectGroupBacklog(args);
+  if (!collected) return null;
+  return { text: formatGroupBacklog(collected.rows), lastRowid: collected.lastRowid, count: collected.count };
 }
 
 /** 发送成功后推水位。只往前不往后：并发/重试时旧批次不能把新水位拽回去。 */

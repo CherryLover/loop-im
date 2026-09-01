@@ -22,12 +22,13 @@ import { get, run, now } from '../db.js';
 import { emitTo } from '../events.js';
 import { logError, logEvent, logWarn } from '../log.js';
 import {
-  extractAgentText, extractToolCalls, hapiConfig, isHapiConfigured, openEvents,
-  resumeSession, sendSessionMessage, session, spawnSession,
+  extractAgentText, extractGeneratedImages, extractToolCalls, hapiConfig, isHapiConfigured,
+  openEvents, resumeSession, sendSessionMessage, session, spawnSession,
 } from './client.js';
 import { flavorOf } from './agents.js';
-import { advanceWatermark, buildGroupBacklog } from './backlog.js';
+import { advanceWatermark, collectGroupBacklog, formatGroupBacklog } from './backlog.js';
 import { beginTurn } from './steps.js';
+import { annotateAttachments, deliverGeneratedImages, pushAttachmentsToSession } from './files.js';
 
 export const AGENT_UNAVAILABLE = (name) => `${name} 暂不可用，请联系管理员`;
 export const AGENT_BUSY = (name) => `${name} 排队请求过多，请稍后再试`;
@@ -155,7 +156,7 @@ async function ensureSession(key, conversationId) {
 
 // ---- 等回复：SSE 上收文本，thinking 翻回 false 即收工 ---------------------
 
-function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents, recorder = null }) {
+function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents, recorder = null, onImage = null }) {
   let subRef = null;
   const promise = new Promise((resolve) => {
     let lastText = null;
@@ -195,6 +196,10 @@ function waitForReply({ sessionId, timeoutMs, quietMs, events = openEvents, reco
           if (recorder) {
             for (const call of extractToolCalls(event.message?.content)) recorder.addTool(call);
           }
+          if (onImage) {
+            // Agent 交付了图片（display_image）：先记下来，收工后统一下载并贴进聊天（D16）。
+            for (const image of extractGeneratedImages(event.message?.content)) onImage(image);
+          }
         } else if (event.type === 'session-updated' && event.sessionId === sessionId) {
           const thinking = event.data?.thinking;
           if (thinking === true) {
@@ -226,6 +231,10 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
     ensure = ensureSession,
     send = sendSessionMessage,
     wait = waitForReply,
+    collectBacklog = collectGroupBacklog,
+    formatBacklog = formatGroupBacklog,
+    pushFiles = pushAttachmentsToSession,
+    deliverImages = deliverGeneratedImages,
     timeoutMs = turnTimeoutMs(),
     quietMs = QUIET_MS(),
   } = deps;
@@ -267,15 +276,28 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
         // 群聊走「补课批次」（D14）：没 @ 它的消息平时不转发，这次把水位之后的
         // 一并带上，每条带 [时间] 署名，最后一条就是 @ 它的这条。人设在工作目录的
         // CLAUDE.md / AGENTS.md 里，会话内容里依旧零注入。
+        // 附件摆渡（D16）：正文里引用的站内附件先传进会话、链接换成 runner 上的
+        // 路径说明——传不了的留占位注明原因，绝不递一个 Agent 打不开的内链。
         let text = body;
         let backlog = null;
+        let attachments = [];
         if (convo.type === 'group') {
-          backlog = buildGroupBacklog({
+          backlog = collectBacklog({
             agentKey: target.key, agentUserId: target.userId,
             conversationId: convo.id, triggerMessageId: messageId,
           });
-          // 兜底：触发消息查不到（理论上不会）就退回老式单条署名，别让回合黄掉。
-          text = backlog?.text || `${sender.name}：${body}`;
+          if (backlog) {
+            const ferry = await pushFiles(ensured.sessionId, backlog.rows.map((r) => r.body));
+            attachments = ferry.attachments;
+            text = formatBacklog(backlog.rows, { annotate: (b) => annotateAttachments(b, ferry.noteFor) });
+          } else {
+            // 兜底：触发消息查不到（理论上不会）就退回老式单条署名，别让回合黄掉。
+            text = `${sender.name}：${body}`;
+          }
+        } else {
+          const ferry = await pushFiles(ensured.sessionId, [body]);
+          attachments = ferry.attachments;
+          text = annotateAttachments(body, ferry.noteFor);
         }
 
         // 先挂事件流、**等它真正连上**再发消息——回合再快也不会漏事件。
@@ -283,17 +305,21 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
           conversationId: convo.id, agent: target,
           triggerMessageId: messageId ?? null, audience, emit,
         });
-        const waiter = wait({ sessionId: ensured.sessionId, timeoutMs, quietMs, recorder });
+        const images = [];                                   // 回合里交付的图片（D16），收工后统一贴
+        const waiter = wait({
+          sessionId: ensured.sessionId, timeoutMs, quietMs, recorder,
+          onImage: (image) => images.push(image),
+        });
         await waiter.ready;
         try {
           try {
-            await send(ensured.sessionId, text);
+            await send(ensured.sessionId, text, { attachments });
           } catch (err) {
             // 竞态兜底：active 轮询和真正可收消息之间仍可能差一口气，409 就再等一轮重发一次。
             if (err.status !== 409) throw err;
             logWarn('hapi.turn.send_409_retry', { agent: target.key });
             await waitActive(ensured.sessionId, { timeoutMs: 30_000 });
-            await send(ensured.sessionId, text);
+            await send(ensured.sessionId, text, { attachments });
           }
         } catch (err) {
           logWarn('hapi.turn.send_failed', { agent: target.key, detail: String(err.message || err) });
@@ -303,11 +329,19 @@ export function runAgentTurns({ convo, sender, body, messageId, roster, audience
         // 发送成功才推水位（D14）：失败/不可用时不推，这批消息下次被 @ 时重新补。
         if (backlog) advanceWatermark(target.key, convo.id, backlog.lastRowid);
         const outcome = await waiter.promise;
-        logEvent('hapi.turn.finished', { agent: target.key, conversationId: convo.id, outcome: outcome.kind, hasText: !!outcome.text });
+        logEvent('hapi.turn.finished', {
+          agent: target.key, conversationId: convo.id, outcome: outcome.kind,
+          hasText: !!outcome.text, images: images.length,
+        });
         if (outcome.kind === 'timeout' && !outcome.text) say(AGENT_TIMEOUT(target.name));
         else if (outcome.kind === 'ended' && !outcome.text) say(AGENT_UNAVAILABLE(target.name));
         else if (!outcome.text) say(AGENT_NO_TEXT(target.name));
         else say(outcome.text);
+        if (images.length) {
+          // 交付的图片跟在文字后面贴（媒体随文字的拆条约定）。超时了也照贴——
+          // 图是真实产物，来都来了不能扔。
+          await deliverImages({ sessionId: ensured.sessionId, images, target, postReply });
+        }
       } finally {
         setTyping(audience, convo.id, target, false, emit);
       }
