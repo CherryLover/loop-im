@@ -446,6 +446,12 @@ export function Composer({
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // 输入法组合期间的按键属于输入法，不属于我们。中文输入法下打英文按回车，
+    // 用户要的是「把这串字母原样上屏」——这个回车的使命是结束组合，绝不能拿去
+    // 发送消息或选中 @ 候选（后者还会在错误的位置替换文字、带出多余空格，实测踩到）。
+    // isComposing 是标准判据；老 Safari 在组合结束那一下不给 isComposing，
+    // 但 keyCode 是 229，一并挡住。
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (mentionOpen) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();

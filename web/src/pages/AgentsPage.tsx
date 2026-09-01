@@ -129,7 +129,12 @@ function AgentRow({ agent, disabled, onChanged }: { agent: AgentInfo; disabled: 
               value={name}
               aria-label={`${agent.label} 的显示名`}
               onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void saveName(); if (e.key === 'Escape') setEditing(false); }}
+              onKeyDown={(e) => {
+                // 中文输入法下，结束组合的那个回车不算「保存」（同 Composer 的输入法保护）。
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                if (e.key === 'Enter') void saveName();
+                if (e.key === 'Escape') setEditing(false);
+              }}
             />
             <button type="button" className="btn btn--sm" onClick={() => void saveName()}>保存</button>
           </div>
